@@ -165,10 +165,15 @@ Tradeoffs you should know about:
 - **Bcc becomes visible.** `NSSharingService` has no Bcc field, so Bcc
   recipients are merged into the To list. The binary warns on stderr; you
   can edit the draft before sending.
-- **Complex CSS may not survive.** `NSAttributedString.initWithHTML` uses
-  WebKit's archival path. Inline styles, tables, lists, headings,
-  preformatted blocks, colors, and basic borders render. JavaScript,
-  flexbox/grid layout, and web fonts do not.
+- **Mail.app drops font and background overrides on receipt.** When
+  NSSharingService hands the NSAttributedString to Mail's compose
+  window, structural HTML (paragraphs, lists, preformatted-block
+  whitespace, line breaks) is preserved, but custom fonts and
+  background colors specified by `<style>` rules or inline attributes
+  are replaced by Mail's default Helvetica + transparent. This is
+  a Mail.app limitation, not something we can work around from the
+  sender side. JavaScript, flexbox/grid layout, and web fonts also
+  do not apply.
 - **On any failure** (malformed HTML, missing sharing service), the
   binary automatically falls back to the classic path with a warning, so
   you always get a draft.

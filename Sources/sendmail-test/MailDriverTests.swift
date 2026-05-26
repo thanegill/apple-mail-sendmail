@@ -296,6 +296,24 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
+    TestCase(name: "rich_html_writes_meta_charset_into_temp_file") {
+        // Regression: NSAttributedString.initWithHTML guesses encoding from
+        // the document. Without a <meta charset> hint, UTF-8 bytes for
+        // characters like em dashes and box-drawing render as Latin-1
+        // mojibake in the resulting compose window.
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>café — note</p>"
+            _ = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            let bodyHTMLURL = tmp.url.appendingPathComponent("body.html")
+            let written = try String(contentsOf: bodyHTMLURL, encoding: .utf8)
+            try expect(written.hasPrefix("<meta charset=\"utf-8\">"), "body.html must start with a UTF-8 meta hint, got: \(written.prefix(60))")
+            try expect(written.contains("<p>café — note</p>"), "body content must follow the meta hint unchanged")
+        }
+    },
+
     TestCase(name: "rich_html_activates_mail_and_spins_runloop") {
         // NSSharingService from a CLI context is a no-op unless Mail is
         // activated first and we keep the runloop alive long enough for the

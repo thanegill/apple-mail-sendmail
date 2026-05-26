@@ -54,7 +54,13 @@ public enum MailDriver {
             if !msg.bcc.isEmpty {
                 warn("Bcc will be visible in the rich-HTML compose window (NSSharingService has no Bcc field)")
             }
-            let htmlURL = try tmp.write(Data((msg.htmlBody ?? "").utf8), name: "body.html")
+            // NSAttributedString.initWithHTML guesses the encoding from the
+            // document. Sender HTML often lacks a <meta charset>, so non-ASCII
+            // bytes (em dashes, box-drawing characters) come out as Latin-1
+            // mojibake. Prepend a UTF-8 hint so the parser reads our temp file
+            // correctly.
+            let htmlWithCharset = "<meta charset=\"utf-8\">\n" + (msg.htmlBody ?? "")
+            let htmlURL = try tmp.write(Data(htmlWithCharset.utf8), name: "body.html")
             let richScript = buildRichHTMLScript(
                 subject: msg.subject,
                 htmlPath: htmlURL.path,
