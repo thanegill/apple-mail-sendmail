@@ -106,6 +106,105 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expect(!msg.body.contains("<p>"))
     },
 
+    TestCase(name: "html_body_preserved_alongside_plain_text") {
+        // The parser should keep both the stripped plain-text body (fallback)
+        // and the raw HTML in htmlBody (for the rich-HTML render path).
+        let input = """
+        Subject: dual
+        Content-Type: multipart/alternative; boundary="ALT"
+
+        --ALT
+        Content-Type: text/plain; charset=utf-8
+
+        plain body
+        --ALT
+        Content-Type: text/html; charset=utf-8
+
+        <html><body><p>html body</p></body></html>
+        --ALT--
+        """
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.body, "plain body")
+        try expectNotNil(msg.htmlBody)
+        try expect(msg.htmlBody!.contains("<p>html body</p>"))
+    },
+
+    TestCase(name: "html_only_message_populates_both_body_and_htmlBody") {
+        let input = "Subject: html\nContent-Type: text/html; charset=utf-8\n\n<p>only</p>"
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.body, "only")
+        try expectEqual(msg.htmlBody, "<p>only</p>")
+    },
+
+    TestCase(name: "plain_only_message_leaves_htmlBody_nil") {
+        let input = "Subject: plain\nContent-Type: text/plain\n\njust text"
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.body, "just text")
+        try expectNil(msg.htmlBody)
+    },
+
+    TestCase(name: "html_style_block_contents_dropped") {
+        // Regression: an HTML email with a <style> block in <head> must not
+        // dump CSS rules into the plain-text fallback.
+        let input = """
+        Subject: styled
+        Content-Type: text/html; charset=utf-8
+
+        <html>
+        <head>
+        <style>
+        pre { padding: 0.3em; background: #F0F0F0; }
+        table td { border-color: #dbdbdb; }
+        </style>
+        </head>
+        <body>
+        <p>test1</p>
+        </body>
+        </html>
+        """
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expect(!msg.body.contains("padding"), "CSS leaked into body: \(msg.body)")
+        try expect(!msg.body.contains("border-color"), "CSS leaked into body: \(msg.body)")
+        try expect(msg.body.contains("test1"))
+    },
+
+    TestCase(name: "multipart_alternative_empty_plain_falls_back_to_html") {
+        // Regression for email-output style: text/plain part is empty (or
+        // whitespace only), so the parser must use the text/html part's
+        // stripped text content as the body.
+        let input = """
+        Subject: empty plain fallback
+        Content-Type: multipart/alternative; boundary="ALT"
+
+        --ALT
+        Content-Type: text/plain; charset=utf-8
+
+
+
+        --ALT
+        Content-Type: text/html; charset=utf-8
+
+        <html><head><style>p { color: red; }</style></head><body><p>fallback text</p></body></html>
+        --ALT--
+        """
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expect(msg.body.contains("fallback text"))
+        try expect(!msg.body.contains("color: red"))
+    },
+
+    TestCase(name: "html_paragraphs_become_newline_separated") {
+        let html = "<html><body><p>one</p><p>two</p><p>three</p></body></html>"
+        let input = "Subject: paras\nContent-Type: text/html\n\n\(html)"
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.body, "one\ntwo\nthree")
+    },
+
     TestCase(name: "multipart_alternative_picks_text_plain") {
         let input = """
         Subject: alt

@@ -6,6 +6,19 @@ private final class Recorder {
     func run(_ source: String) throws { scripts.append(source) }
 }
 
+/// Throws on the first invocation, succeeds on subsequent ones. Lets us
+/// simulate "rich-HTML path failed; classic fallback worked".
+private final class FailOnceRecorder {
+    var scripts: [String] = []
+    var calls = 0
+    struct Boom: Error {}
+    func run(_ source: String) throws {
+        calls += 1
+        scripts.append(source)
+        if calls == 1 { throw Boom() }
+    }
+}
+
 private func withTempDir(_ body: (TempDir) throws -> Void) throws {
     let tmp = try TempDir()
     defer { tmp.cleanup() }
@@ -147,6 +160,115 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
             try expect(script.hasPrefix("tell application \"Mail\""))
             try expect(script.hasSuffix("end tell"))
+        }
+    },
+
+    TestCase(name: "rich_html_path_taken_for_html_only_draft") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.body = "plain fallback"
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            try expectEqual(recorder.scripts.count, 1)
+            try expect(script.contains("use framework \"AppKit\""), "rich script missing AppKit framework declaration")
+            try expect(script.contains("NSSharingService"))
+            try expect(script.contains("NSSharingServiceNameComposeEmail"))
+            try expect(script.contains("NSAttributedString"))
+            try expect(!script.contains("tell application \"Mail\""), "rich path must not emit Mail tell-block")
+        }
+    },
+
+    TestCase(name: "rich_html_path_skipped_when_attachments_present") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.body = "plain"
+            msg.htmlBody = "<p>rich</p>"
+            msg.attachments = [
+                Attachment(filename: "x.txt", contentType: "text/plain", data: Data("x".utf8))
+            ]
+            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            try expectEqual(recorder.scripts.count, 1)
+            try expect(script.hasPrefix("tell application \"Mail\""), "attachments must force classic path")
+            try expect(script.contains("make new attachment"))
+            try expect(!script.contains("NSSharingService"))
+        }
+    },
+
+    TestCase(name: "rich_html_path_skipped_in_send_mode") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var opts = Options()
+            opts.send = true
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.body = "plain"
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, options: opts, tmp: tmp, runner: recorder.run)
+            try expectEqual(recorder.scripts.count, 1)
+            try expect(script.hasPrefix("tell application \"Mail\""), "--send must force classic path")
+            try expect(script.contains("\n        send"))
+            try expect(!script.contains("NSSharingService"))
+        }
+    },
+
+    TestCase(name: "rich_html_skipped_when_html_body_is_whitespace_only") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.body = "plain"
+            msg.htmlBody = "   \n\t  \n"
+            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.hasPrefix("tell application \"Mail\""), "whitespace-only HTML must not trigger rich path")
+            try expect(!script.contains("NSSharingService"))
+        }
+    },
+
+    TestCase(name: "rich_html_subject_and_recipients_are_quoted") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.subject = "She said \"hi\" \\ today"
+            msg.to = [ParsedAddress(displayName: nil, address: "a@x")]
+            msg.cc = [ParsedAddress(displayName: nil, address: "b@y")]
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            // Subject literal must have backslashes and quotes escaped.
+            try expect(script.contains("set svc's subject to \"She said \\\"hi\\\" \\\\ today\""))
+            // Both recipients appear in the collated list.
+            try expect(script.contains("\"a@x\""))
+            try expect(script.contains("\"b@y\""))
+        }
+    },
+
+    TestCase(name: "rich_html_failure_falls_back_to_classic") {
+        try withTempDir { tmp in
+            let recorder = FailOnceRecorder()
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.body = "plain fallback body"
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(recorder.calls == 2, "rich failure should trigger a classic fallback invocation")
+            try expect(recorder.scripts[0].contains("NSSharingService"), "first attempt is the rich script")
+            try expect(recorder.scripts[1].hasPrefix("tell application \"Mail\""), "second attempt is classic")
+            try expect(script == recorder.scripts[1], "return value is the fallback script")
+        }
+    },
+
+    TestCase(name: "rich_html_emits_waitUntilDone_true") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("performSelectorOnMainThread:\"performWithItems:\""))
+            try expect(script.contains("waitUntilDone:true"))
         }
     },
 ])

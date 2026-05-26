@@ -23,10 +23,12 @@ public enum MIMEParser {
             let cte = (raw.value(for: "Content-Transfer-Encoding") ?? "").lowercased()
             let decoded = decodeTransfer(raw.body, encoding: cte)
             let charset = params["charset"] ?? "utf-8"
+            let text = EncodedWord.decodeBytes(decoded, charset: charset) ?? ""
             if mt == "text/html" {
-                msg.body = stripHTML(EncodedWord.decodeBytes(decoded, charset: charset) ?? "")
+                msg.htmlBody = text
+                msg.body = stripHTML(text)
             } else {
-                msg.body = EncodedWord.decodeBytes(decoded, charset: charset) ?? ""
+                msg.body = text
             }
         }
         return msg
@@ -58,10 +60,17 @@ public enum MIMEParser {
                 || (mt.hasPrefix("text/") == false && mt != "")
 
             // Treat text/* without an explicit attachment disposition as a body candidate.
-            if !isAttachment && (mt == "text/plain" || (mt.hasPrefix("text/") && msg.body.isEmpty)) {
+            if !isAttachment && mt.hasPrefix("text/") {
+                let charset = subParams["charset"] ?? "utf-8"
+                let text = EncodedWord.decodeBytes(decoded, charset: charset) ?? ""
+
+                // Capture raw HTML for the rich-HTML render path independent of
+                // whether plain-text already won the body slot.
+                if mt == "text/html" && msg.htmlBody == nil {
+                    msg.htmlBody = text
+                }
+
                 if msg.body.isEmpty {
-                    let charset = subParams["charset"] ?? "utf-8"
-                    let text = EncodedWord.decodeBytes(decoded, charset: charset) ?? ""
                     msg.body = (mt == "text/html") ? stripHTML(text) : text
                 }
                 continue
@@ -186,20 +195,75 @@ public enum MIMEParser {
     }
 
     /// Tag-strip an HTML body for a tolerable plain-text fallback.
+    /// Drops <style>, <script>, and <head> block contents (not just their
+    /// tags), turns block-level closing tags into newlines, strips the
+    /// remaining tags, and collapses whitespace.
     private static func stripHTML(_ html: String) -> String {
+        var s = html
+
+        let dropBlocks = [
+            #"<style\b[^>]*>[\s\S]*?</style>"#,
+            #"<script\b[^>]*>[\s\S]*?</script>"#,
+            #"<head\b[^>]*>[\s\S]*?</head>"#,
+            #"<!--[\s\S]*?-->"#,
+        ]
+        for pattern in dropBlocks {
+            s = replaceRegex(in: s, pattern: pattern, with: "")
+        }
+
+        let toNewline = [
+            #"<br\s*/?>"#,
+            #"</p\s*>"#,
+            #"</div\s*>"#,
+            #"</h[1-6]\s*>"#,
+            #"</li\s*>"#,
+            #"</tr\s*>"#,
+        ]
+        for pattern in toNewline {
+            s = replaceRegex(in: s, pattern: pattern, with: "\n")
+        }
+
         var out = ""
         var inTag = false
-        for ch in html {
+        for ch in s {
             if ch == "<" { inTag = true; continue }
             if ch == ">" { inTag = false; continue }
             if !inTag { out.append(ch) }
         }
-        return out
+
+        let decoded = out
             .replacingOccurrences(of: "&nbsp;", with: " ")
             .replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&quot;", with: "\"")
             .replacingOccurrences(of: "&#39;", with: "'")
+
+        var result: [String] = []
+        var lastBlank = false
+        for raw in decoded.split(separator: "\n", omittingEmptySubsequences: false) {
+            let collapsed = raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            if collapsed.isEmpty {
+                if !lastBlank { result.append("") }
+                lastBlank = true
+            } else {
+                result.append(collapsed)
+                lastBlank = false
+            }
+        }
+        return result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func replaceRegex(in s: String, pattern: String, with template: String) -> String {
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return s
+        }
+        let ns = s as NSString
+        return re.stringByReplacingMatches(
+            in: s,
+            options: [],
+            range: NSRange(location: 0, length: ns.length),
+            withTemplate: template
+        )
     }
 }

@@ -4,9 +4,11 @@ public typealias ScriptRunner = (String) throws -> Void
 
 public enum MailDriver {
     /// Hand the parsed message to Mail.app. Writes the body and attachments to
-    /// `tmp`, generates an AppleScript, and passes it to `runner`. Defaults to
-    /// executing the script via NSAppleScript; tests inject a recording runner.
-    /// Returns the generated script for diagnostics.
+    /// `tmp`, generates one or two AppleScripts, and passes them to `runner`.
+    /// Defaults to executing scripts via NSAppleScript; tests inject a recording
+    /// runner. Returns the script that was last successfully invoked (the rich
+    /// HTML script when the rich path succeeds, otherwise the classic script —
+    /// including the case where the rich path failed and we fell back).
     @discardableResult
     public static func deliver(
         _ msg: ParsedMessage,
@@ -25,7 +27,9 @@ public enum MailDriver {
         }
 
         let sender = composeSender(name: options.fromName, address: options.fromAddress)
-        let script = buildScript(
+        let run = runner ?? { try AppleScript.run($0) }
+
+        let classicScript = buildClassicScript(
             subject: msg.subject,
             sender: sender,
             visible: !options.send,
@@ -36,9 +40,55 @@ public enum MailDriver {
             attachmentPaths: attachmentURLs.map { $0.path },
             send: options.send
         )
-        let run = runner ?? { try AppleScript.run($0) }
-        try run(script)
-        return script
+
+        // Warn when HTML was present but a condition forces the classic path,
+        // so the user understands why styling was stripped.
+        let hasRichHTML = hasNonEmptyHTML(msg)
+        if hasRichHTML && !msg.attachments.isEmpty {
+            warn("HTML present but attachments require classic path; styling will be stripped")
+        } else if hasRichHTML && options.send {
+            warn("HTML present but --send requires classic path; styling will be stripped")
+        }
+
+        if shouldUseRichHTML(msg, options: options) {
+            if !msg.bcc.isEmpty {
+                warn("Bcc will be visible in the rich-HTML compose window (NSSharingService has no Bcc field)")
+            }
+            let htmlURL = try tmp.write(Data((msg.htmlBody ?? "").utf8), name: "body.html")
+            let richScript = buildRichHTMLScript(
+                subject: msg.subject,
+                htmlPath: htmlURL.path,
+                to: msg.to,
+                cc: msg.cc,
+                bcc: msg.bcc
+            )
+            do {
+                try run(richScript)
+                return richScript
+            } catch {
+                warn("rich HTML render failed (\(error)); falling back to plain-text compose")
+                try run(classicScript)
+                return classicScript
+            }
+        }
+
+        try run(classicScript)
+        return classicScript
+    }
+
+    /// True iff the message has a non-empty HTML body, no attachments, and is
+    /// not being sent automatically. NSSharingService strips attachments and
+    /// will not auto-send, so attach/send cases must use the classic path.
+    static func shouldUseRichHTML(_ msg: ParsedMessage, options: Options) -> Bool {
+        guard hasNonEmptyHTML(msg) else { return false }
+        if !msg.attachments.isEmpty { return false }
+        if options.send { return false }
+        return true
+    }
+
+    private static func hasNonEmptyHTML(_ msg: ParsedMessage) -> Bool {
+        guard let html = msg.htmlBody else { return false }
+        return !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private static func composeSender(name: String?, address: String?) -> String? {
@@ -48,7 +98,7 @@ public enum MailDriver {
         return address
     }
 
-    private static func buildScript(
+    private static func buildClassicScript(
         subject: String,
         sender: String?,
         visible: Bool,
@@ -96,6 +146,48 @@ public enum MailDriver {
         }
         lines.append("    end tell")
         lines.append("end tell")
+        return lines.joined(separator: "\n")
+    }
+
+    /// Emit an AppleScript-ObjC source that builds an NSAttributedString from
+    /// the HTML file and hands it to NSSharingService's compose-email service.
+    /// Routed through `performSelectorOnMainThread:withObject:waitUntilDone:true`
+    /// so the script (and the calling process) only returns after Mail.app has
+    /// fully presented the compose window — otherwise our `defer { tmp.cleanup() }`
+    /// would race the in-flight presentation.
+    private static func buildRichHTMLScript(
+        subject: String,
+        htmlPath: String,
+        to: [ParsedAddress],
+        cc: [ParsedAddress],
+        bcc: [ParsedAddress]
+    ) -> String {
+        // NSSharingService has no separate Cc/Bcc fields; collate everyone into
+        // the single recipients list. Bcc visibility is warned about in deliver().
+        let allRecipients = to + cc + bcc
+        let recipientList = allRecipients
+            .map { AppleScript.quote($0.address) }
+            .joined(separator: ", ")
+
+        var lines: [String] = []
+        lines.append("use framework \"Foundation\"")
+        lines.append("use framework \"AppKit\"")
+        lines.append("use scripting additions")
+        lines.append("")
+        lines.append("set htmlPath to \(AppleScript.quote(htmlPath))")
+        lines.append("set htmlString to (current application's NSString's stringWithContentsOfFile:htmlPath encoding:(current application's NSUTF8StringEncoding) |error|:(missing value))")
+        lines.append("if htmlString is missing value then error \"failed to read HTML body\" number 65")
+        lines.append("set htmlData to htmlString's dataUsingEncoding:(current application's NSUTF8StringEncoding)")
+        lines.append("set attrStr to (current application's NSAttributedString's alloc()'s initWithHTML:htmlData documentAttributes:(missing value))")
+        lines.append("if attrStr is missing value then error \"failed to construct NSAttributedString from HTML\" number 65")
+        lines.append("")
+        lines.append("set svc to current application's NSSharingService's sharingServiceNamed:(current application's NSSharingServiceNameComposeEmail)")
+        lines.append("if svc is missing value then error \"compose-email sharing service unavailable\" number 71")
+        lines.append("set svc's recipients to {\(recipientList)}")
+        lines.append("set svc's subject to \(AppleScript.quote(subject))")
+        lines.append("")
+        lines.append("-- waitUntilDone:true keeps the runloop alive until Mail.app presents the window.")
+        lines.append("svc's performSelectorOnMainThread:\"performWithItems:\" withObject:{attrStr} waitUntilDone:true")
         return lines.joined(separator: "\n")
     }
 

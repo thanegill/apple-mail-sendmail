@@ -143,6 +143,39 @@ aGVsbG8K
 EOF
 ```
 
+### Rich HTML rendering
+
+When the input has an HTML body (a `text/html` part, or a
+`multipart/alternative` with `text/html` inside) **and** there are no
+attachments **and** `--send` is not set, the compose window is opened via
+`NSSharingService` with the HTML converted to an `NSAttributedString`. The
+result is a draft that renders inline styles, tables, lists, colors, and
+headings — not a stripped plain-text dump.
+
+Tradeoffs you should know about:
+
+- **Attachments force the classic path.** `NSSharingService` does not
+  accept attachments. When the message has both HTML and attachments, the
+  binary falls back to the classic `tell application "Mail"` route with
+  stripped plain text and prints a stderr note. Attachments are
+  preserved; styling is not.
+- **`--send` forces the classic path.** `NSSharingService` opens a
+  visible window and cannot auto-deliver. With `--send`, the classic
+  invisible-compose + `send` route is used with stripped plain text.
+- **Bcc becomes visible.** `NSSharingService` has no Bcc field, so Bcc
+  recipients are merged into the To list. The binary warns on stderr; you
+  can edit the draft before sending.
+- **Complex CSS may not survive.** `NSAttributedString.initWithHTML` uses
+  WebKit's archival path. Inline styles, tables, lists, headings,
+  preformatted blocks, colors, and basic borders render. JavaScript,
+  flexbox/grid layout, and web fonts do not.
+- **On any failure** (malformed HTML, missing sharing service), the
+  binary automatically falls back to the classic path with a warning, so
+  you always get a draft.
+
+No new flags and no new permissions; the existing Automation grant is
+sufficient.
+
 ### Dry run
 
 Set `SENDMAIL_DRY_RUN=1` to print the AppleScript that would be executed
@@ -180,6 +213,44 @@ Following `sysexits.h`:
 |   71 | AppleScript execution failed                                  |
 |   75 | Mail.app could not be launched                                |
 |   78 | Automation permission denied                                  |
+
+## Alternatives considered
+
+Recorded so future contributors don't redo the research. Each of these was
+investigated and ruled out:
+
+- **MailKit / `MEExtension` (macOS 12+).** `MEComposeSessionHandler` does
+  not expose a body-rewrite API; Apple explicitly states the compose
+  editor body cannot be modified from extensions. Extensions also can't
+  be triggered from an external CLI, and shipping requires Developer ID
+  signing + Xcode + user enablement — incompatible with this Nix build.
+- **Opening an `.eml` file as a draft.**
+  `tell application "Mail" to open POSIX file "foo.eml"` produces a
+  read-only viewer, not a compose window. `import mail` accepts only
+  `.mbox` bundles and lands messages as immutable `message` objects, not
+  editable `outgoing message` objects. Writing `.emlx` files into
+  `~/Library/Mail/.../Drafts.mbox/` is undocumented and version-fragile.
+- **Mail's `html content` AppleScript property.** Present in the sdef but
+  marked "Does nothing at all (deprecated)" by Apple since macOS El
+  Capitan (2015); setting it yields a blank body.
+- **`read POSIX file ... as «class RTF »` for `outgoing message`'s
+  `content`.** Mail stores the read value as plain text; rich-text
+  coercion does not survive.
+- **Clipboard + Cmd+V via System Events.** Requires an Accessibility
+  permission grant on top of Automation, and is brittle to compose
+  window focus state.
+- **NSSharingService body + follow-up
+  `tell application "Mail" to make new attachment`.** The
+  NSSharingService-created compose window does not register as an
+  `outgoing message` in Mail's AppleScript dictionary; it surfaces only
+  as a read-only `message` in Drafts. Per Shane Stanley (MacScripter,
+  2019) there is no way to address the window from
+  `tell application "Mail"`.
+- **NSSharingService body + UI scripting attachments via System Events.**
+  Requires Accessibility permission, and a known Mail.app bug wipes the
+  HTML body the moment an attachment is added unless the body is first
+  cut, then attached, then pasted. Too fragile to maintain across macOS
+  releases.
 
 ## Development
 
