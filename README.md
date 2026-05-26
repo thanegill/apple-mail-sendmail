@@ -165,21 +165,30 @@ Tradeoffs you should know about:
 - **Bcc becomes visible.** `NSSharingService` has no Bcc field, so Bcc
   recipients are merged into the To list. The binary warns on stderr; you
   can edit the draft before sending.
-- **Mail.app drops font and background overrides on receipt.** When
-  NSSharingService hands the NSAttributedString to Mail's compose
-  window, structural HTML (paragraphs, lists, preformatted-block
-  whitespace, line breaks) is preserved, but custom fonts and
-  background colors specified by `<style>` rules or inline attributes
-  are replaced by Mail's default Helvetica + transparent. This is
-  a Mail.app limitation, not something we can work around from the
-  sender side. JavaScript, flexbox/grid layout, and web fonts also
-  do not apply.
+- **Mail's compose format must be Rich Text for styling to survive.**
+  Mail.app's default new-message format is controlled by
+  **Mail -> Settings -> Composing -> Message Format**. With "Plain
+  Text" selected, Mail strips all character attributes on receipt
+  (everything becomes the default Helvetica with no background). With
+  "Rich Text" selected, font choice (monospace for `<pre>`), background
+  color, and other inline attributes from the NSAttributedString are
+  preserved.
+- **Complex CSS does not survive.** `NSAttributedString.initWithHTML`
+  uses WebKit's archival path. Inline styles, `<style>` blocks targeting
+  basic selectors, tables, lists, headings, preformatted blocks, and
+  colors render. JavaScript, flexbox/grid layout, and web fonts do not.
 - **On any failure** (malformed HTML, missing sharing service), the
   binary automatically falls back to the classic path with a warning, so
   you always get a draft.
 
 No new flags and no new permissions; the existing Automation grant is
 sufficient.
+
+**One Mail.app setting matters:** rich styling only survives into the
+compose window when Mail's new-message format is set to **Rich Text**
+(Mail -> Settings -> Composing -> Message Format). With "Plain Text"
+selected, structure and Unicode characters still come through, but
+font choice and background colors are stripped on receipt.
 
 ### Dry run
 
