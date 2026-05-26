@@ -260,6 +260,42 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
+    TestCase(name: "rich_html_path_taken_for_email_output_wrapped_payload") {
+        // Integration: feed the actual email-output multipart shape through
+        // RFC822Parser + MIMEParser, then assert MailDriver picks the rich
+        // path. Locks in that the outer multipart/mixed wrapper does not
+        // cause shouldUseRichHTML to bail out.
+        try withTempDir { tmp in
+            let payload = """
+            Subject: wrapped
+            To: alice@example.com
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="OUTER"
+
+            --OUTER
+            Content-Type: multipart/alternative; boundary="INNER"
+
+            --INNER
+            Content-Type: text/plain; charset=utf-8
+
+
+
+            --INNER
+            Content-Type: text/html; charset=utf-8
+
+            <html><body><p>hello</p></body></html>
+            --INNER--
+            --OUTER--
+            """
+            let raw = try RFC822Parser.parse(Data(payload.utf8))
+            let msg = MIMEParser.parse(raw)
+            let recorder = Recorder()
+            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("NSSharingService"), "wrapper-without-attachments must still take the rich path")
+            try expect(!script.contains("tell application \"Mail\""))
+        }
+    },
+
     TestCase(name: "rich_html_emits_waitUntilDone_true") {
         try withTempDir { tmp in
             let recorder = Recorder()

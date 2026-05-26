@@ -130,6 +130,40 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expect(msg.htmlBody!.contains("<p>html body</p>"))
     },
 
+    TestCase(name: "multipart_mixed_wrapper_with_no_attachments") {
+        // email-output structure: outer multipart/mixed exists for potential
+        // attachments, but when no --attach is given the wrapper contains only
+        // the inner multipart/alternative body. The parser must not see this
+        // outer wrapper as a signal that attachments exist.
+        let input = """
+        Subject: wrapped
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="OUTER"
+
+        --OUTER
+        Content-Type: multipart/alternative; boundary="INNER"
+
+        --INNER
+        Content-Type: text/plain; charset=utf-8
+
+
+
+        --INNER
+        Content-Type: text/html; charset=utf-8
+
+        <html><head><style>p { color: red; }</style></head><body><p>hello</p></body></html>
+        --INNER--
+        --OUTER--
+        """
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expect(msg.attachments.isEmpty, "outer multipart/mixed wrapper must not count as an attachment")
+        try expectNotNil(msg.htmlBody)
+        try expect(msg.htmlBody!.contains("<p>hello</p>"))
+        try expect(msg.body.contains("hello"))
+        try expect(!msg.body.contains("color: red"), "CSS leaked into body: \(msg.body)")
+    },
+
     TestCase(name: "html_only_message_populates_both_body_and_htmlBody") {
         let input = "Subject: html\nContent-Type: text/html; charset=utf-8\n\n<p>only</p>"
         let raw = try RFC822Parser.parse(Data(input.utf8))
