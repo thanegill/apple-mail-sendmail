@@ -22,15 +22,6 @@
               src = ./.;
               nativeBuildInputs = [ pkgs.swift pkgs.swiftpm ];
 
-              # Tests use a recording AppleScript runner so they never drive Mail.app.
-              doCheck = true;
-              checkPhase = ''
-                runHook preCheck
-                swift build -c release --product sendmail-test
-                "$(swiftpmBinPath)/sendmail-test"
-                runHook postCheck
-              '';
-
               installPhase = ''
                 runHook preInstall
                 install -Dm755 "$(swiftpmBinPath)/apple-mail-sendmail" "$out/bin/apple-mail-sendmail"
@@ -38,6 +29,15 @@
                   ln -s apple-mail-sendmail "$out/bin/sendmail"
                 ''}
                 runHook postInstall
+                '';
+
+              # Tests use a recording AppleScript runner so they never drive Mail.app.
+              doCheck = true;
+              checkPhase = ''
+                runHook preCheck
+                swift build -c release --product sendmail-test
+                "$(swiftpmBinPath)/sendmail-test"
+                runHook postCheck
               '';
 
               meta = {
