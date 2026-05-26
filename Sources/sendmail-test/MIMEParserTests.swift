@@ -109,6 +109,10 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     TestCase(name: "html_body_preserved_alongside_plain_text") {
         // The parser should keep both the stripped plain-text body (fallback)
         // and the raw HTML in htmlBody (for the rich-HTML render path).
+        //
+        // Regression: an older code path classified the text/html part as a
+        // phantom attachment whenever text/plain had already filled the body
+        // slot, producing an `att-NN-attachment-N.bin` in the compose window.
         let input = """
         Subject: dual
         Content-Type: multipart/alternative; boundary="ALT"
@@ -128,6 +132,7 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectEqual(msg.body, "plain body")
         try expectNotNil(msg.htmlBody)
         try expect(msg.htmlBody!.contains("<p>html body</p>"))
+        try expect(msg.attachments.isEmpty, "text/html sibling must not be promoted to an attachment")
     },
 
     TestCase(name: "multipart_mixed_wrapper_with_no_attachments") {
