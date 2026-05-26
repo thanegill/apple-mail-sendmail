@@ -1,0 +1,7 @@
+.claude/
+.build/
+.swiftpm/
+Package.resolved
+result
+result-*
+.DS_Store
