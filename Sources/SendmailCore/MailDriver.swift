@@ -151,10 +151,15 @@ public enum MailDriver {
 
     /// Emit an AppleScript-ObjC source that builds an NSAttributedString from
     /// the HTML file and hands it to NSSharingService's compose-email service.
-    /// Routed through `performSelectorOnMainThread:withObject:waitUntilDone:true`
-    /// so the script (and the calling process) only returns after Mail.app has
-    /// fully presented the compose window — otherwise our `defer { tmp.cleanup() }`
-    /// would race the in-flight presentation.
+    ///
+    /// Two things matter for this to actually open a compose window from a CLI
+    /// context (verified empirically against macOS 15):
+    ///   * Mail must be activated first. NSSharingService is a no-op when its
+    ///     target host isn't already running and frontmost.
+    ///   * After `performWithItems:` is called, the script must keep its
+    ///     runloop running for a moment so the async dispatch to Mail can
+    ///     complete. `performSelectorOnMainThread:waitUntilDone:true` returns
+    ///     `done` but the window never appears; a real `runUntilDate:` does.
     private static func buildRichHTMLScript(
         subject: String,
         htmlPath: String,
@@ -181,13 +186,17 @@ public enum MailDriver {
         lines.append("set attrStr to (current application's NSAttributedString's alloc()'s initWithHTML:htmlData documentAttributes:(missing value))")
         lines.append("if attrStr is missing value then error \"failed to construct NSAttributedString from HTML\" number 65")
         lines.append("")
+        lines.append("-- Mail must be frontmost for NSSharingService to actually present the compose window.")
+        lines.append("tell application \"Mail\" to activate")
+        lines.append("")
         lines.append("set svc to current application's NSSharingService's sharingServiceNamed:(current application's NSSharingServiceNameComposeEmail)")
         lines.append("if svc is missing value then error \"compose-email sharing service unavailable\" number 71")
         lines.append("set svc's recipients to {\(recipientList)}")
         lines.append("set svc's subject to \(AppleScript.quote(subject))")
+        lines.append("svc's performWithItems:{attrStr}")
         lines.append("")
-        lines.append("-- waitUntilDone:true keeps the runloop alive until Mail.app presents the window.")
-        lines.append("svc's performSelectorOnMainThread:\"performWithItems:\" withObject:{attrStr} waitUntilDone:true")
+        lines.append("-- Spin the runloop so NSSharingService's async dispatch reaches Mail before we exit.")
+        lines.append("current application's NSRunLoop's currentRunLoop()'s runUntilDate:(current application's NSDate's dateWithTimeIntervalSinceNow:2.0)")
         return lines.joined(separator: "\n")
     }
 

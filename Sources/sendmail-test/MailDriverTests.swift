@@ -176,7 +176,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             try expect(script.contains("NSSharingService"))
             try expect(script.contains("NSSharingServiceNameComposeEmail"))
             try expect(script.contains("NSAttributedString"))
-            try expect(!script.contains("tell application \"Mail\""), "rich path must not emit Mail tell-block")
+            try expect(!script.contains("make new outgoing message"), "rich path must not emit classic outgoing-message block")
         }
     },
 
@@ -292,19 +292,24 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             let recorder = Recorder()
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
             try expect(script.contains("NSSharingService"), "wrapper-without-attachments must still take the rich path")
-            try expect(!script.contains("tell application \"Mail\""))
+            try expect(!script.contains("make new outgoing message"), "wrapper-without-attachments must not take the classic path")
         }
     },
 
-    TestCase(name: "rich_html_emits_waitUntilDone_true") {
+    TestCase(name: "rich_html_activates_mail_and_spins_runloop") {
+        // NSSharingService from a CLI context is a no-op unless Mail is
+        // activated first and we keep the runloop alive long enough for the
+        // async dispatch to reach Mail. Lock both lines in so they aren't
+        // regressed.
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("performSelectorOnMainThread:\"performWithItems:\""))
-            try expect(script.contains("waitUntilDone:true"))
+            try expect(script.contains("tell application \"Mail\" to activate"))
+            try expect(script.contains("svc's performWithItems:"))
+            try expect(script.contains("NSRunLoop") && script.contains("runUntilDate"))
         }
     },
 ])
