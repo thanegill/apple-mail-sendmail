@@ -146,49 +146,50 @@ EOF
 ### Rich HTML rendering
 
 When the input has an HTML body (a `text/html` part, or a
-`multipart/alternative` with `text/html` inside) **and** there are no
-attachments **and** `--send` is not set, the compose window is opened via
-`NSSharingService` with the HTML converted to an `NSAttributedString`. The
-result is a draft that renders inline styles, tables, lists, colors, and
-headings — not a stripped plain-text dump.
+`multipart/alternative` with `text/html` inside), the binary renders
+it into the compose window by walking the HTML's paragraphs and
+building Mail's rich-text body via the AppleScript dictionary's
+**rich text suite**: `make new paragraph at end of content with data
+"..." with properties {font:..., size:..., color:{r,g,b}}` per
+paragraph, plus inline `make new attachment` for any attachments,
+plus dictionary `send` if `--send` is set. No NSSharingService, no
+UI scripting, no Accessibility permission.
 
-Tradeoffs you should know about:
+Paragraph fonts mirror what Mail's "Fonts & Colors" panel is
+configured to use:
 
-- **Attachments force the classic path.** `NSSharingService` does not
-  accept attachments. When the message has both HTML and attachments, the
-  binary falls back to the classic `tell application "Mail"` route with
-  stripped plain text and prints a stderr note. Attachments are
-  preserved; styling is not.
-- **`--send` forces the classic path.** `NSSharingService` opens a
-  visible window and cannot auto-deliver. With `--send`, the classic
-  invisible-compose + `send` route is used with stripped plain text.
-- **Bcc becomes visible.** `NSSharingService` has no Bcc field, so Bcc
-  recipients are merged into the To list. The binary warns on stderr; you
-  can edit the draft before sending.
-- **Mail's compose format must be Rich Text for styling to survive.**
-  Mail.app's default new-message format is controlled by
-  **Mail -> Settings -> Composing -> Message Format**. With "Plain
-  Text" selected, Mail strips all character attributes on receipt
-  (everything becomes the default Helvetica with no background). With
-  "Rich Text" selected, font choice (monospace for `<pre>`), background
-  color, and other inline attributes from the NSAttributedString are
-  preserved.
-- **Complex CSS does not survive.** `NSAttributedString.initWithHTML`
-  uses WebKit's archival path. Inline styles, `<style>` blocks targeting
-  basic selectors, tables, lists, headings, preformatted blocks, and
-  colors render. JavaScript, flexbox/grid layout, and web fonts do not.
-- **On any failure** (malformed HTML, missing sharing service), the
-  binary automatically falls back to the classic path with a warning, so
-  you always get a draft.
+- Proportional (`<p>`, headings, ordinary body text) → Mail's
+  **Message font** (default `Helvetica 12`).
+- Monospace (`<pre>`, `<code>`) → Mail's **Fixed-width font**
+  (default `Menlo-Regular 11`).
 
-No new flags and no new permissions; the existing Automation grant is
-sufficient.
+The binary reads these at runtime from the `com.apple.mail`
+preferences (`NSFont`, `NSFontSize`, `NSFixedPitchFont`,
+`NSFixedPitchFontSize`) and falls back to Apple's stock defaults
+when a key is missing.
 
-**One Mail.app setting matters:** rich styling only survives into the
-compose window when Mail's new-message format is set to **Rich Text**
-(Mail -> Settings -> Composing -> Message Format). With "Plain Text"
-selected, structure and Unicode characters still come through, but
-font choice and background colors are stripped on receipt.
+Tradeoffs:
+
+- **Sub-paragraph styling is lost.** Only the first character's
+  font and color of each paragraph survive into Mail's rich-text
+  body. Inline bold/italic/colored spans inside a paragraph render
+  in the paragraph's base font. Acceptable for the cron-alert use
+  case (paragraphs and code blocks); inadequate for marketing
+  emails with heavy inline styling.
+- **Tables don't render.** Mail's rich-text model has no table
+  type; `<table>` content becomes paragraphs of its cell text in
+  reading order.
+- **JavaScript / flexbox / grid / web fonts do not apply.** The
+  HTML is parsed by `NSAttributedString.initWithHTML:` (WebKit
+  archival), which is structural only.
+- **On any runtime failure** (HTML parse error, etc.) the binary
+  falls back to the classic plain-text path with a stderr warning,
+  so you always end up with a draft.
+
+The compose window's per-message format is set by Mail at creation;
+there is no setting in Mail.app's preferences that affects whether
+the rich-build paragraph styling survives — it lands in the
+compose body unconditionally.
 
 ### Dry run
 
@@ -230,41 +231,142 @@ Following `sysexits.h`:
 
 ## Alternatives considered
 
-Recorded so future contributors don't redo the research. Each of these was
-investigated and ruled out:
+Recorded so future contributors (and future Claude sessions) don't redo
+the research. Each of these was empirically probed against current
+macOS Mail (verified on Sequoia/Tahoe, 2026) and ruled out in favor of
+the dictionary rich-text-suite approach actually in use. Findings are
+based on running probes, not just reading documentation.
 
-- **MailKit / `MEExtension` (macOS 12+).** `MEComposeSessionHandler` does
-  not expose a body-rewrite API; Apple explicitly states the compose
-  editor body cannot be modified from extensions. Extensions also can't
-  be triggered from an external CLI, and shipping requires Developer ID
-  signing + Xcode + user enablement — incompatible with this Nix build.
+### Architecture-level dead-ends
+
+- **MailKit / `MEExtension` (macOS 12+).** `MEComposeSessionHandler`
+  exposes `additionalHeaders(for:)`, `allowMessageSendForSession:`, and
+  lifecycle hooks — but no body-rewrite API. Apple explicitly states
+  the compose editor body cannot be modified from extensions.
+  Extensions can't be triggered from an external CLI either, and
+  shipping one requires Developer ID signing + Xcode + user enablement
+  — none of which fit this Nix-flake build path.
 - **Opening an `.eml` file as a draft.**
   `tell application "Mail" to open POSIX file "foo.eml"` produces a
   read-only viewer, not a compose window. `import mail` accepts only
-  `.mbox` bundles and lands messages as immutable `message` objects, not
-  editable `outgoing message` objects. Writing `.emlx` files into
+  `.mbox` bundles and lands messages as immutable `message` objects,
+  not editable `outgoing message` objects. Writing `.emlx` files into
   `~/Library/Mail/.../Drafts.mbox/` is undocumented and version-fragile.
-- **Mail's `html content` AppleScript property.** Present in the sdef but
-  marked "Does nothing at all (deprecated)" by Apple since macOS El
-  Capitan (2015); setting it yields a blank body.
-- **`read POSIX file ... as «class RTF »` for `outgoing message`'s
-  `content`.** Mail stores the read value as plain text; rich-text
-  coercion does not survive.
-- **Clipboard + Cmd+V via System Events.** Requires an Accessibility
-  permission grant on top of Automation, and is brittle to compose
-  window focus state.
-- **NSSharingService body + follow-up
-  `tell application "Mail" to make new attachment`.** The
-  NSSharingService-created compose window does not register as an
-  `outgoing message` in Mail's AppleScript dictionary; it surfaces only
-  as a read-only `message` in Drafts. Per Shane Stanley (MacScripter,
-  2019) there is no way to address the window from
-  `tell application "Mail"`.
-- **NSSharingService body + UI scripting attachments via System Events.**
-  Requires Accessibility permission, and a known Mail.app bug wipes the
-  HTML body the moment an attachment is added unless the body is first
-  cut, then attached, then pasted. Too fragile to maintain across macOS
-  releases.
+- **`import mail` + `redirect` to inject HTML content.** Hypothetical
+  path: import a pre-crafted HTML message, then `redirect` it (which
+  preserves the source body verbatim). Not probed in detail because
+  every other simpler path was either working or definitively dead;
+  noted for completeness only. Would require maintaining a temporary
+  mailbox and tolerate Mail's drafts/inbox UI side-effects.
+
+### `outgoing message` `content` property dead-ends
+
+- **`html content` AppleScript property.** Present in `outgoing
+  message` via Mail's sdef but marked `"Does nothing at all
+  (deprecated)"` by Apple since macOS El Capitan (2015). Setting it
+  yields a blank body — verified by probe.
+- **`set content of msg to NSAttributedString`.** Passing an
+  `NSAttributedString` value (built from HTML via the Cocoa bridge)
+  fails with `Can't get «class ocid» id ...` coercion errors. Mail
+  expects AppleScript text, not Cocoa attributed-string pointers.
+- **`set content of msg to (read POSIX file "x.rtf" as «class RTF »)`.**
+  Mail stores the read value as plain text; rich-text coercion does
+  not survive into `outgoing message`'s `content`.
+- **`set content` AFTER `make new attachment`.** Silently no-ops — the
+  body keeps just the attachment glyph (`U+FFFC`) and the assigned
+  text is dropped. The reverse order (set content, then attach) works
+  and is what the classic path uses; the body-wipe bug only triggers
+  for some attach-then-modify-body sequences.
+
+### NSSharingService dead-ends
+
+NSSharingService (`sharingServiceNamed:NSSharingServiceNameComposeEmail`)
+DOES open a compose window with `NSAttributedString` body — earlier
+versions of this branch used it. But:
+
+- **The window does not register as `outgoing message` in Mail's
+  AppleScript dictionary.** Per Shane Stanley (MacScripter, 2019), the
+  NSSharingService-created compose window surfaces only as a read-only
+  `message` in Drafts — there is no scriptable handle to address from
+  `tell application "Mail"`. Confirmed empirically by enumerating
+  `outgoing messages` before and after `performWithItems:` — the count
+  doesn't change.
+- **No attachment API.** NSSharingService's
+  `NSSharingServiceNameComposeEmail` accepts subject + recipients
+  but not attachments.
+- **No auto-send.** It opens a visible window and waits for the user
+  to click Send.
+- **UI-scripted attachment follow-up is broken.** Even if you find
+  the compose window via System Events, a known Mail.app bug
+  (documented on MacScripter through 2025) wipes the rich-text body
+  the instant an attachment is added unless the body is first cut,
+  then attached, then pasted. Too fragile to maintain.
+- **Async dispatch needs runloop spin.** `performWithItems:` returns
+  immediately; wrapping it in `performSelectorOnMainThread:withObject:
+  waitUntilDone:true` reports `done` but the window never opens
+  unless you also `runUntilDate:` for a couple of seconds after.
+- **Mail's compose-format setting controlled survival.** With Mail's
+  "Composing → Message Format" set to Plain Text, NSSharingService's
+  per-paragraph fonts and background colors were stripped on receipt;
+  only Rich Text preserved them. The rich-text-suite path (our
+  current approach) sidesteps this since it sets fonts via dictionary
+  properties.
+
+### `mailto:` URL via `GetURL` / `open`
+
+Opens a compose window with `To`/`Cc`/`Bcc`/`Subject`/plain-body all
+populated from query params (verified empirically). But:
+
+- **The window does not register as `outgoing message`** — same
+  architectural limit as NSSharingService. No dictionary handle, no
+  attachment API, no auto-send.
+- **Plain text only.** No HTML rendering of any kind.
+- **`+` is NOT decoded as a space.** Mail.app honors `%20` but not
+  the form-encoded `+` convention.
+- **URL-length-bound** to ~2K characters for the whole URL.
+
+### UI scripting dead-ends
+
+- **`click webArea` on Mail's WKWebView compose body.** Mail's compose
+  body is an `AXWebArea` (WebKit). AppleScript's `click` on a UI
+  element calls `AXPress`, which is not a real mouse event; WKWebView
+  ignores it and the text-edit caret never moves. Cmd+V keystrokes
+  subsequently land in whatever field was actually focused — usually
+  the To: field, where they overwrite the selected recipient pill.
+- **`set focused of webArea to true`.** Reports success but does not
+  actually establish keyboard focus inside the WKWebView.
+- **`click at {x,y}` synthesizing a click via System Events.** Same as
+  `click webArea` — the click event isn't a real HID-level mouse
+  event from WKWebView's perspective, so no caret.
+- **CGEventPost from the AppleScript-ObjC bridge.** The opaque
+  `CGEventSource` pointer can't be passed back into
+  `CGEventCreateMouseEvent` through AppleScript — the bridge can't
+  marshal the opaque-pointer type. Workable only from native Swift,
+  which then still needs the Accessibility grant.
+- **Pasteboard + Cmd+V.** With an `NSAttributedString` on
+  `NSPasteboard` and a Cmd+V keystroke, the paste does fire but lands
+  in whatever has focus (typically not the compose body — see above).
+- **System Events Tab keystrokes to traverse to the body.** 5 Tabs
+  cycle through the header fields (To, Cc, Bcc, Reply-To, Subject)
+  but never descend into the `AXWebArea`. The body is not in Tab's
+  focus chain.
+
+### Why the rich-text-suite approach won
+
+Mail's `rich text` class (which backs `outgoing message`'s `content`)
+inherits from `NSTextStorage`. The sdef exposes `paragraph`,
+`attribute run`, `character`, and `attachment` as elements — so
+`make new paragraph at end of content` and `make new attachment ...`
+work, and `set font of paragraph N of content of m to "..."` /
+`set color of paragraph N of content of m to {r,g,b}` work too.
+Probing this on macOS Sequoia confirmed that all of these survive
+into the visible compose window and into the sent message, with no
+UI scripting, no Accessibility grant, and a dictionary handle that
+remains valid for follow-up `make new attachment` and `send`. The
+implementation in `MailDriver.swift` renders the source HTML through
+`NSAttributedString.initWithHTML:`, walks its paragraphs, and emits
+one `make new paragraph` line per paragraph with the appropriate
+font/size/color attributes substituted from Mail's preferences.
 
 ## Development
 

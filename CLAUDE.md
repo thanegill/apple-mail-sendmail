@@ -49,8 +49,8 @@ stdin bytes -> RFC822Parser -> MIMEParser -> ParsedMessage -> MailDriver -> Scri
 ```
 
 - `RFC822Parser.parse(Data)` produces `RawMessage` (ordered headers + raw body bytes; no MIME interpretation).
-- `MIMEParser.parse(RawMessage)` interprets `Content-Type`, walks `multipart/*` parts, decodes `base64` / `quoted-printable` transfer encodings, and decodes RFC 2047 encoded-words in `Subject` and display names.
-- `MailDriver.deliver(...)` writes body and attachments to a scoped `TempDir`, generates the AppleScript source string, and hands it to a `ScriptRunner`.
+- `MIMEParser.parse(RawMessage)` interprets `Content-Type`, walks `multipart/*` parts, decodes `base64` / `quoted-printable` transfer encodings, and decodes RFC 2047 encoded-words in `Subject` and display names. Populates `htmlBody` from any `text/html` part alongside the stripped plain-text `body`.
+- `MailDriver.deliver(...)` chooses between two AppleScript emitters and hands the result to a `ScriptRunner`. Both emit `tell application "Mail"` blocks — the rich-build path additionally walks the HTML's paragraphs and emits `make new paragraph at end of content with data "..." with properties {font:..., size:..., color:{r,g,b}}` per paragraph, with per-paragraph fonts pulled from `MailFontPrefs.current()` (which reads `com.apple.mail`'s `NSFont` / `NSFixedPitchFont` etc.). The classic plain-text path runs for messages without HTML, and as the runtime fallback if the rich-build script throws.
 
 ### The ScriptRunner injection seam
 
@@ -76,7 +76,17 @@ Nixpkgs Swift 5.10 stdlib dylibs are built for macOS 14.0. Lower floors produce 
 
 ### Draft is the product invariant
 
-`MailDriver.buildScript` emits `visible:true` and omits the `send` verb unless `options.send` is true. The default behavior is **draft, not send**. The `--send` flag and `SENDMAIL_SEND=1` environment variable both flip it; the env-var path exists for callers (cron, scripts) that cannot easily change their argv.
+`MailDriver` emits `visible:true` and omits the `send` verb unless `options.send` is true. The default behavior is **draft, not send**. The `--send` flag and `SENDMAIL_SEND=1` environment variable both flip it; the env-var path exists for callers (cron, scripts) that cannot easily change their argv.
+
+### Rich HTML rendering uses the rich-text suite, not NSSharingService
+
+Mail's compose body is a WKWebView that AppleScript and System Events cannot reliably focus or paste into — `click webArea` calls `AXPress` (not a real mouse event), Tab keystrokes don't descend into the WKWebView, and `set content` to an `NSAttributedString` fails with a `«class ocid»` coercion error. The viable path is Mail's AppleScript `rich text` class (which inherits from `NSTextStorage`): `make new paragraph at end of content with data "..." with properties {font:..., size:..., color:{r,g,b}}` per paragraph, plus inline `make new attachment`, plus dictionary `send`. The README's "Alternatives considered" section enumerates every failed approach with empirical findings — do not re-investigate without reading that first.
+
+The rich-build path is selected whenever `msg.htmlBody` is non-empty (no restrictions on attachments or `--send`). If the runtime script throws (HTML parse error, etc.), `deliver` falls back to the classic plain-text script. Adding new HTML capability should go through this seam; the classic emitter is intentionally minimal.
+
+### Mail font preferences are read from `com.apple.mail`
+
+`MailDriver.MailFontPrefs.current()` reads `NSFont`, `NSFontSize`, `NSFixedPitchFont`, `NSFixedPitchFontSize` from the `com.apple.mail` UserDefaults, with `MailFontPrefs.appleDefaults` (Helvetica 12 / Menlo-Regular 11) as the fallback. `extractParagraphs(fromHTML:fontPrefs:)` takes the prefs as an injectable parameter for deterministic testing — tests construct their own `MailFontPrefs` rather than relying on whatever the developer's Mail.app is configured to use. Do not hard-code Helvetica/Menlo anywhere else.
 
 ## Packaging
 
