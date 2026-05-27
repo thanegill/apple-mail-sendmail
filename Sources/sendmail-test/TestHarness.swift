@@ -16,6 +16,17 @@ struct TestFailure: Error {
     let line: UInt
 }
 
+/// Thrown by a test that wants to record itself as skipped (e.g. the
+/// environment lacks an OS framework the test needs). The harness reports
+/// these separately from passes and failures.
+struct TestSkipped: Error {
+    let reason: String
+}
+
+func skip(_ reason: String) throws -> Never {
+    throw TestSkipped(reason: reason)
+}
+
 func expect(
     _ condition: @autoclosure () -> Bool,
     _ message: @autoclosure () -> String = "expectation failed",
@@ -82,8 +93,10 @@ func expectThrows(
 func runSuites(_ suites: [TestSuite]) -> Int32 {
     var passed = 0
     var failed = 0
+    var skipped = 0
     var failures: [(String, TestFailure)] = []
     var errors: [(String, Error)] = []
+    var skips: [(String, String)] = []
 
     for suite in suites {
         for tc in suite.cases {
@@ -92,6 +105,10 @@ func runSuites(_ suites: [TestSuite]) -> Int32 {
                 try tc.run()
                 passed += 1
                 print("PASS  \(fullName)")
+            } catch let s as TestSkipped {
+                skipped += 1
+                skips.append((fullName, s.reason))
+                print("SKIP  \(fullName)  (\(s.reason))")
             } catch let f as TestFailure {
                 failed += 1
                 failures.append((fullName, f))
@@ -118,6 +135,6 @@ func runSuites(_ suites: [TestSuite]) -> Int32 {
     }
 
     print("")
-    print("\(passed + failed) tests, \(passed) passed, \(failed) failed")
+    print("\(passed + failed + skipped) tests, \(passed) passed, \(failed) failed, \(skipped) skipped")
     return failed == 0 ? 0 : 1
 }

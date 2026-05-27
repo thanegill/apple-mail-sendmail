@@ -25,6 +25,22 @@ private func withTempDir(_ body: (TempDir) throws -> Void) throws {
     try body(tmp)
 }
 
+/// True when `NSAttributedString.init(html:options:documentAttributes:)`
+/// works in this environment. The Nix build sandbox does not have WebKit
+/// linked, so HTML rendering returns nil there; we skip the affected tests
+/// rather than failing them. Local `swift run sendmail-test` in `nix
+/// develop` (or any non-sandbox environment) has WebKit and exercises the
+/// real path.
+private let webKitAvailable: Bool = {
+    return MailDriver.renderHTMLToRTF(html: "<p>probe</p>", fontPrefs: .appleDefaults) != nil
+}()
+
+private func requireWebKit() throws {
+    if !webKitAvailable {
+        try skip("NSAttributedString HTML init unavailable (Nix sandbox without WebKit)")
+    }
+}
+
 let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     TestCase(name: "draft_mode_emits_visible_true_and_no_send") {
         try withTempDir { tmp in
@@ -164,6 +180,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "rich_build_emits_rtf_read_and_set_content") {
+        try requireWebKit()
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -184,6 +201,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "rich_build_writes_rtf_temp_file") {
+        try requireWebKit()
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -200,6 +218,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "rich_build_saves_and_restores_default_format") {
+        try requireWebKit()
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -215,6 +234,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "rich_build_path_handles_attachments") {
+        try requireWebKit()
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -239,6 +259,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "rich_build_path_handles_send") {
+        try requireWebKit()
         try withTempDir { tmp in
             let recorder = Recorder()
             var opts = Options()
@@ -268,6 +289,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "rich_build_subject_and_recipients_are_quoted") {
+        try requireWebKit()
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -283,6 +305,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "rich_build_failure_falls_back_to_classic") {
+        try requireWebKit()
         try withTempDir { tmp in
             let recorder = FailOnceRecorder()
             var msg = ParsedMessage()
@@ -298,6 +321,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "rich_build_path_taken_for_email_output_wrapped_payload") {
+        try requireWebKit()
         try withTempDir { tmp in
             let payload = """
             Subject: wrapped
@@ -329,6 +353,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "render_html_to_rtf_substitutes_mail_fonts") {
+        try requireWebKit()
         // Use real installed-on-macOS font names; NSFont(name:size:) returns
         // nil for unknown fonts and our substitution silently keeps the source
         // font in that case.
