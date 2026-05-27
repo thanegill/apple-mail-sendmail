@@ -95,12 +95,16 @@ public enum MailDriver {
         var lines: [String] = []
         lines.append("use scripting additions")
         lines.append("")
-        // 1. Accessibility probe.
+        // 1. Accessibility probe. Reading UI elements of another process is
+        //    Accessibility-gated and returns -1719 when not granted, before
+        //    we touch Mail at all. (Just enumerating processes via
+        //    `get name of first process` doesn't require Accessibility, so
+        //    we go deeper.)
         lines.append("try")
-        lines.append("    tell application \"System Events\" to get name of first process")
+        lines.append("    tell application \"System Events\" to get name of menu bar 1 of process \"Finder\"")
         lines.append("on error errMsg number errNum")
         lines.append("    if errNum is -1719 or errNum is 1002 then")
-        lines.append("        error \"Accessibility permission required. Grant the calling process Accessibility in System Settings > Privacy & Security > Accessibility.\" number errNum")
+        lines.append("        error \"Accessibility permission required. Grant apple-mail-sendmail Accessibility in System Settings > Privacy & Security > Accessibility.\" number errNum")
         lines.append("    else")
         lines.append("        error errMsg number errNum")
         lines.append("    end if")

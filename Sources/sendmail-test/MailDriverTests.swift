@@ -178,7 +178,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.body = "plain fallback"
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("tell application \"System Events\" to get name of first process"))
+            try expect(script.contains("get name of menu bar 1 of process \"Finder\""), "Accessibility probe must read UI of another process (the real gate)")
             try expect(script.contains("Accessibility permission required"))
             try expect(script.contains("if errNum is -1719 or errNum is 1002"))
         }
