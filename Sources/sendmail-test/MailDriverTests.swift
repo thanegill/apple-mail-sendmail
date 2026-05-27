@@ -163,7 +163,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
-    TestCase(name: "rich_html_path_taken_for_html_only_draft") {
+    TestCase(name: "rich_build_emits_dictionary_paragraph_makers") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -172,15 +172,16 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
             try expectEqual(recorder.scripts.count, 1)
-            try expect(script.contains("use framework \"AppKit\""), "rich script missing AppKit framework declaration")
-            try expect(script.contains("NSSharingService"))
-            try expect(script.contains("NSSharingServiceNameComposeEmail"))
-            try expect(script.contains("NSAttributedString"))
-            try expect(!script.contains("make new outgoing message"), "rich path must not emit classic outgoing-message block")
+            try expect(script.contains("tell application \"Mail\""))
+            try expect(script.contains("make new outgoing message with properties"))
+            try expect(script.contains("tell content"))
+            try expect(script.contains("make new paragraph at end with data"))
+            try expect(!script.contains("NSSharingService"), "must not use NSSharingService anymore")
+            try expect(!script.contains("use framework"), "no AppleScript-Cocoa bridge in the new path")
         }
     },
 
-    TestCase(name: "rich_html_path_skipped_when_attachments_present") {
+    TestCase(name: "rich_build_path_handles_attachments") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -192,13 +193,19 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             ]
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
             try expectEqual(recorder.scripts.count, 1)
-            try expect(script.hasPrefix("tell application \"Mail\""), "attachments must force classic path")
-            try expect(script.contains("make new attachment"))
-            try expect(!script.contains("NSSharingService"))
+            try expect(script.contains("make new paragraph at end with data"), "still rich path with attachments")
+            try expect(script.contains("make new attachment with properties"))
+            // attachment block must come after the paragraphs (within `tell content`)
+            if let pIdx = script.range(of: "make new paragraph"),
+               let aIdx = script.range(of: "make new attachment") {
+                try expect(pIdx.lowerBound < aIdx.lowerBound, "paragraphs must be emitted before attachments")
+            } else {
+                try expect(false, "expected both paragraph and attachment in script")
+            }
         }
     },
 
-    TestCase(name: "rich_html_path_skipped_in_send_mode") {
+    TestCase(name: "rich_build_path_handles_send") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var opts = Options()
@@ -208,14 +215,13 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.body = "plain"
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, options: opts, tmp: tmp, runner: recorder.run)
-            try expectEqual(recorder.scripts.count, 1)
-            try expect(script.hasPrefix("tell application \"Mail\""), "--send must force classic path")
+            try expect(script.contains("make new paragraph at end with data"), "still rich path in --send mode")
+            try expect(script.contains("visible:false"))
             try expect(script.contains("\n        send"))
-            try expect(!script.contains("NSSharingService"))
         }
     },
 
-    TestCase(name: "rich_html_skipped_when_html_body_is_whitespace_only") {
+    TestCase(name: "rich_build_skipped_when_html_body_is_whitespace_only") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -223,12 +229,12 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.body = "plain"
             msg.htmlBody = "   \n\t  \n"
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.hasPrefix("tell application \"Mail\""), "whitespace-only HTML must not trigger rich path")
-            try expect(!script.contains("NSSharingService"))
+            try expect(!script.contains("make new paragraph at end with data"), "whitespace-only HTML must not trigger rich path")
+            try expect(script.contains("set content to (read"), "classic path uses read of body.txt")
         }
     },
 
-    TestCase(name: "rich_html_subject_and_recipients_are_quoted") {
+    TestCase(name: "rich_build_subject_and_recipients_are_quoted") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -237,15 +243,13 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.cc = [ParsedAddress(displayName: nil, address: "b@y")]
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            // Subject literal must have backslashes and quotes escaped.
-            try expect(script.contains("set svc's subject to \"She said \\\"hi\\\" \\\\ today\""))
-            // Both recipients appear in the collated list.
+            try expect(script.contains("subject:\"She said \\\"hi\\\" \\\\ today\""))
             try expect(script.contains("\"a@x\""))
             try expect(script.contains("\"b@y\""))
         }
     },
 
-    TestCase(name: "rich_html_failure_falls_back_to_classic") {
+    TestCase(name: "rich_build_failure_falls_back_to_classic") {
         try withTempDir { tmp in
             let recorder = FailOnceRecorder()
             var msg = ParsedMessage()
@@ -254,17 +258,13 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
             try expect(recorder.calls == 2, "rich failure should trigger a classic fallback invocation")
-            try expect(recorder.scripts[0].contains("NSSharingService"), "first attempt is the rich script")
-            try expect(recorder.scripts[1].hasPrefix("tell application \"Mail\""), "second attempt is classic")
+            try expect(recorder.scripts[0].contains("make new paragraph at end with data"), "first attempt is rich-build")
+            try expect(recorder.scripts[1].contains("set content to (read"), "second attempt is classic")
             try expect(script == recorder.scripts[1], "return value is the fallback script")
         }
     },
 
-    TestCase(name: "rich_html_path_taken_for_email_output_wrapped_payload") {
-        // Integration: feed the actual email-output multipart shape through
-        // RFC822Parser + MIMEParser, then assert MailDriver picks the rich
-        // path. Locks in that the outer multipart/mixed wrapper does not
-        // cause shouldUseRichHTML to bail out.
+    TestCase(name: "rich_build_path_taken_for_email_output_wrapped_payload") {
         try withTempDir { tmp in
             let payload = """
             Subject: wrapped
@@ -291,43 +291,22 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             let msg = MIMEParser.parse(raw)
             let recorder = Recorder()
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("NSSharingService"), "wrapper-without-attachments must still take the rich path")
-            try expect(!script.contains("make new outgoing message"), "wrapper-without-attachments must not take the classic path")
+            try expect(script.contains("make new paragraph at end with data"), "wrapper-without-attachments must take the rich path")
         }
     },
 
-    TestCase(name: "rich_html_writes_meta_charset_into_temp_file") {
-        // Regression: NSAttributedString.initWithHTML guesses encoding from
-        // the document. Without a <meta charset> hint, UTF-8 bytes for
-        // characters like em dashes and box-drawing render as Latin-1
-        // mojibake in the resulting compose window.
+    TestCase(name: "rich_build_paragraph_with_font_size_color") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.htmlBody = "<p>café — note</p>"
-            _ = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            let bodyHTMLURL = tmp.url.appendingPathComponent("body.html")
-            let written = try String(contentsOf: bodyHTMLURL, encoding: .utf8)
-            try expect(written.hasPrefix("<meta charset=\"utf-8\">"), "body.html must start with a UTF-8 meta hint, got: \(written.prefix(60))")
-            try expect(written.contains("<p>café — note</p>"), "body content must follow the meta hint unchanged")
-        }
-    },
-
-    TestCase(name: "rich_html_activates_mail_and_spins_runloop") {
-        // NSSharingService from a CLI context is a no-op unless Mail is
-        // activated first and we keep the runloop alive long enough for the
-        // async dispatch to reach Mail. Lock both lines in so they aren't
-        // regressed.
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.htmlBody = "<p>rich</p>"
+            msg.htmlBody = "<html><head><style>pre { color: red; }</style></head><body><pre>mono</pre></body></html>"
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("tell application \"Mail\" to activate"))
-            try expect(script.contains("svc's performWithItems:"))
-            try expect(script.contains("NSRunLoop") && script.contains("runUntilDate"))
+            // The <pre> paragraph should emit with a font and color in its properties record.
+            try expect(script.contains("with properties {"), "paragraph properties record must be present")
+            try expect(script.contains("font:\""), "paragraph must carry a font name")
+            // size is a number with no quotes
+            try expect(script.range(of: #"size:\d"#, options: .regularExpression) != nil, "paragraph must carry a size number")
         }
     },
 ])

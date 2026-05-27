@@ -34,13 +34,18 @@ public enum AppleScript {
     }
 
     /// Escape a string for embedding inside an AppleScript double-quoted literal.
-    /// Wraps the result in double quotes.
+    /// Wraps the result in double quotes. Newlines, tabs, and returns are
+    /// escaped so the literal stays single-line; AppleScript decodes `\n`,
+    /// `\r`, `\t` per the language reference.
     public static func quote(_ s: String) -> String {
         var out = "\""
         for ch in s {
             switch ch {
             case "\\": out += "\\\\"
             case "\"": out += "\\\""
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
             default: out.append(ch)
             }
         }
