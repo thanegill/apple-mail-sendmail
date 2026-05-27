@@ -50,7 +50,7 @@ stdin bytes -> RFC822Parser -> MIMEParser -> ParsedMessage -> MailDriver -> Scri
 
 - `RFC822Parser.parse(Data)` produces `RawMessage` (ordered headers + raw body bytes; no MIME interpretation).
 - `MIMEParser.parse(RawMessage)` interprets `Content-Type`, walks `multipart/*` parts, decodes `base64` / `quoted-printable` transfer encodings, and decodes RFC 2047 encoded-words in `Subject` and display names. Populates `htmlBody` from any `text/html` part alongside the stripped plain-text `body`.
-- `MailDriver.deliver(...)` chooses between two AppleScript emitters and hands the result to a `ScriptRunner`. Both emit `tell application "Mail"` blocks — the rich-build path additionally walks the HTML's paragraphs and emits `make new paragraph at end of content with data "..." with properties {font:..., size:..., color:{r,g,b}}` per paragraph, with per-paragraph fonts pulled from `MailFontPrefs.current()` (which reads `com.apple.mail`'s `NSFont` / `NSFixedPitchFont` etc.). The classic plain-text path runs for messages without HTML, and as the runtime fallback if the rich-build script throws.
+- `MailDriver.deliver(...)` chooses between two AppleScript emitters and hands the result to a `ScriptRunner`. The rich path (`buildRichRTFScript`) renders the source HTML to RTF in Swift (HTML → `NSAttributedString.initWithHTML:` → per-run font substitution via `MailFontPrefs.current()` → RTF data), writes it to a temp `body.rtf`, and emits an AppleScript that does `set content of newMessage to (read POSIX file ... as «class RTF »)`. Around that, the script snapshots/flips Mail's app-level `default message format` to `rich format` (RTF coercion only survives in that mode) and restores it via try/error. Recipients and attachments use the dictionary; `send` is dictionary too. The classic plain-text path runs for messages without HTML, and as the runtime fallback if the rich script throws.
 
 ### The ScriptRunner injection seam
 
@@ -78,15 +78,20 @@ Nixpkgs Swift 5.10 stdlib dylibs are built for macOS 14.0. Lower floors produce 
 
 `MailDriver` emits `visible:true` and omits the `send` verb unless `options.send` is true. The default behavior is **draft, not send**. The `--send` flag and `SENDMAIL_SEND=1` environment variable both flip it; the env-var path exists for callers (cron, scripts) that cannot easily change their argv.
 
-### Rich HTML rendering uses the rich-text suite, not NSSharingService
+### Rich HTML rendering uses an RTF read, not NSSharingService
 
-Mail's compose body is a WKWebView that AppleScript and System Events cannot reliably focus or paste into — `click webArea` calls `AXPress` (not a real mouse event), Tab keystrokes don't descend into the WKWebView, and `set content` to an `NSAttributedString` fails with a `«class ocid»` coercion error. The viable path is Mail's AppleScript `rich text` class (which inherits from `NSTextStorage`): `make new paragraph at end of content with data "..." with properties {font:..., size:..., color:{r,g,b}}` per paragraph, plus inline `make new attachment`, plus dictionary `send`. The README's "Alternatives considered" section enumerates every failed approach with empirical findings — do not re-investigate without reading that first.
+Mail's compose body is a WKWebView that AppleScript and System Events cannot reliably focus or paste into — `click webArea` calls `AXPress` (not a real mouse event), Tab keystrokes don't descend into the WKWebView, and `set content` to an `NSAttributedString` fails with a `«class ocid»` coercion error. The viable path is Mail's AppleScript `read POSIX file ... as «class RTF »` returning an RTF value that Mail accepts in `set content of msg to ...` — but **only** while `default message format` is `rich format`. The emitter snapshots/flips/restores that preference around the compose via try/error. The README's "Alternatives considered" section enumerates every failed approach with empirical findings — do not re-investigate without reading that first.
 
-The rich-build path is selected whenever `msg.htmlBody` is non-empty (no restrictions on attachments or `--send`). If the runtime script throws (HTML parse error, etc.), `deliver` falls back to the classic plain-text script. Adding new HTML capability should go through this seam; the classic emitter is intentionally minimal.
+Two strict ordering rules in the emitter:
+
+1. `read` must be **outside** any `tell application "Mail"` block, since `read` is a Standard Additions verb and Mail.app doesn't expose it.
+2. The script must NOT carry a `use AppleScript version "2.4"` preamble. That preamble makes the parser strict enough to reject the `«class RTF »` four-char-code coercion syntax. `use scripting additions` alone is fine.
+
+The rich-RTF path is selected whenever `msg.htmlBody` is non-empty (no restrictions on attachments or `--send`). If the runtime script throws (HTML parse error, format-restore error, RTF read error), `deliver` falls back to the classic plain-text script. Adding new HTML capability should go through this seam; the classic emitter is intentionally minimal.
 
 ### Mail font preferences are read from `com.apple.mail`
 
-`MailDriver.MailFontPrefs.current()` reads `NSFont`, `NSFontSize`, `NSFixedPitchFont`, `NSFixedPitchFontSize` from the `com.apple.mail` UserDefaults, with `MailFontPrefs.appleDefaults` (Helvetica 12 / Menlo-Regular 11) as the fallback. `extractParagraphs(fromHTML:fontPrefs:)` takes the prefs as an injectable parameter for deterministic testing — tests construct their own `MailFontPrefs` rather than relying on whatever the developer's Mail.app is configured to use. Do not hard-code Helvetica/Menlo anywhere else.
+`MailDriver.MailFontPrefs.current()` reads `NSFont`, `NSFontSize`, `NSFixedPitchFont`, `NSFixedPitchFontSize` from the `com.apple.mail` UserDefaults, with `MailFontPrefs.appleDefaults` (Helvetica 12 / Menlo-Regular 11) as the fallback. `renderHTMLToRTF(html:fontPrefs:)` takes the prefs as an injectable parameter for deterministic testing — tests construct their own `MailFontPrefs` with real installed font names (`NSFont(name:size:)` returns nil for unknown fonts and the substitution silently keeps the source font in that case). Do not hard-code Helvetica/Menlo anywhere else.
 
 ## Packaging
 

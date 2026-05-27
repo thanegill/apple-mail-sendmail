@@ -163,7 +163,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
-    TestCase(name: "rich_build_emits_dictionary_paragraph_makers") {
+    TestCase(name: "rich_build_emits_rtf_read_and_set_content") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -172,12 +172,45 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
             try expectEqual(recorder.scripts.count, 1)
-            try expect(script.contains("tell application \"Mail\""))
+            try expect(script.contains("use scripting additions"), "rich-RTF script must declare scripting additions")
+            try expect(script.contains("read POSIX file"), "must read RTF from disk")
+            try expect(script.contains("as «class RTF »"), "must coerce read result to RTF class")
+            try expect(script.contains("set content of newMessage to rtfData"), "must set content from RTF data")
             try expect(script.contains("make new outgoing message with properties"))
-            try expect(script.contains("tell content"))
-            try expect(script.contains("make new paragraph at end with data"))
-            try expect(!script.contains("NSSharingService"), "must not use NSSharingService anymore")
-            try expect(!script.contains("use framework"), "no AppleScript-Cocoa bridge in the new path")
+            try expect(!script.contains("NSSharingService"), "must not use NSSharingService")
+            try expect(!script.contains("use framework"), "must not use the AppleScript-Cocoa framework bridge")
+            try expect(!script.contains("make new paragraph at end with data"), "must not emit per-paragraph builders")
+        }
+    },
+
+    TestCase(name: "rich_build_writes_rtf_temp_file") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>rich body</p>"
+            _ = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            let rtfURL = tmp.url.appendingPathComponent("body.rtf")
+            let rtfBytes = try Data(contentsOf: rtfURL)
+            try expect(rtfBytes.count > 0, "body.rtf must be non-empty")
+            // First bytes of every RTF file are `{\\rtf`.
+            let head = String(data: rtfBytes.prefix(5), encoding: .ascii) ?? ""
+            try expect(head == "{\\rtf", "body.rtf must start with the RTF magic bytes, got: \(head)")
+        }
+    },
+
+    TestCase(name: "rich_build_saves_and_restores_default_format") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("set originalFormat to default message format"))
+            try expect(script.contains("set default message format to rich format"))
+            try expect(script.contains("if originalFormat is not rich format then"))
+            try expect(script.contains("set default message format to originalFormat"))
+            try expect(script.contains("on error"), "must restore default format in error path too")
         }
     },
 
@@ -193,14 +226,14 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             ]
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
             try expectEqual(recorder.scripts.count, 1)
-            try expect(script.contains("make new paragraph at end with data"), "still rich path with attachments")
+            try expect(script.contains("set content of newMessage to rtfData"), "still rich-RTF path with attachments")
             try expect(script.contains("make new attachment with properties"))
-            // attachment block must come after the paragraphs (within `tell content`)
-            if let pIdx = script.range(of: "make new paragraph"),
+            // attachment block must come AFTER the set content so the rich body is in place first.
+            if let cIdx = script.range(of: "set content of newMessage to rtfData"),
                let aIdx = script.range(of: "make new attachment") {
-                try expect(pIdx.lowerBound < aIdx.lowerBound, "paragraphs must be emitted before attachments")
+                try expect(cIdx.lowerBound < aIdx.lowerBound, "set content must precede make new attachment")
             } else {
-                try expect(false, "expected both paragraph and attachment in script")
+                try expect(false, "expected both set content and make new attachment in script")
             }
         }
     },
@@ -215,9 +248,9 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.body = "plain"
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, options: opts, tmp: tmp, runner: recorder.run)
-            try expect(script.contains("make new paragraph at end with data"), "still rich path in --send mode")
+            try expect(script.contains("set content of newMessage to rtfData"), "still rich-RTF path in --send mode")
             try expect(script.contains("visible:false"))
-            try expect(script.contains("\n        send"))
+            try expect(script.contains("tell newMessage to send"))
         }
     },
 
@@ -229,8 +262,8 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.body = "plain"
             msg.htmlBody = "   \n\t  \n"
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(!script.contains("make new paragraph at end with data"), "whitespace-only HTML must not trigger rich path")
-            try expect(script.contains("set content to (read"), "classic path uses read of body.txt")
+            try expect(!script.contains("set content of newMessage to rtfData"), "whitespace-only HTML must not trigger rich path")
+            try expect(script.contains("set content to (read"), "classic path uses read of body.txt as «class utf8»")
         }
     },
 
@@ -258,7 +291,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
             try expect(recorder.calls == 2, "rich failure should trigger a classic fallback invocation")
-            try expect(recorder.scripts[0].contains("make new paragraph at end with data"), "first attempt is rich-build")
+            try expect(recorder.scripts[0].contains("set content of newMessage to rtfData"), "first attempt is rich-RTF")
             try expect(recorder.scripts[1].contains("set content to (read"), "second attempt is classic")
             try expect(script == recorder.scripts[1], "return value is the fallback script")
         }
@@ -291,33 +324,32 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             let msg = MIMEParser.parse(raw)
             let recorder = Recorder()
             let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("make new paragraph at end with data"), "wrapper-without-attachments must take the rich path")
+            try expect(script.contains("set content of newMessage to rtfData"), "wrapper-without-attachments must take the rich path")
         }
     },
 
-    TestCase(name: "extract_paragraphs_uses_mail_fonts_for_proportional_and_mono") {
+    TestCase(name: "render_html_to_rtf_substitutes_mail_fonts") {
+        // Use real installed-on-macOS font names; NSFont(name:size:) returns
+        // nil for unknown fonts and our substitution silently keeps the source
+        // font in that case.
         let prefs = MailDriver.MailFontPrefs(
-            messageFontName: "TestProp",
+            messageFontName: "Verdana",
             messageFontSize: 14,
-            fixedPitchFontName: "TestMono",
+            fixedPitchFontName: "Monaco",
             fixedPitchFontSize: 9
         )
         let html = "<html><body><p>proportional para</p><pre>monospace para</pre></body></html>"
-        guard let specs = MailDriver.extractParagraphs(fromHTML: html, fontPrefs: prefs) else {
-            try expect(false, "extractParagraphs returned nil")
+        guard let rtf = MailDriver.renderHTMLToRTF(html: html, fontPrefs: prefs) else {
+            try expect(false, "renderHTMLToRTF returned nil")
             return
         }
-        try expect(specs.count >= 2, "expected at least 2 paragraphs, got \(specs.count)")
-        // First paragraph should be proportional → uses messageFontName/Size
-        try expectEqual(specs[0].fontName, "TestProp")
-        try expectEqual(specs[0].fontSize, 14)
-        // Find the monospace paragraph (the <pre> content)
-        guard let monoSpec = specs.first(where: { $0.text.contains("monospace para") }) else {
-            try expect(false, "monospace paragraph not found in specs")
-            return
-        }
-        try expectEqual(monoSpec.fontName, "TestMono")
-        try expectEqual(monoSpec.fontSize, 9)
+        let rtfString = String(data: rtf, encoding: .ascii) ?? ""
+        try expect(rtfString.contains("Verdana"), "messageFontName missing from RTF output: \(rtfString.prefix(200))")
+        try expect(rtfString.contains("Monaco"), "fixedPitchFontName missing from RTF output: \(rtfString.prefix(200))")
+        // The HTML's source defaults (Times-Roman / Courier) should be
+        // replaced — confirm they don't appear.
+        try expect(!rtfString.contains("Times-Roman"), "source proportional font leaked through substitution")
+        try expect(!rtfString.contains("Courier"), "source monospace font leaked through substitution")
     },
 
     TestCase(name: "mail_font_prefs_apple_defaults_match_stock_mail") {
@@ -326,20 +358,5 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         try expectEqual(p.messageFontSize, 12)
         try expectEqual(p.fixedPitchFontName, "Menlo-Regular")
         try expectEqual(p.fixedPitchFontSize, 11)
-    },
-
-    TestCase(name: "rich_build_paragraph_with_font_size_color") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.htmlBody = "<html><head><style>pre { color: red; }</style></head><body><pre>mono</pre></body></html>"
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            // The <pre> paragraph should emit with a font and color in its properties record.
-            try expect(script.contains("with properties {"), "paragraph properties record must be present")
-            try expect(script.contains("font:\""), "paragraph must carry a font name")
-            // size is a number with no quotes
-            try expect(script.range(of: #"size:\d"#, options: .regularExpression) != nil, "paragraph must carry a size number")
-        }
     },
 ])

@@ -146,50 +146,63 @@ EOF
 ### Rich HTML rendering
 
 When the input has an HTML body (a `text/html` part, or a
-`multipart/alternative` with `text/html` inside), the binary renders
-it into the compose window by walking the HTML's paragraphs and
-building Mail's rich-text body via the AppleScript dictionary's
-**rich text suite**: `make new paragraph at end of content with data
-"..." with properties {font:..., size:..., color:{r,g,b}}` per
-paragraph, plus inline `make new attachment` for any attachments,
-plus dictionary `send` if `--send` is set. No NSSharingService, no
-UI scripting, no Accessibility permission.
+`multipart/alternative` with `text/html` inside), the binary
+converts it to RTF in Swift — via
+`NSAttributedString.initWithHTML:` plus per-run font substitution
+to Mail's configured fonts — writes the RTF bytes to a temp file,
+and has AppleScript do `set content of msg to (read POSIX file ...
+as «class RTF »)`. Attachments are added inline via dictionary
+`make new attachment`; `send msg` via dictionary covers `--send`
+mode. No NSSharingService, no UI scripting, no Accessibility
+permission.
 
-Paragraph fonts mirror what Mail's "Fonts & Colors" panel is
+Per-run fonts mirror what Mail's "Fonts & Colors" panel is
 configured to use:
 
-- Proportional (`<p>`, headings, ordinary body text) → Mail's
+- Proportional content (`<p>`, headings, ordinary body) → Mail's
   **Message font** (default `Helvetica 12`).
-- Monospace (`<pre>`, `<code>`) → Mail's **Fixed-width font**
-  (default `Menlo-Regular 11`).
+- Monospace content (`<pre>`, `<code>`) → Mail's **Fixed-width
+  font** (default `Menlo-Regular 11`).
 
-The binary reads these at runtime from the `com.apple.mail`
+The binary reads those at runtime from the `com.apple.mail`
 preferences (`NSFont`, `NSFontSize`, `NSFixedPitchFont`,
 `NSFixedPitchFontSize`) and falls back to Apple's stock defaults
 when a key is missing.
 
+Because the RTF coercion only survives into the compose body when
+Mail's app-level `default message format` is `rich format`, the
+emitter:
+
+1. Snapshots `default message format` before composing.
+2. Sets it to `rich format` only if it wasn't already.
+3. Restores the original value in both the success and `on error`
+   paths of an enclosing `try`.
+
+If the binary crashes between steps 2 and 3 (rare — would require
+a SIGKILL during the AppleScript run), the user's Mail default
+could be left as rich format until they change it back. Mitigation:
+the snapshot/restore happens entirely inside the AppleScript, so
+any Swift-side crash before `NSAppleScript.executeAndReturnError`
+returns will only ever leave the preference untouched.
+
 Tradeoffs:
 
-- **Sub-paragraph styling is lost.** Only the first character's
-  font and color of each paragraph survive into Mail's rich-text
-  body. Inline bold/italic/colored spans inside a paragraph render
-  in the paragraph's base font. Acceptable for the cron-alert use
-  case (paragraphs and code blocks); inadequate for marketing
-  emails with heavy inline styling.
-- **Tables don't render.** Mail's rich-text model has no table
-  type; `<table>` content becomes paragraphs of its cell text in
+- **Tables don't render.** Mail's rich text model has no table
+  class; `<table>` content becomes paragraphs of its cell text in
   reading order.
 - **JavaScript / flexbox / grid / web fonts do not apply.** The
   HTML is parsed by `NSAttributedString.initWithHTML:` (WebKit
   archival), which is structural only.
-- **On any runtime failure** (HTML parse error, etc.) the binary
-  falls back to the classic plain-text path with a stderr warning,
-  so you always end up with a draft.
+- **On any runtime failure** (HTML parse error, missing default
+  message format, RTF read error) the binary falls back to the
+  classic plain-text path with a stderr warning, so you always end
+  up with a draft.
 
-The compose window's per-message format is set by Mail at creation;
-there is no setting in Mail.app's preferences that affects whether
-the rich-build paragraph styling survives — it lands in the
-compose body unconditionally.
+What does survive: paragraph structure, inline character spans
+with their own fonts/colors/bold/italic/underline, background
+colors from CSS (e.g. `pre { background: #F0F0F0 }`), em dashes
+and box-drawing characters, ordered/unordered lists, headings
+sized relative to the paragraph base.
 
 ### Dry run
 
@@ -269,14 +282,33 @@ based on running probes, not just reading documentation.
   `NSAttributedString` value (built from HTML via the Cocoa bridge)
   fails with `Can't get «class ocid» id ...` coercion errors. Mail
   expects AppleScript text, not Cocoa attributed-string pointers.
-- **`set content of msg to (read POSIX file "x.rtf" as «class RTF »)`.**
-  Mail stores the read value as plain text; rich-text coercion does
-  not survive into `outgoing message`'s `content`.
+- **`set content of msg to (read POSIX file "x.rtf" as «class RTF »)`
+  with default-plain-format.** Mail coerces the read value to plain
+  text — rich-text formatting does not survive. **This is the
+  approach we now use, but only because we additionally flip Mail's
+  app-level `default message format` to `rich format` for the
+  duration of the compose.** Two non-obvious gotchas: the `read`
+  call must be **outside** any `tell application "Mail"` block (it's
+  a Standard Additions verb, not Mail's), and the script must NOT
+  carry a `use AppleScript version "2.4"` preamble — that preamble
+  makes the parser reject the raw `«class RTF »` four-char-code
+  coercion syntax. See "Why the RTF-read approach won" below.
 - **`set content` AFTER `make new attachment`.** Silently no-ops — the
   body keeps just the attachment glyph (`U+FFFC`) and the assigned
   text is dropped. The reverse order (set content, then attach) works
-  and is what the classic path uses; the body-wipe bug only triggers
-  for some attach-then-modify-body sequences.
+  and is what the rich-RTF and classic paths both use.
+- **Per-paragraph rich-text-suite build (superseded).** An earlier
+  iteration of this branch built the rich body in the dictionary by
+  emitting `make new paragraph at end of content with data "..." with
+  properties {font:..., size:..., color:{r,g,b}}` per paragraph,
+  then `make new attachment ...`, then `send` — all via Mail's rich
+  text suite (`paragraph`, `attribute run`, `attachment` are
+  elements of the `rich text` class, which inherits from
+  `NSTextStorage`). It worked but only carried the first character's
+  attributes of each paragraph, so inline runs (bold spans, colored
+  links inside a paragraph) and CSS-derived backgrounds were lost.
+  The RTF-read approach above replaced it because RTF carries the
+  full character-attribute table.
 
 ### NSSharingService dead-ends
 
@@ -351,22 +383,37 @@ populated from query params (verified empirically). But:
   but never descend into the `AXWebArea`. The body is not in Tab's
   focus chain.
 
-### Why the rich-text-suite approach won
+### Why the RTF-read approach won
 
-Mail's `rich text` class (which backs `outgoing message`'s `content`)
-inherits from `NSTextStorage`. The sdef exposes `paragraph`,
-`attribute run`, `character`, and `attachment` as elements — so
-`make new paragraph at end of content` and `make new attachment ...`
-work, and `set font of paragraph N of content of m to "..."` /
-`set color of paragraph N of content of m to {r,g,b}` work too.
-Probing this on macOS Sequoia confirmed that all of these survive
-into the visible compose window and into the sent message, with no
-UI scripting, no Accessibility grant, and a dictionary handle that
-remains valid for follow-up `make new attachment` and `send`. The
-implementation in `MailDriver.swift` renders the source HTML through
-`NSAttributedString.initWithHTML:`, walks its paragraphs, and emits
-one `make new paragraph` line per paragraph with the appropriate
-font/size/color attributes substituted from Mail's preferences.
+Mail's `rich text` class (the type of `outgoing message`'s
+`content`) is backed by `NSTextStorage`. Setting that property to a
+plain string drops to plain text, and setting it to an
+`NSAttributedString` from the Cocoa bridge fails with a
+`«class ocid»` coercion error. But `read POSIX file "..." as
+«class RTF »` returns a value Mail accepts directly:
+
+```applescript
+set rtfData to (read POSIX file "/tmp/body.rtf" as «class RTF »)
+tell application "Mail" to set content of newMessage to rtfData
+```
+
+Two conditions matter:
+
+1. The `read` must run **outside** any `tell application "Mail"`
+   block, since `read` is a Standard Additions verb and Mail.app
+   doesn't recognize it.
+2. Mail's app-level `default message format` must be `rich format`
+   at the moment `set content` runs, otherwise the RTF data is
+   coerced to plain. Snapshot/flip/restore around the compose.
+
+Once those are in place, an HTML email rendered to RTF via
+`NSAttributedString.initWithHTML:` + per-run font substitution
+arrives in the compose window with the full character-attribute
+table intact: per-run fonts, colors, bold/italic, background
+colors from CSS, paragraph structure. Attachments via dictionary
+`make new attachment` after the content is set do not wipe the
+body (verified empirically). `send` via dictionary closes the loop
+for `--send` mode.
 
 ## Development
 
