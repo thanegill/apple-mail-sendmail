@@ -56,6 +56,12 @@ stdin bytes -> RFC822Parser -> MIMEParser -> ParsedMessage -> MailDriver -> Scri
 
 `MailDriver.deliver` takes `runner: ScriptRunner? = nil`. Default is `AppleScript.run` (NSAppleScript execution). Tests inject a `Recorder` closure that captures the script source into an array. **Anything new that drives Mail.app should go through this seam** — never call `NSAppleScript` directly from new code, or the tests can't exercise it without actually launching Mail.app.
 
+### Tests skip when HTML rendering isn't available
+
+`MailDriver.renderHTMLToRTF` depends on `NSAttributedString.init(html:...)` (WebKit) and/or pandoc. The Nix build sandbox lacks WebKit and may lack pandoc, so HTML-touching tests must gate on `try requireHTMLRendering()` at the top of the case — otherwise they fail in `nix build`'s `checkPhase`. The harness exposes `skip(_:)` + `TestSkipped`; `runSuites` reports a separate skipped count.
+
+Corollary: **verify HTML-related changes with `nix build .#default`, not just `swift run sendmail-test`**. The dev shell has WebKit; the build sandbox doesn't. Failures only appear in the sandbox.
+
 ## Project-specific constraints (read before changing)
 
 ### Tests do not use XCTest
