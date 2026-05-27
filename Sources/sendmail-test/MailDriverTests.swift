@@ -295,6 +295,39 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
+    TestCase(name: "extract_paragraphs_uses_mail_fonts_for_proportional_and_mono") {
+        let prefs = MailDriver.MailFontPrefs(
+            messageFontName: "TestProp",
+            messageFontSize: 14,
+            fixedPitchFontName: "TestMono",
+            fixedPitchFontSize: 9
+        )
+        let html = "<html><body><p>proportional para</p><pre>monospace para</pre></body></html>"
+        guard let specs = MailDriver.extractParagraphs(fromHTML: html, fontPrefs: prefs) else {
+            try expect(false, "extractParagraphs returned nil")
+            return
+        }
+        try expect(specs.count >= 2, "expected at least 2 paragraphs, got \(specs.count)")
+        // First paragraph should be proportional → uses messageFontName/Size
+        try expectEqual(specs[0].fontName, "TestProp")
+        try expectEqual(specs[0].fontSize, 14)
+        // Find the monospace paragraph (the <pre> content)
+        guard let monoSpec = specs.first(where: { $0.text.contains("monospace para") }) else {
+            try expect(false, "monospace paragraph not found in specs")
+            return
+        }
+        try expectEqual(monoSpec.fontName, "TestMono")
+        try expectEqual(monoSpec.fontSize, 9)
+    },
+
+    TestCase(name: "mail_font_prefs_apple_defaults_match_stock_mail") {
+        let p = MailDriver.MailFontPrefs.appleDefaults
+        try expectEqual(p.messageFontName, "Helvetica")
+        try expectEqual(p.messageFontSize, 12)
+        try expectEqual(p.fixedPitchFontName, "Menlo-Regular")
+        try expectEqual(p.fixedPitchFontSize, 11)
+    },
+
     TestCase(name: "rich_build_paragraph_with_font_size_color") {
         try withTempDir { tmp in
             let recorder = Recorder()

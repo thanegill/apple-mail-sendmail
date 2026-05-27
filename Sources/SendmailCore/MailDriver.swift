@@ -83,24 +83,90 @@ public enum MailDriver {
 
     // MARK: - Paragraph extraction
 
-    struct ParagraphSpec: Equatable {
-        var text: String           // includes paragraph terminator(s)
-        var fontName: String?
-        var fontSize: CGFloat?
-        var color: ASColor?
+    public struct ParagraphSpec: Equatable {
+        public var text: String           // includes paragraph terminator(s)
+        public var fontName: String?
+        public var fontSize: CGFloat?
+        public var color: ASColor?
+
+        public init(text: String, fontName: String?, fontSize: CGFloat?, color: ASColor?) {
+            self.text = text
+            self.fontName = fontName
+            self.fontSize = fontSize
+            self.color = color
+        }
     }
 
-    struct ASColor: Equatable {
-        var r: UInt16
-        var g: UInt16
-        var b: UInt16
+    public struct ASColor: Equatable {
+        public var r: UInt16
+        public var g: UInt16
+        public var b: UInt16
+
+        public init(r: UInt16, g: UInt16, b: UInt16) {
+            self.r = r
+            self.g = g
+            self.b = b
+        }
+    }
+
+    /// Default fonts mirroring Mail's "Fonts & Colors" preferences pane.
+    /// Read at runtime from the `com.apple.mail` defaults; tests can supply
+    /// their own values for deterministic output.
+    public struct MailFontPrefs: Equatable {
+        public var messageFontName: String
+        public var messageFontSize: CGFloat
+        public var fixedPitchFontName: String
+        public var fixedPitchFontSize: CGFloat
+
+        public init(
+            messageFontName: String,
+            messageFontSize: CGFloat,
+            fixedPitchFontName: String,
+            fixedPitchFontSize: CGFloat
+        ) {
+            self.messageFontName = messageFontName
+            self.messageFontSize = messageFontSize
+            self.fixedPitchFontName = fixedPitchFontName
+            self.fixedPitchFontSize = fixedPitchFontSize
+        }
+
+        /// Built-in defaults matching Apple's stock Mail.app settings.
+        public static let appleDefaults = MailFontPrefs(
+            messageFontName: "Helvetica",
+            messageFontSize: 12,
+            fixedPitchFontName: "Menlo-Regular",
+            fixedPitchFontSize: 11
+        )
+
+        /// Read from `com.apple.mail` UserDefaults. Falls back to
+        /// `appleDefaults` for any missing key.
+        public static func current() -> MailFontPrefs {
+            let d = UserDefaults(suiteName: "com.apple.mail")
+            func size(_ key: String, _ fallback: CGFloat) -> CGFloat {
+                if let n = d?.object(forKey: key) as? NSNumber {
+                    return CGFloat(truncating: n)
+                }
+                return fallback
+            }
+            return MailFontPrefs(
+                messageFontName: d?.string(forKey: "NSFont") ?? appleDefaults.messageFontName,
+                messageFontSize: size("NSFontSize", appleDefaults.messageFontSize),
+                fixedPitchFontName: d?.string(forKey: "NSFixedPitchFont") ?? appleDefaults.fixedPitchFontName,
+                fixedPitchFontSize: size("NSFixedPitchFontSize", appleDefaults.fixedPitchFontSize)
+            )
+        }
     }
 
     /// Render HTML through `NSAttributedString.initWithHTML:` and walk the
     /// resulting attributed string paragraph-by-paragraph. For each paragraph
-    /// we read the first character's font and foreground color — sub-paragraph
-    /// styling does not survive into Mail's rich text model.
-    static func extractParagraphs(fromHTML html: String) -> [ParagraphSpec]? {
+    /// we read the first character's font (only to classify it as monospace
+    /// or proportional) and foreground color, then substitute Mail's
+    /// configured Message font / Fixed-width font so the result matches what
+    /// the user sees in Mail.app's "Fonts & Colors" preferences.
+    public static func extractParagraphs(
+        fromHTML html: String,
+        fontPrefs: MailFontPrefs = .current()
+    ) -> [ParagraphSpec]? {
         #if canImport(AppKit)
         let withMeta = html.contains("<meta charset") ? html : ("<meta charset=\"utf-8\">\n" + html)
         guard let data = withMeta.data(using: .utf8) else { return nil }
@@ -119,12 +185,15 @@ public enum MailDriver {
             guard enclosingRange.location < attr.length else { return }
             let text = ns.substring(with: enclosingRange)
             let attrs = attr.attributes(at: enclosingRange.location, effectiveRange: nil)
-            let font = attrs[.font] as? NSFont
+            let sourceFont = attrs[.font] as? NSFont
+            let isMono = sourceFont?.isFixedPitch ?? false
+            let mappedName = isMono ? fontPrefs.fixedPitchFontName : fontPrefs.messageFontName
+            let mappedSize = isMono ? fontPrefs.fixedPitchFontSize : fontPrefs.messageFontSize
             let color = (attrs[.foregroundColor] as? NSColor).flatMap(Self.convert)
             specs.append(ParagraphSpec(
                 text: text,
-                fontName: font?.fontName,
-                fontSize: font.map { $0.pointSize },
+                fontName: mappedName,
+                fontSize: mappedSize,
                 color: color
             ))
         }
