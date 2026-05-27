@@ -59,10 +59,16 @@ inputs.apple-mail-sendmail.packages.${system}.default.override {
 Mail.app uses macOS automation. The first time the binary runs, you'll
 be prompted to grant the calling terminal (or whichever process invokes
 it) automation access in **System Settings -> Privacy & Security ->
-Automation**.
+Automation**. If automation is denied, the binary exits with status 78
+(`EX_CONFIG`) and prints a hint pointing at the settings panel.
 
-If automation is denied, the binary exits with status 78 (`EX_CONFIG`)
-and prints a hint pointing at the settings panel.
+**Messages with an HTML body require an additional Accessibility grant**
+for the calling process in **System Settings -> Privacy & Security ->
+Accessibility**. The HTML path opens the message in Mail, sends a
+Cmd-Shift-D keystroke ("Send Again") to convert the viewer into an
+editable compose, and (with `--send`) clicks `Message > Send` — all of
+which need Accessibility. Plain-text-only messages take the classic
+AppleScript path and do not need Accessibility.
 
 ## Usage
 
@@ -147,62 +153,49 @@ EOF
 
 When the input has an HTML body (a `text/html` part, or a
 `multipart/alternative` with `text/html` inside), the binary
-converts it to RTF in Swift — via
-`NSAttributedString.initWithHTML:` plus per-run font substitution
-to Mail's configured fonts — writes the RTF bytes to a temp file,
-and has AppleScript do `set content of msg to (read POSIX file ...
-as «class RTF »)`. Attachments are added inline via dictionary
-`make new attachment`; `send msg` via dictionary covers `--send`
-mode. No NSSharingService, no UI scripting, no Accessibility
-permission.
+hands the message to Mail by:
 
-Per-run fonts mirror what Mail's "Fonts & Colors" panel is
-configured to use:
+1. Writing the rfc822 bytes (with any `-t` / `-f` / positional
+   overrides applied to the headers; body bytes verbatim) to a
+   temporary `.eml`.
+2. `open -a Mail file.eml` so Mail opens it as a viewer window —
+   rendered by WKWebView, the same engine Mail uses for received
+   mail.
+3. Sending `Cmd-Shift-D` ("Send Again") via System Events. Mail
+   converts the viewer into a brand-new editable compose carrying
+   the .eml's `To` / `Subject` / `From` and the rendered HTML.
+4. With `--send`, clicking `Message > Send` via System Events.
+5. Closing the leftover viewer window.
 
-- Proportional content (`<p>`, headings, ordinary body) → Mail's
-  **Message font** (default `Helvetica 12`).
-- Monospace content (`<pre>`, `<code>`) → Mail's **Fixed-width
-  font** (default `Menlo-Regular 11`).
+This preserves **everything** the source HTML expresses — tables,
+CSS padding and backgrounds, monospace `<pre>` styling, inline
+colors, fonts, lists — because the compose body never leaves the
+WKWebView pipeline. There is no RTF or NSAttributedString
+intermediate that flattens layout.
 
-The binary reads those at runtime from the `com.apple.mail`
-preferences (`NSFont`, `NSFontSize`, `NSFixedPitchFont`,
-`NSFixedPitchFontSize`) and falls back to Apple's stock defaults
-when a key is missing.
+Because the new compose window is spawned by Mail's "Send Again"
+verb rather than `make new outgoing message`, AppleScript's
+`outgoing messages` collection does not see it; CLI flag overrides
+must be applied to the .eml bytes **before** Mail opens it, not
+afterward. That is what the binary does.
 
-Because the RTF coercion only survives into the compose body when
-Mail's app-level `default message format` is `rich format`, the
-emitter:
-
-1. Snapshots `default message format` before composing.
-2. Sets it to `rich format` only if it wasn't already.
-3. Restores the original value in both the success and `on error`
-   paths of an enclosing `try`.
-
-If the binary crashes between steps 2 and 3 (rare — would require
-a SIGKILL during the AppleScript run), the user's Mail default
-could be left as rich format until they change it back. Mitigation:
-the snapshot/restore happens entirely inside the AppleScript, so
-any Swift-side crash before `NSAppleScript.executeAndReturnError`
-returns will only ever leave the preference untouched.
+The wire-level result is a regular outgoing message — no
+`Resent-From` / `Resent-To` headers, no "Redirected by" banner in
+the recipient's client. The only operational side effect is the
+brief viewer window that flashes open and closes before send.
 
 Tradeoffs:
 
-- **Tables don't render.** Mail's rich text model has no table
-  class; `<table>` content becomes paragraphs of its cell text in
-  reading order.
-- **JavaScript / flexbox / grid / web fonts do not apply.** The
-  HTML is parsed by `NSAttributedString.initWithHTML:` (WebKit
-  archival), which is structural only.
-- **On any runtime failure** (HTML parse error, missing default
-  message format, RTF read error) the binary falls back to the
-  classic plain-text path with a stderr warning, so you always end
-  up with a draft.
-
-What does survive: paragraph structure, inline character spans
-with their own fonts/colors/bold/italic/underline, background
-colors from CSS (e.g. `pre { background: #F0F0F0 }`), em dashes
-and box-drawing characters, ordered/unordered lists, headings
-sized relative to the paragraph base.
+- **Accessibility permission required** for the calling process.
+  Without it the binary fails fast with an explicit error pointing
+  at System Settings.
+- **One Mail window briefly flashes** during each invocation.
+  Cron-style use is fine but the binary cannot run "completely
+  silently" the way the classic plain-text path can.
+- **Mail must be running** (or quickly launchable) — `open -a Mail`
+  starts it if not already running, then needs the window to
+  appear before the keystroke fires. The script polls up to 5
+  seconds; longer cold-starts produce a clean timeout error.
 
 ### Dry run
 
@@ -265,12 +258,26 @@ based on running probes, not just reading documentation.
   `.mbox` bundles and lands messages as immutable `message` objects,
   not editable `outgoing message` objects. Writing `.emlx` files into
   `~/Library/Mail/.../Drafts.mbox/` is undocumented and version-fragile.
-- **`import mail` + `redirect` to inject HTML content.** Hypothetical
-  path: import a pre-crafted HTML message, then `redirect` it (which
-  preserves the source body verbatim). Not probed in detail because
-  every other simpler path was either working or definitively dead;
-  noted for completeness only. Would require maintaining a temporary
-  mailbox and tolerate Mail's drafts/inbox UI side-effects.
+- **`import mail` + `redirect` to inject HTML content.** Probed in
+  detail in 2026. `import Mail mailbox at <Apple-format .mbox>`
+  imports our crafted message; `redirect msg with opening window`
+  returns an editable `outgoing message` with full WKWebView
+  rendering and works around almost everything. **Killed by wire
+  semantics**: Mail emits `Resent-From` / `Resent-To` / `Resent-Date`
+  headers on send AND preserves the original `To:` header from the
+  source verbatim. Recipients see `To: <placeholder>` plus
+  `Resent-To: <real>` — most clients render this as a "Redirected
+  by" banner. Wrong shape for a sendmail-style transport.
+- **`import mail` + move to Drafts + `open`.** Probed in 2026.
+  Moving the imported message into a Drafts mailbox and `open`-ing
+  it produces a read-only viewer, not an editable compose. Apple's
+  draft state is gated on internal metadata that Mail only sets
+  when ITS OWN compose flow created the message — mbox status
+  headers (`X-Status`, `X-Mozilla-Status`), `.emlx` trailer
+  `flags=64` (RFC 3501 `\Draft`), and the
+  `X-Uniform-Type-Identifier: com.apple.mail-draft` header all
+  survive but are informational-only and don't flip the message
+  into editable state.
 
 ### `outgoing message` `content` property dead-ends
 
@@ -282,17 +289,21 @@ based on running probes, not just reading documentation.
   `NSAttributedString` value (built from HTML via the Cocoa bridge)
   fails with `Can't get «class ocid» id ...` coercion errors. Mail
   expects AppleScript text, not Cocoa attributed-string pointers.
-- **`set content of msg to (read POSIX file "x.rtf" as «class RTF »)`
-  with default-plain-format.** Mail coerces the read value to plain
-  text — rich-text formatting does not survive. **This is the
-  approach we now use, but only because we additionally flip Mail's
-  app-level `default message format` to `rich format` for the
-  duration of the compose.** Two non-obvious gotchas: the `read`
-  call must be **outside** any `tell application "Mail"` block (it's
-  a Standard Additions verb, not Mail's), and the script must NOT
-  carry a `use AppleScript version "2.4"` preamble — that preamble
-  makes the parser reject the raw `«class RTF »` four-char-code
-  coercion syntax. See "Why the RTF-read approach won" below.
+- **`set content of msg to (read POSIX file "x.rtf" as «class RTF »)`.**
+  Works when Mail's app-level `default message format` is `rich
+  format` (flipped via try/restore inside the script). RTF fidelity
+  is the ceiling: tables flatten, CSS padding disappears, monospace
+  `<pre>` backgrounds vanish unless hand-patched. Superseded by the
+  `.eml` + Cmd-Shift-D path which delivers true WKWebView fidelity.
+- **`set content` accepts only `«class RTF »` and plain-text
+  variants.** Empirically swept 26 four-char-code coercion classes
+  (`HTML`, `htda`, `WBAR` WebArchive, `RTFD` with valid bytes from
+  `NSAttributedString.data(from:.rtfd)`, `XWRD` Word, `docx`,
+  `odft` OpenDocument, `macs` MacWrite, `furl`, `data`, `plis`,
+  `alis`, lowercase variants, etc.) — every one except RTF and
+  plain text fails with AppleScript error -1700 `Can't make «data
+  XXXX...» into type rich text`. Mail's content setter is
+  hard-coded to RTF parsing. Do not re-investigate.
 - **`set content` AFTER `make new attachment`.** Silently no-ops — the
   body keeps just the attachment glyph (`U+FFFC`) and the assigned
   text is dropped. The reverse order (set content, then attach) works

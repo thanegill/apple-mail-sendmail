@@ -64,8 +64,19 @@ let runner: ScriptRunner? = dryRun ? { script in
     FileHandle.standardOutput.write(Data("\n".utf8))
 } : nil
 
+// Build the .eml bytes that the edit-draft path will hand to Mail. Keep
+// the original stdin body verbatim (no MIME re-encoding) and apply CLI
+// flag-driven header overrides only: finalize To/Cc/Bcc per positional/-t
+// rules and set From from -f/-F. MIMEParser already gave us the final
+// recipients on `message`; EmlBuilder applies them to `raw`.
+let emlBytes = EmlBuilder.buildEml(
+    raw: raw,
+    finalRecipients: message,
+    options: options
+)
+
 do {
-    try MailDriver.deliver(message, options: options, tmp: tmp, runner: runner)
+    try MailDriver.deliver(message, emlBytes: emlBytes, options: options, tmp: tmp, runner: runner)
 } catch let f as AppleScript.Failure {
     if f.code == -1743 {
         die("Mail.app automation denied. Grant permission in System Settings → Privacy & Security → Automation. (\(f.message))", code: .config)

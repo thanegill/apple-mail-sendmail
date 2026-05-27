@@ -50,17 +50,15 @@ stdin bytes -> RFC822Parser -> MIMEParser -> ParsedMessage -> MailDriver -> Scri
 
 - `RFC822Parser.parse(Data)` produces `RawMessage` (ordered headers + raw body bytes; no MIME interpretation).
 - `MIMEParser.parse(RawMessage)` interprets `Content-Type`, walks `multipart/*` parts, decodes `base64` / `quoted-printable` transfer encodings, and decodes RFC 2047 encoded-words in `Subject` and display names. Populates `htmlBody` from any `text/html` part alongside the stripped plain-text `body`.
-- `MailDriver.deliver(...)` chooses between two AppleScript emitters and hands the result to a `ScriptRunner`. The rich path (`buildRichRTFScript`) renders the source HTML to RTF in Swift (HTML → `NSAttributedString.initWithHTML:` → per-run font substitution via `MailFontPrefs.current()` → RTF data), writes it to a temp `body.rtf`, and emits an AppleScript that does `set content of newMessage to (read POSIX file ... as «class RTF »)`. Around that, the script snapshots/flips Mail's app-level `default message format` to `rich format` (RTF coercion only survives in that mode) and restores it via try/error. Recipients and attachments use the dictionary; `send` is dictionary too. The classic plain-text path runs for messages without HTML, and as the runtime fallback if the rich script throws.
+- `MailDriver.deliver(...)` chooses between two AppleScript emitters and hands the result to a `ScriptRunner`. The HTML path (`buildEditDraftScript`) is **pass-through**: `main.swift` constructs the .eml bytes via `EmlBuilder.buildEml(raw:finalRecipients:options:)` (raw stdin headers + body, with CLI flag-driven header overrides applied to To/Cc/Bcc/From), `MailDriver.deliver` writes them to a temp `.eml`, and the emitted script (1) probes Accessibility, (2) `do shell script "open -a Mail ..."` to spawn a viewer window, (3) polls for the viewer by subject, (4) `keystroke "d" using {shift down, command down}` to invoke Mail's "Send Again" command — converting the viewer into a brand-new editable compose with full WKWebView fidelity, (5) on `--send`, clicks `Message > Send` via System Events, (6) closes the leftover viewer. The plain-text path (`buildClassicScript`) runs for messages without HTML and uses `make new outgoing message` + `set content to (read POSIX file ... as «class utf8»)`.
 
 ### The ScriptRunner injection seam
 
 `MailDriver.deliver` takes `runner: ScriptRunner? = nil`. Default is `AppleScript.run` (NSAppleScript execution). Tests inject a `Recorder` closure that captures the script source into an array. **Anything new that drives Mail.app should go through this seam** — never call `NSAppleScript` directly from new code, or the tests can't exercise it without actually launching Mail.app.
 
-### Tests skip when HTML rendering isn't available
+### Tests don't need WebKit or pandoc anymore
 
-`MailDriver.renderHTMLToRTF` depends on `NSAttributedString.init(html:...)` (WebKit) and/or pandoc. The Nix build sandbox lacks WebKit and may lack pandoc, so HTML-touching tests must gate on `try requireHTMLRendering()` at the top of the case — otherwise they fail in `nix build`'s `checkPhase`. The harness exposes `skip(_:)` + `TestSkipped`; `runSuites` reports a separate skipped count.
-
-Corollary: **verify HTML-related changes with `nix build .#default`, not just `swift run sendmail-test`**. The dev shell has WebKit; the build sandbox doesn't. Failures only appear in the sandbox.
+The edit-draft path is pure script emission + .eml byte assembly. The test runner injects a recording `ScriptRunner`, so Mail.app is never invoked. `nix build .#default`'s `checkPhase` runs the full 85-test suite in the sandbox without any WebKit/pandoc/Accessibility prerequisites.
 
 ## Project-specific constraints (read before changing)
 
@@ -84,20 +82,50 @@ Nixpkgs Swift 5.10 stdlib dylibs are built for macOS 14.0. Lower floors produce 
 
 `MailDriver` emits `visible:true` and omits the `send` verb unless `options.send` is true. The default behavior is **draft, not send**. The `--send` flag and `SENDMAIL_SEND=1` environment variable both flip it; the env-var path exists for callers (cron, scripts) that cannot easily change their argv.
 
-### Rich HTML rendering uses an RTF read, not NSSharingService
+### HTML rendering uses `.eml` + Cmd-Shift-D ("Send Again"), not RTF
 
-Mail's compose body is a WKWebView that AppleScript and System Events cannot reliably focus or paste into — `click webArea` calls `AXPress` (not a real mouse event), Tab keystrokes don't descend into the WKWebView, and `set content` to an `NSAttributedString` fails with a `«class ocid»` coercion error. The viable path is Mail's AppleScript `read POSIX file ... as «class RTF »` returning an RTF value that Mail accepts in `set content of msg to ...` — but **only** while `default message format` is `rich format`. The emitter snapshots/flips/restores that preference around the compose via try/error. The README's "Alternatives considered" section enumerates every failed approach with empirical findings — do not re-investigate without reading that first.
+Mail's compose body is a WKWebView. Its AppleScript dictionary `content` setter accepts only `«class RTF »` and plain-text byte formats — every other coercion class (HTML, RTFD even with valid bytes, WebArchive, the deprecated `html content` property, AppKit-bridge NSAttributedString) is rejected with -1700. The full 26-class empirical sweep lives in `ATTEMPTS.md` on master.
 
-Two strict ordering rules in the emitter:
+The viable path for full HTML fidelity is to **bypass the dictionary entirely**:
 
-1. `read` must be **outside** any `tell application "Mail"` block, since `read` is a Standard Additions verb and Mail.app doesn't expose it.
-2. The script must NOT carry a `use AppleScript version "2.4"` preamble. That preamble makes the parser strict enough to reject the `«class RTF »` four-char-code coercion syntax. `use scripting additions` alone is fine.
+1. Write the rfc822 bytes (raw stdin headers + body, with CLI flag overrides applied via `EmlBuilder`) to a temporary `.eml`.
+2. `do shell script "open -a Mail <eml-path>"` so Launch Services opens it as a Mail viewer window — rendered in WKWebView.
+3. Send `keystroke "d" using {shift down, command down}` via System Events. Mail's File menu has `Send Again` bound to that shortcut; on a standalone .eml viewer it spawns a brand-new editable compose with the .eml's `From` / `To` / `Subject` / body all carried into the compose.
+4. With `--send`, click `Message > Send` menu item via System Events (`tell process "Mail" to click menu item "Send" of menu "Message" of menu bar 1`).
 
-The rich-RTF path is selected whenever `msg.htmlBody` is non-empty (no restrictions on attachments or `--send`). If the runtime script throws (HTML parse error, format-restore error, RTF read error), `deliver` falls back to the classic plain-text script. Adding new HTML capability should go through this seam; the classic emitter is intentionally minimal.
+The compose is a fresh outgoing message from Mail's perspective — no `Resent-*` headers on the wire, no "Redirected by" banner. The CLI flag overrides MUST be applied to the .eml before `open` because the compose window is not addressable via the AppleScript `outgoing messages` collection after Cmd-Shift-D — Mail doesn't surface it to dictionary scripting.
 
-### Mail font preferences are read from `com.apple.mail`
+Two non-obvious gotchas:
 
-`MailDriver.MailFontPrefs.current()` reads `NSFont`, `NSFontSize`, `NSFixedPitchFont`, `NSFixedPitchFontSize` from the `com.apple.mail` UserDefaults, with `MailFontPrefs.appleDefaults` (Helvetica 12 / Menlo-Regular 11) as the fallback. `renderHTMLToRTF(html:fontPrefs:)` takes the prefs as an injectable parameter for deterministic testing — tests construct their own `MailFontPrefs` with real installed font names (`NSFont(name:size:)` returns nil for unknown fonts and the substitution silently keeps the source font in that case). Do not hard-code Helvetica/Menlo anywhere else.
+1. **Window matching uses the post-decode Subject string.** Mail names viewer/compose windows after the rfc822 Subject (decoded RFC 2047). Pass the decoded `ParsedMessage.subject` value to the polling loop, not the encoded form on the wire.
+2. **Accessibility permission is a hard requirement** for the calling process (System Events keystroke + menu click both need it). The emitted script probes Accessibility upfront via `tell System Events to get name of first process` and converts the -1719 / 1002 error into a clear "Grant Accessibility in System Settings" message. No silent fallback — if Accessibility is denied, the HTML path fails fast.
+
+The plain-text path is unchanged and does NOT require Accessibility — only Automation for Mail.
+
+### Draft injection from outside Mail is not reachable — empirically confirmed
+
+Mail's "editable draft" state cannot be conjured by any combination of mbox headers, `.emlx` flag bits, IMAP `\Draft` flag, or Apple-internal headers. Editable drafts only exist when Mail itself creates the message — through its compose UI, `make new outgoing message` (AppleScript), or reply/forward/redirect derivatives of an existing message. Empirically verified during this branch (full probe scripts in `/tmp/import-redirect-probe/` during session work):
+
+| Approach | Result |
+|---|---|
+| `import Mail mailbox at <Apple .mbox bundle>` + `redirect m with opening window` | Mechanically works — creates an editable compose with full WKWebView body fidelity (real bordered tables, `<pre>` Menlo+grey, inline red italic). Subject, To/Cc/Bcc programmatically overridable. **But** `send` emits `Resent-From`/`Resent-To`/`Resent-Date` on the wire AND preserves the source mbox's `To:` header verbatim (the post-redirect `to recipients` override only flows into `Resent-To:`). Recipient sees "redirected from X" semantics; unsuitable for sendmail's "fresh outgoing" expectation. Also leaves a top-level mailbox in Mail's sidebar per invocation that needs cleanup. |
+| `import` + `move <msg> to <account>/Drafts` + `open <msg>` | Move succeeds (synced over IMAP). Open spawns a read-only viewer (Reply/Forward/Redirect buttons), NOT an editable compose. `outgoing messages` count remains 0; the window has no addressable `message` element. |
+| `Status: D` (mbox), `X-Status: T` (Thunderbird), `X-Mozilla-Status: 0040` (Mozilla draft bit) | Either stripped during import or preserved-but-ignored. No effect on draft recognition. |
+| Apple `.emlx` format with trailer plist `flags=64` (the draft bit, instead of Berkeley `mbox` inside the bundle) | Imported but landed in nested `Import-N/<bundle>` and treated as a regular message. flags bit had no effect. |
+| `X-Uniform-Type-Identifier: com.apple.mail-draft` in rfc822 headers — the UTI Mail itself stamps on real drafts | Header survives import AND IMAP round-trip to a hosted IMAP provider's Drafts folder intact. Mail still opens as read-only viewer. UTI is informational only. |
+| `redirect <window>` / `first message of window` on a standalone .eml viewer opened via `open -a Mail file.eml` | "window doesn't understand the redirect message" / "Can't get message 1 of window". Standalone .eml viewers register as generic `class=window` with no `message` element; `message viewers` enumerates only mailbox-list viewers. |
+| Mail's `open <file>` AppleScript verb on an .eml path | Returns a `class` literal (not a message reference). No usable handle on the opened message. |
+| `open -a Mail <eml-path>` + UI-script `keystroke "d" using {shift down, command down}` on the viewer | ✅ **Works.** Triggers Mail's "Send Again" command, which spawns a brand-new editable compose carrying the .eml's `To` / `Subject` / `From` / body in full WKWebView fidelity. Sends as a clean message — no `Resent-*` headers. No sidebar mailbox churn. Requires **Accessibility** permission for the controlling process; without it, `keystroke` fails with `-1719 ("not allowed assistive access")` / error number 1002. |
+
+The converted compose does NOT appear in the `outgoing messages` collection — AppleScript dictionary cannot drive it post-conversion. So everything (recipients, subject, sender, body, attachments) must be baked into the source `.eml` **before** the open; we never override anything after Cmd-Shift-D fires.
+
+Send-on-`--send` for the edit-draft path is `click menu item "Send" of menu "Message" of menu bar 1` via System Events on the freshly-opened compose. Menu items are more stable than shortcut bindings across Mail versions. `tell process "Mail" to click menu item` requires the same Accessibility permission as `keystroke`.
+
+The mechanically-working but semantically-wrong paths above (`redirect`, move-to-Drafts) are intentionally avoided. Do not re-investigate them as "primary path" candidates without re-reading this table — the wire-level Resent-* leak is real and was confirmed end-to-end via `View > Message > Raw Source` on a probe send to the maintainer's own address.
+
+### Font preferences are not applied by this binary
+
+The .eml + Cmd-Shift-D path renders bodies in Mail's WKWebView, which honors any CSS the HTML supplies and otherwise inherits Mail's "Fonts & Colors" preferences automatically. The binary does not read `com.apple.mail` defaults; no `MailFontPrefs` type exists. If the source HTML wants specific fonts, declare them in the inline CSS.
 
 ## Packaging
 

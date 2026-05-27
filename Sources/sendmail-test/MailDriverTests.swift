@@ -6,38 +6,27 @@ private final class Recorder {
     func run(_ source: String) throws { scripts.append(source) }
 }
 
-/// Throws on the first invocation, succeeds on subsequent ones. Lets us
-/// simulate "rich-HTML path failed; classic fallback worked".
-private final class FailOnceRecorder {
-    var scripts: [String] = []
-    var calls = 0
-    struct Boom: Error {}
-    func run(_ source: String) throws {
-        calls += 1
-        scripts.append(source)
-        if calls == 1 { throw Boom() }
-    }
-}
-
 private func withTempDir(_ body: (TempDir) throws -> Void) throws {
     let tmp = try TempDir()
     defer { tmp.cleanup() }
     try body(tmp)
 }
 
-/// True when `NSAttributedString.init(html:options:documentAttributes:)`
-/// works in this environment. The Nix build sandbox does not have WebKit
-/// linked, so HTML rendering returns nil there; we skip the affected tests
-/// rather than failing them. Local `swift run sendmail-test` in `nix
-/// develop` (or any non-sandbox environment) has WebKit and exercises the
-/// real path.
-private let webKitAvailable: Bool = {
-    return MailDriver.renderHTMLToRTF(html: "<p>probe</p>", fontPrefs: .appleDefaults) != nil
-}()
-
-private func requireWebKit() throws {
-    if !webKitAvailable {
-        try skip("NSAttributedString HTML init unavailable (Nix sandbox without WebKit)")
+/// Synthesize the emlBytes that main.swift would pass to `MailDriver.deliver`
+/// for tests that don't otherwise care about the bytes. Uses the `ParsedMessage`
+/// to fill in finalized recipients and a minimal HTML body when needed.
+private func syntheticEml(for msg: ParsedMessage) -> Data {
+    var headers = "Subject: \(msg.subject)\r\n"
+    if !msg.to.isEmpty {
+        headers += "To: " + msg.to.map { $0.address }.joined(separator: ", ") + "\r\n"
+    }
+    headers += "MIME-Version: 1.0\r\n"
+    if let html = msg.htmlBody, !html.isEmpty {
+        headers += "Content-Type: text/html; charset=utf-8\r\n\r\n"
+        return Data((headers + html).utf8)
+    } else {
+        headers += "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        return Data((headers + msg.body).utf8)
     }
 }
 
@@ -49,7 +38,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.subject = "Hello"
             msg.to = [ParsedAddress(displayName: "Alice", address: "alice@example.com")]
             msg.body = "Body."
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
             try expectEqual(recorder.scripts.count, 1)
             try expect(script.contains("visible:true"))
             try expect(!script.contains("\n        send"), "draft must not emit send")
@@ -68,7 +57,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.subject = "S"
             msg.to = [ParsedAddress(displayName: nil, address: "x@y")]
             msg.body = "b"
-            let script = try MailDriver.deliver(msg, options: opts, tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
             try expect(script.contains("visible:false"))
             try expect(script.contains("\n        send"))
         }
@@ -82,7 +71,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             opts.fromAddress = "bot@x.com"
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            let script = try MailDriver.deliver(msg, options: opts, tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
             try expect(script.contains("sender:\"Bot <bot@x.com>\""))
         }
     },
@@ -94,7 +83,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             opts.fromAddress = "bare@x.com"
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            let script = try MailDriver.deliver(msg, options: opts, tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
             try expect(script.contains("sender:\"bare@x.com\""))
         }
     },
@@ -106,7 +95,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.to = [ParsedAddress(displayName: nil, address: "a@x")]
             msg.cc = [ParsedAddress(displayName: nil, address: "b@y")]
             msg.bcc = [ParsedAddress(displayName: nil, address: "c@z")]
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
             try expect(script.contains("make new to recipient at end of to recipients"))
             try expect(script.contains("make new cc recipient at end of cc recipients"))
             try expect(script.contains("make new bcc recipient at end of bcc recipients"))
@@ -124,7 +113,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.attachments = [
                 Attachment(filename: "note.txt", contentType: "text/plain", data: Data("hello\n".utf8))
             ]
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
             try expect(script.contains("make new attachment with properties {file name:(POSIX file"))
             let contents = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
             let attFile = contents.first(where: { $0.hasPrefix("att-") })
@@ -140,7 +129,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.body = "Body with \"quotes\" and \\backslashes."
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
             try expect(script.contains("body.txt"))
             let body = try String(contentsOf: tmp.url.appendingPathComponent("body.txt"), encoding: .utf8)
             try expectEqual(body, "Body with \"quotes\" and \\backslashes.")
@@ -153,7 +142,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.subject = "He said \"hi\" \\"
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
             try expect(script.contains("subject:\"He said \\\"hi\\\" \\\\\""))
         }
     },
@@ -163,7 +152,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             let recorder = Recorder()
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
             try expect(!script.contains("make new attachment"))
         }
     },
@@ -173,155 +162,113 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             let recorder = Recorder()
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
             try expect(script.hasPrefix("tell application \"Mail\""))
             try expect(script.hasSuffix("end tell"))
         }
     },
 
-    TestCase(name: "rich_build_emits_rtf_read_and_set_content") {
-        try requireWebKit()
+    // MARK: - Edit-draft path (HTML present)
+
+    TestCase(name: "edit_draft_script_probes_accessibility_first") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.body = "plain fallback"
             msg.htmlBody = "<p>rich</p>"
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expectEqual(recorder.scripts.count, 1)
-            try expect(script.contains("use scripting additions"), "rich-RTF script must declare scripting additions")
-            try expect(script.contains("read POSIX file"), "must read RTF from disk")
-            try expect(script.contains("as «class RTF »"), "must coerce read result to RTF class")
-            try expect(script.contains("set content of newMessage to rtfData"), "must set content from RTF data")
-            try expect(script.contains("make new outgoing message with properties"))
-            try expect(!script.contains("NSSharingService"), "must not use NSSharingService")
-            try expect(!script.contains("use framework"), "must not use the AppleScript-Cocoa framework bridge")
-            try expect(!script.contains("make new paragraph at end with data"), "must not emit per-paragraph builders")
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("tell application \"System Events\" to get name of first process"))
+            try expect(script.contains("Accessibility permission required"))
+            try expect(script.contains("if errNum is -1719 or errNum is 1002"))
         }
     },
 
-    TestCase(name: "rich_build_writes_rtf_temp_file") {
-        try requireWebKit()
+    TestCase(name: "edit_draft_script_opens_eml_and_keystrokes_send_again") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.htmlBody = "<p>rich body</p>"
-            _ = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            let rtfURL = tmp.url.appendingPathComponent("body.rtf")
-            let rtfBytes = try Data(contentsOf: rtfURL)
-            try expect(rtfBytes.count > 0, "body.rtf must be non-empty")
-            // First bytes of every RTF file are `{\\rtf`.
-            let head = String(data: rtfBytes.prefix(5), encoding: .ascii) ?? ""
-            try expect(head == "{\\rtf", "body.rtf must start with the RTF magic bytes, got: \(head)")
-        }
-    },
-
-    TestCase(name: "rich_build_saves_and_restores_default_format") {
-        try requireWebKit()
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
+            msg.subject = "rich-html-subj"
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.htmlBody = "<p>rich</p>"
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("set originalFormat to default message format"))
-            try expect(script.contains("set default message format to rich format"))
-            try expect(script.contains("if originalFormat is not rich format then"))
-            try expect(script.contains("set default message format to originalFormat"))
-            try expect(script.contains("on error"), "must restore default format in error path too")
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("do shell script \"open -a Mail \" & quoted form of"))
+            try expect(script.contains("compose-"))
+            try expect(script.contains(".eml"))
+            try expect(script.contains("keystroke \"d\" using {shift down, command down}"))
+            try expect(script.contains("set subjLine to \"rich-html-subj\""))
         }
     },
 
-    TestCase(name: "rich_build_path_handles_attachments") {
-        try requireWebKit()
+    TestCase(name: "edit_draft_script_writes_eml_with_html_body") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
+            msg.subject = "x"
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.body = "plain"
-            msg.htmlBody = "<p>rich</p>"
-            msg.attachments = [
-                Attachment(filename: "x.txt", contentType: "text/plain", data: Data("x".utf8))
-            ]
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expectEqual(recorder.scripts.count, 1)
-            try expect(script.contains("set content of newMessage to rtfData"), "still rich-RTF path with attachments")
-            try expect(script.contains("make new attachment with properties"))
-            // attachment block must come AFTER the set content so the rich body is in place first.
-            if let cIdx = script.range(of: "set content of newMessage to rtfData"),
-               let aIdx = script.range(of: "make new attachment") {
-                try expect(cIdx.lowerBound < aIdx.lowerBound, "set content must precede make new attachment")
-            } else {
-                try expect(false, "expected both set content and make new attachment in script")
-            }
+            msg.htmlBody = "<p>HTML payload</p>"
+            _ = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            let emlFiles = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+                .filter { $0.hasSuffix(".eml") }
+            try expectEqual(emlFiles.count, 1)
+            let eml = try Data(contentsOf: tmp.url.appendingPathComponent(emlFiles[0]))
+            let s = String(data: eml, encoding: .utf8) ?? ""
+            try expect(s.contains("<p>HTML payload</p>"), "eml must contain the HTML body verbatim (pass-through)")
         }
     },
 
-    TestCase(name: "rich_build_path_handles_send") {
-        try requireWebKit()
+    TestCase(name: "edit_draft_script_clicks_message_send_when_send_flag") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var opts = Options()
             opts.send = true
             var msg = ParsedMessage()
+            msg.subject = "rich-send"
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.body = "plain"
             msg.htmlBody = "<p>rich</p>"
-            let script = try MailDriver.deliver(msg, options: opts, tmp: tmp, runner: recorder.run)
-            try expect(script.contains("set content of newMessage to rtfData"), "still rich-RTF path in --send mode")
-            try expect(script.contains("visible:false"))
-            try expect(script.contains("tell newMessage to send"))
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
+            try expect(script.contains("click menu item \"Send\" of menu \"Message\" of menu bar 1"))
         }
     },
 
-    TestCase(name: "rich_build_skipped_when_html_body_is_whitespace_only") {
+    TestCase(name: "edit_draft_script_omits_send_click_for_drafts") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.subject = "rich-draft"
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(!script.contains("click menu item \"Send\""))
+        }
+    },
+
+    TestCase(name: "edit_draft_script_closes_leftover_viewer") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.subject = "x"
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>x</p>"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("close w saving no"))
+        }
+    },
+
+    TestCase(name: "edit_draft_path_skipped_when_html_body_is_whitespace_only") {
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.body = "plain"
             msg.htmlBody = "   \n\t  \n"
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(!script.contains("set content of newMessage to rtfData"), "whitespace-only HTML must not trigger rich path")
-            try expect(script.contains("set content to (read"), "classic path uses read of body.txt as «class utf8»")
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(!script.contains("keystroke \"d\""))
+            try expect(script.contains("set content to (read"))
         }
     },
 
-    TestCase(name: "rich_build_subject_and_recipients_are_quoted") {
-        try requireWebKit()
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.subject = "She said \"hi\" \\ today"
-            msg.to = [ParsedAddress(displayName: nil, address: "a@x")]
-            msg.cc = [ParsedAddress(displayName: nil, address: "b@y")]
-            msg.htmlBody = "<p>rich</p>"
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("subject:\"She said \\\"hi\\\" \\\\ today\""))
-            try expect(script.contains("\"a@x\""))
-            try expect(script.contains("\"b@y\""))
-        }
-    },
-
-    TestCase(name: "rich_build_failure_falls_back_to_classic") {
-        try requireWebKit()
-        try withTempDir { tmp in
-            let recorder = FailOnceRecorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.body = "plain fallback body"
-            msg.htmlBody = "<p>rich</p>"
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(recorder.calls == 2, "rich failure should trigger a classic fallback invocation")
-            try expect(recorder.scripts[0].contains("set content of newMessage to rtfData"), "first attempt is rich-RTF")
-            try expect(recorder.scripts[1].contains("set content to (read"), "second attempt is classic")
-            try expect(script == recorder.scripts[1], "return value is the fallback script")
-        }
-    },
-
-    TestCase(name: "rich_build_path_taken_for_email_output_wrapped_payload") {
-        try requireWebKit()
+    TestCase(name: "edit_draft_path_taken_for_email_output_wrapped_payload") {
         try withTempDir { tmp in
             let payload = """
             Subject: wrapped
@@ -335,7 +282,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             --INNER
             Content-Type: text/plain; charset=utf-8
 
-
+            plain
 
             --INNER
             Content-Type: text/html; charset=utf-8
@@ -347,41 +294,8 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             let raw = try RFC822Parser.parse(Data(payload.utf8))
             let msg = MIMEParser.parse(raw)
             let recorder = Recorder()
-            let script = try MailDriver.deliver(msg, options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("set content of newMessage to rtfData"), "wrapper-without-attachments must take the rich path")
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("keystroke \"d\""), "wrapper-with-html must take the edit-draft path")
         }
-    },
-
-    TestCase(name: "render_html_to_rtf_substitutes_mail_fonts") {
-        try requireWebKit()
-        // Use real installed-on-macOS font names; NSFont(name:size:) returns
-        // nil for unknown fonts and our substitution silently keeps the source
-        // font in that case.
-        let prefs = MailDriver.MailFontPrefs(
-            messageFontName: "Verdana",
-            messageFontSize: 14,
-            fixedPitchFontName: "Monaco",
-            fixedPitchFontSize: 9
-        )
-        let html = "<html><body><p>proportional para</p><pre>monospace para</pre></body></html>"
-        guard let rtf = MailDriver.renderHTMLToRTF(html: html, fontPrefs: prefs) else {
-            try expect(false, "renderHTMLToRTF returned nil")
-            return
-        }
-        let rtfString = String(data: rtf, encoding: .ascii) ?? ""
-        try expect(rtfString.contains("Verdana"), "messageFontName missing from RTF output: \(rtfString.prefix(200))")
-        try expect(rtfString.contains("Monaco"), "fixedPitchFontName missing from RTF output: \(rtfString.prefix(200))")
-        // The HTML's source defaults (Times-Roman / Courier) should be
-        // replaced — confirm they don't appear.
-        try expect(!rtfString.contains("Times-Roman"), "source proportional font leaked through substitution")
-        try expect(!rtfString.contains("Courier"), "source monospace font leaked through substitution")
-    },
-
-    TestCase(name: "mail_font_prefs_apple_defaults_match_stock_mail") {
-        let p = MailDriver.MailFontPrefs.appleDefaults
-        try expectEqual(p.messageFontName, "Helvetica")
-        try expectEqual(p.messageFontSize, 12)
-        try expectEqual(p.fixedPitchFontName, "Menlo-Regular")
-        try expectEqual(p.fixedPitchFontSize, 11)
     },
 ])
