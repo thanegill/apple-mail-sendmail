@@ -75,4 +75,46 @@ let cliTests = TestSuite(name: "CLI", cases: [
     TestCase(name: "dashf_missing_value_throws") {
         try expectThrows { _ = try CLI.parse(["-f"], env: [:]) }
     },
+
+    TestCase(name: "help_text_has_sap_style_sections") {
+        let h = CLI.helpText()
+        try expect(h.contains("OVERVIEW:"), "missing OVERVIEW section")
+        try expect(h.contains("USAGE:"), "missing USAGE section")
+        try expect(h.contains("OPTIONS:"), "missing OPTIONS section")
+        try expect(h.contains("ENVIRONMENT:"), "missing ENVIRONMENT section")
+        try expect(h.contains("LEGACY FLAGS:"), "missing LEGACY FLAGS section")
+    },
+
+    TestCase(name: "help_text_uses_supplied_program_name") {
+        let h = CLI.helpText(programName: "sendmail")
+        try expect(h.contains("USAGE: sendmail "), "USAGE line did not honor programName")
+        try expect(!h.contains("apple-mail-sendmail"), "default program name leaked despite override")
+    },
+
+    TestCase(name: "help_text_lists_all_real_options") {
+        let h = CLI.helpText()
+        try expect(h.contains("-t "), "missing -t in OPTIONS")
+        try expect(h.contains("-f <addr>"), "missing -f <addr> in OPTIONS")
+        try expect(h.contains("-F <name>"), "missing -F <name> in OPTIONS")
+        try expect(h.contains("--send"), "missing --send in OPTIONS")
+        try expect(h.contains("-h, --help"), "missing -h/--help in OPTIONS")
+        try expect(h.contains("--version"), "missing --version in OPTIONS")
+    },
+
+    TestCase(name: "help_text_lists_env_vars") {
+        let h = CLI.helpText()
+        try expect(h.contains("SENDMAIL_SEND=1"), "missing SENDMAIL_SEND env var")
+        try expect(h.contains("SENDMAIL_DRY_RUN=1"), "missing SENDMAIL_DRY_RUN env var")
+    },
+
+    TestCase(name: "help_text_wraps_long_descriptions") {
+        // Two-column descriptions wrap so column-2 lines stay <= 80. The
+        // single-line USAGE synopsis is exempt from wrapping (swift-argument-
+        // parser does the same).
+        let h = CLI.helpText()
+        for line in h.split(separator: "\n") {
+            if line.hasPrefix("USAGE:") { continue }
+            try expect(line.count <= 80, "line exceeds 80 cols: '\(line)' (\(line.count))")
+        }
+    },
 ])
