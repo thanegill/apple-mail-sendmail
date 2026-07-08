@@ -16,7 +16,7 @@ public enum MIMEParser {
         if mt.hasPrefix("multipart/") {
             walkMultipart(body: raw.body, params: params, into: &msg, depth: 0)
             if msg.body.isEmpty {
-                // No text part found in the multipart — leave body empty rather than dumping raw bytes.
+                // No text part found in the multipart -- leave body empty rather than dumping raw bytes.
                 msg.body = ""
             }
         } else {
@@ -100,6 +100,10 @@ public enum MIMEParser {
     /// final delimiter is `--boundary--`.
     private static func splitParts(_ body: Data, boundary: String) -> [Data] {
         let delim = Data("--\(boundary)".utf8)
+        // Materializing the part body into [UInt8] (rather than scanning Data
+        // subranges) is intentional-for-simplicity: one short-lived message per
+        // invocation makes the copy negligible, and index-based scanning keeps
+        // the boundary/CRLF-trimming logic readable. Not worth a rewrite.
         let bytes = [UInt8](body)
         let dbytes = [UInt8](delim)
         var positions: [Int] = []
@@ -181,8 +185,8 @@ public enum MIMEParser {
                     i += 3; continue // soft break "=\r\n"
                 }
                 if i + 2 < bytes.count {
-                    let hi = hexDigit(bytes[i + 1])
-                    let lo = hexDigit(bytes[i + 2])
+                    let hi = bytes[i + 1].hexNibble
+                    let lo = bytes[i + 2].hexNibble
                     if let hi = hi, let lo = lo {
                         out.append(UInt8(hi * 16 + lo))
                         i += 3
@@ -196,13 +200,30 @@ public enum MIMEParser {
         return out
     }
 
-    private static func hexDigit(_ b: UInt8) -> Int? {
-        switch b {
-        case 0x30...0x39: return Int(b - 0x30)
-        case 0x41...0x46: return Int(b - 0x41 + 10)
-        case 0x61...0x66: return Int(b - 0x61 + 10)
-        default: return nil
-        }
+    // Compile the stripHTML patterns once at type init rather than on every
+    // call. `dropBlocks` matches whole <style>/<script>/<head> blocks and
+    // comments (replaced with ""); `toNewline` matches block-level break/close
+    // tags (replaced with "\n"). Both use .caseInsensitive, matching the old
+    // per-call replaceRegex behavior. A pattern that fails to compile is
+    // dropped from the array, exactly as the old guard-let-return-s did.
+    private static let dropBlockRegexes: [NSRegularExpression] = compileRegexes([
+        #"<style\b[^>]*>[\s\S]*?</style>"#,
+        #"<script\b[^>]*>[\s\S]*?</script>"#,
+        #"<head\b[^>]*>[\s\S]*?</head>"#,
+        #"<!--[\s\S]*?-->"#,
+    ])
+
+    private static let toNewlineRegexes: [NSRegularExpression] = compileRegexes([
+        #"<br\s*/?>"#,
+        #"</p\s*>"#,
+        #"</div\s*>"#,
+        #"</h[1-6]\s*>"#,
+        #"</li\s*>"#,
+        #"</tr\s*>"#,
+    ])
+
+    private static func compileRegexes(_ patterns: [String]) -> [NSRegularExpression] {
+        patterns.compactMap { try? NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
     }
 
     /// Tag-strip an HTML body for a tolerable plain-text fallback.
@@ -212,26 +233,12 @@ public enum MIMEParser {
     private static func stripHTML(_ html: String) -> String {
         var s = html
 
-        let dropBlocks = [
-            #"<style\b[^>]*>[\s\S]*?</style>"#,
-            #"<script\b[^>]*>[\s\S]*?</script>"#,
-            #"<head\b[^>]*>[\s\S]*?</head>"#,
-            #"<!--[\s\S]*?-->"#,
-        ]
-        for pattern in dropBlocks {
-            s = replaceRegex(in: s, pattern: pattern, with: "")
+        for re in dropBlockRegexes {
+            s = replaceRegex(in: s, regex: re, with: "")
         }
 
-        let toNewline = [
-            #"<br\s*/?>"#,
-            #"</p\s*>"#,
-            #"</div\s*>"#,
-            #"</h[1-6]\s*>"#,
-            #"</li\s*>"#,
-            #"</tr\s*>"#,
-        ]
-        for pattern in toNewline {
-            s = replaceRegex(in: s, pattern: pattern, with: "\n")
+        for re in toNewlineRegexes {
+            s = replaceRegex(in: s, regex: re, with: "\n")
         }
 
         var out = ""
@@ -318,10 +325,7 @@ public enum MIMEParser {
         return out
     }
 
-    private static func replaceRegex(in s: String, pattern: String, with template: String) -> String {
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return s
-        }
+    private static func replaceRegex(in s: String, regex re: NSRegularExpression, with template: String) -> String {
         let ns = s as NSString
         return re.stringByReplacingMatches(
             in: s,
