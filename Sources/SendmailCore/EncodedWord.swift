@@ -1,5 +1,19 @@
 import Foundation
 
+extension UInt8 {
+    /// Decode a single ASCII hex digit (0-9, A-F, a-f) to its 0-15 value, or
+    /// nil if the byte is not a hex digit. Shared by the quoted-printable
+    /// (MIMEParser) and RFC 2047 Q-encoding (EncodedWord) decoders.
+    var hexNibble: Int? {
+        switch self {
+        case 0x30...0x39: return Int(self - 0x30)
+        case 0x41...0x46: return Int(self - 0x41 + 10)
+        case 0x61...0x66: return Int(self - 0x61 + 10)
+        default: return nil
+        }
+    }
+}
+
 public enum EncodedWord {
     /// Decode RFC 2047 encoded-words within a header value. Whitespace between
     /// adjacent encoded-words is dropped, as required by the spec.
@@ -67,8 +81,8 @@ public enum EncodedWord {
                 continue
             }
             if b == 0x3D && i + 2 < chars.count { // '='
-                let hi = hex(chars[i + 1])
-                let lo = hex(chars[i + 2])
+                let hi = chars[i + 1].hexNibble
+                let lo = chars[i + 2].hexNibble
                 if let hi = hi, let lo = lo {
                     out.append(UInt8(hi * 16 + lo))
                     i += 3
@@ -79,15 +93,6 @@ public enum EncodedWord {
             i += 1
         }
         return out
-    }
-
-    private static func hex(_ b: UInt8) -> Int? {
-        switch b {
-        case 0x30...0x39: return Int(b - 0x30)
-        case 0x41...0x46: return Int(b - 0x41 + 10)
-        case 0x61...0x66: return Int(b - 0x61 + 10)
-        default: return nil
-        }
     }
 
     public static func decodeBytes(_ bytes: Data, charset: String) -> String? {

@@ -24,6 +24,36 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectEqual(msg.body, "café is good")
     },
 
+    TestCase(name: "quoted_printable_lowercase_hex") {
+        // The shared hexNibble decoder must accept lowercase hex digits;
+        // =c3=a9 is the same "é" byte pair as the uppercase =C3=A9 form.
+        let input = """
+        Subject: QP
+        Content-Type: text/plain; charset=utf-8
+        Content-Transfer-Encoding: quoted-printable
+
+        caf=c3=a9 is good
+        """
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.body, "café is good")
+    },
+
+    TestCase(name: "quoted_printable_invalid_hex_kept_literal") {
+        // A '=' not followed by two hex digits is not an escape; the shared
+        // hexNibble decoder returns nil and the bytes pass through verbatim.
+        let input = """
+        Subject: QP
+        Content-Type: text/plain; charset=utf-8
+        Content-Transfer-Encoding: quoted-printable
+
+        a=ZZb
+        """
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.body, "a=ZZb")
+    },
+
     TestCase(name: "base64_body") {
         let input = """
         Subject: B64
