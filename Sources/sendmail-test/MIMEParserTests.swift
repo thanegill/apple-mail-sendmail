@@ -281,6 +281,42 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectNotNil(msg.htmlBody)
     },
 
+    TestCase(name: "stripHTML_does_not_double_decode_escaped_entity") {
+        // Issue #18: `&amp;lt;` must decode to the literal `&lt;`, not `<`.
+        // The old chained-replace turned `&amp;` into `&` first, then the
+        // resulting `&lt;` into `<`.
+        let input = "Subject: e\nContent-Type: text/html; charset=utf-8\n\n<p>&amp;lt;</p>"
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.body, "&lt;")
+    },
+
+    TestCase(name: "stripHTML_decodes_numeric_and_hex_references") {
+        // Issue #18: decimal `&#8217;` and hex `&#x2019;` both decode to the
+        // right-single-quotation-mark glyph (U+2019).
+        let rsquo = "\u{2019}"
+        let dec = "Subject: e\nContent-Type: text/html; charset=utf-8\n\n<p>it&#8217;s</p>"
+        let msgDec = MIMEParser.parse(try RFC822Parser.parse(Data(dec.utf8)))
+        try expectEqual(msgDec.body, "it\(rsquo)s")
+
+        let hex = "Subject: e\nContent-Type: text/html; charset=utf-8\n\n<p>it&#x2019;s</p>"
+        let msgHex = MIMEParser.parse(try RFC822Parser.parse(Data(hex.utf8)))
+        try expectEqual(msgHex.body, "it\(rsquo)s")
+    },
+
+    TestCase(name: "stripHTML_basic_tag_and_entity_mix") {
+        // Issue #18: a mix of tags and named entities renders correctly.
+        let input = """
+        Subject: mix
+        Content-Type: text/html; charset=utf-8
+
+        <p>Tom &amp; Jerry say &lt;hi&gt; &quot;now&quot;</p>
+        """
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.body, "Tom & Jerry say <hi> \"now\"")
+    },
+
     TestCase(name: "multipart_alternative_picks_text_plain") {
         let input = """
         Subject: alt
