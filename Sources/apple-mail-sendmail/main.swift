@@ -54,7 +54,10 @@ let tmp: TempDir
 do {
     tmp = try TempDir()
 } catch {
-    die("failed to create temp dir: \(error)", code: .osErr)
+    // A temp-dir failure is transient (disk full, TMPDIR unwritable). Exit
+    // EX_TEMPFAIL (75) so an MTA retries rather than treating it as permanent
+    // (EX_OSERR 71 would be classed as a hard failure and bounced).
+    die("failed to create temp dir: \(error)", code: .tempFail)
 }
 defer { tmp.cleanup() }
 
