@@ -40,6 +40,11 @@ public enum EmlBuilder {
         if !finalRecipients.cc.isEmpty {
             out.append(("Cc", joinAddresses(finalRecipients.cc)))
         }
+        // Bcc is serialized as a plain rfc822 header. Verified empirically
+        // (2026-07-08): Mail's "Send Again" consumes it as an envelope
+        // recipient and strips the Bcc header from every transmitted copy
+        // -- including the Bcc recipient's own -- so it stays blind, the same
+        // guarantee as the classic path's dedicated bcc-recipient objects.
         if !finalRecipients.bcc.isEmpty {
             out.append(("Bcc", joinAddresses(finalRecipients.bcc)))
         }
