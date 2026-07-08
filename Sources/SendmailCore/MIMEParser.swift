@@ -76,6 +76,17 @@ public enum MIMEParser {
                 continue
             }
 
+            // Skip inline body parts (e.g. multipart/related images referenced
+            // by CID from the HTML): Content-Disposition: inline with no
+            // filename/name param. These ride along in the raw .eml and are not
+            // user-facing attachments. Genuine attachments -- disposition
+            // "attachment", a filename/name param present, or a bare non-text
+            // part with no disposition at all -- still fall through below.
+            let hasName = dispParams["filename"] != nil || subParams["name"] != nil
+            if dispMain == "inline" && !hasName {
+                continue
+            }
+
             let nameRaw = dispParams["filename"]
                 ?? subParams["name"]
                 ?? "attachment-\(msg.attachments.count + 1).bin"
@@ -231,13 +242,7 @@ public enum MIMEParser {
             if !inTag { out.append(ch) }
         }
 
-        let decoded = out
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
+        let decoded = decodeEntities(out)
 
         var result: [String] = []
         var lastBlank = false
@@ -252,6 +257,65 @@ public enum MIMEParser {
             }
         }
         return result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Decode HTML character references in a single left-to-right pass so that
+    /// an already-escaped ampersand does not get its expansion re-scanned. For
+    /// example `&amp;lt;` must decode to the literal `&lt;`, not `<` -- the old
+    /// chained-replace approach turned `&amp;` into `&` first and then the
+    /// resulting `&lt;` into `<`. Handles named entities plus decimal `&#DDD;`
+    /// and hex `&#xHH;` numeric references.
+    private static func decodeEntities(_ s: String) -> String {
+        let named: [String: String] = [
+            "amp": "&",
+            "lt": "<",
+            "gt": ">",
+            "quot": "\"",
+            "apos": "'",
+            "nbsp": " ",
+        ]
+        let pattern = #"&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);"#
+        guard let re = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return s
+        }
+        let ns = s as NSString
+        let matches = re.matches(in: s, options: [], range: NSRange(location: 0, length: ns.length))
+        // Rebuild the string in one pass, copying the gaps between matches
+        // verbatim so a decoded value can never be re-scanned as an entity.
+        var out = ""
+        var cursor = 0
+        for m in matches {
+            let full = m.range
+            if full.location > cursor {
+                out += ns.substring(with: NSRange(location: cursor, length: full.location - cursor))
+            }
+            let token = ns.substring(with: m.range(at: 1))
+            if token.hasPrefix("#x") || token.hasPrefix("#X") {
+                let hex = String(token.dropFirst(2))
+                if let code = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(code) {
+                    out.append(Character(scalar))
+                } else {
+                    out += ns.substring(with: full)
+                }
+            } else if token.hasPrefix("#") {
+                let dec = String(token.dropFirst())
+                if let code = UInt32(dec, radix: 10), let scalar = Unicode.Scalar(code) {
+                    out.append(Character(scalar))
+                } else {
+                    out += ns.substring(with: full)
+                }
+            } else if let value = named[token.lowercased()] {
+                out += value
+            } else {
+                // Unknown named entity: leave it untouched.
+                out += ns.substring(with: full)
+            }
+            cursor = full.location + full.length
+        }
+        if cursor < ns.length {
+            out += ns.substring(with: NSRange(location: cursor, length: ns.length - cursor))
+        }
+        return out
     }
 
     private static func replaceRegex(in s: String, pattern: String, with template: String) -> String {
