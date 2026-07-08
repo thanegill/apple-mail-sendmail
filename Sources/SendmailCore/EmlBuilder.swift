@@ -58,10 +58,34 @@ public enum EmlBuilder {
     static func serialize(headers: [(String, String)], body: Data) -> Data {
         var out = Data()
         for (k, v) in headers {
-            out.append(Data("\(k): \(v)\r\n".utf8))
+            out.append(Data("\(sanitizeHeaderValue(k)): \(sanitizeHeaderValue(v))\r\n".utf8))
         }
         out.append(Data("\r\n".utf8))
         out.append(body)
+        return out
+    }
+
+    /// Strip embedded CR and LF from a header key or value so a crafted display
+    /// name or address (e.g. `"Alice\r\nBcc: evil@x"`) cannot break out of the
+    /// header line and inject arbitrary headers. Both bare `\r`, bare `\n`, and
+    /// `\r\n` folds are collapsed to a single space; this is the choke point
+    /// through which every serialized header value passes.
+    static func sanitizeHeaderValue(_ s: String) -> String {
+        // NB: check at the unicode-scalar level. Swift fuses "\r\n" into a
+        // single Character grapheme cluster, so `s.contains("\r")` is FALSE for
+        // a value containing a CRLF -- iterate scalars instead.
+        guard s.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\n" }) else {
+            return s
+        }
+        var out = ""
+        out.unicodeScalars.reserveCapacity(s.unicodeScalars.count)
+        for scalar in s.unicodeScalars {
+            if scalar == "\r" || scalar == "\n" {
+                out.unicodeScalars.append(" ")
+            } else {
+                out.unicodeScalars.append(scalar)
+            }
+        }
         return out
     }
 
