@@ -151,6 +151,18 @@ public enum MailDriver {
             // 7. Click Message > Send via System Events.
             appendFrontmostAction(&lines, "click menu item \"Send\" of menu \"Message\" of menu bar 1")
             lines.append("")
+            // 7b. Verify the send actually happened. On a successful send Mail
+            //     closes the compose window, so its id disappears from
+            //     `id of every window`. Poll for that id to be GONE; if it is
+            //     still present after the deadline the send did not complete
+            //     -- `error` so NSAppleScript throws and the binary exits
+            //     non-zero instead of falsely reporting success.
+            appendWindowGonePoll(
+                &lines,
+                targetVar: "composeID",
+                timeoutMessage: "Send did not complete: the compose window is still open after 5s"
+            )
+            lines.append("")
         }
         // 8. Close the leftover viewer by its exact id. Closing by title could
         //    hit the compose window, which shares the subject.
@@ -189,6 +201,28 @@ public enum MailDriver {
         lines.append("    if \(resultVar) is missing value then delay 0.1")
         lines.append("end repeat")
         lines.append("if \(resultVar) is missing value then error \(AppleScript.quote(timeoutMessage))")
+    }
+
+    /// Append a poll loop that waits for the window id stored in `targetVar`
+    /// to DISAPPEAR from `id of every window` (e.g. after a send closes the
+    /// compose). `error`s with `timeoutMessage` if it is still present at the
+    /// deadline, so a failed send surfaces as a non-zero exit.
+    private static func appendWindowGonePoll(
+        _ lines: inout [String],
+        targetVar: String,
+        timeoutMessage: String
+    ) {
+        lines.append("set \(targetVar)Gone to false")
+        lines.append("set deadline to (current date) + 5")
+        lines.append("repeat while (current date) < deadline and \(targetVar)Gone is false")
+        lines.append("    tell application \"Mail\" to set currentIDs to id of every window")
+        lines.append("    if currentIDs does not contain \(targetVar) then")
+        lines.append("        set \(targetVar)Gone to true")
+        lines.append("    else")
+        lines.append("        delay 0.1")
+        lines.append("    end if")
+        lines.append("end repeat")
+        lines.append("if \(targetVar)Gone is false then error \(AppleScript.quote(timeoutMessage))")
     }
 
     /// Append the focus preamble (activate Mail, settle, set the process
