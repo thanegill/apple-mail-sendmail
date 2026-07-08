@@ -291,6 +291,29 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
+    TestCase(name: "edit_draft_script_uses_shared_poll_and_frontmost_helpers") {
+        // #20: both window polls emit the same id-diff loop shape, and both
+        // frontmost actions share the activate/delay/set-frontmost preamble.
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.subject = "helper-shape"
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            // Both polls present.
+            try expect(script.contains("set viewerID to missing value"))
+            try expect(script.contains("set composeID to missing value"))
+            try expect(script.contains("beforeOpenIDs does not contain (contents of wid)"))
+            try expect(script.contains("beforeComposeIDs does not contain (contents of wid)"))
+            // Shared frontmost preamble appears (at least once, for the keystroke).
+            try expect(script.contains("tell application \"Mail\" to activate\ndelay 0.2\ntell application \"System Events\"\n    tell process \"Mail\"\n        set frontmost to true\n        keystroke \"d\" using {shift down, command down}"))
+            // Timeout messages preserved verbatim.
+            try expect(script.contains("Mail did not open a viewer for the eml within 5s"))
+            try expect(script.contains("Compose window did not appear after Send Again within 5s"))
+        }
+    },
+
     TestCase(name: "edit_draft_path_taken_for_email_output_wrapped_payload") {
         try withTempDir { tmp in
             let payload = """
