@@ -123,6 +123,17 @@ public enum MailDriver {
         // 3. Open the .eml. Use POSIX file → quoted form to dodge shell injection.
         lines.append("do shell script \"open -a Mail \" & quoted form of \(pathLit)")
         lines.append("")
+        // SINGLE-NEW-WINDOW ASSUMPTION: each poll below (viewer after `open`,
+        // compose after Send Again) selects the FIRST window id that was not
+        // present in the pre-step snapshot, and assumes exactly one new window
+        // appears per step. If a session-restored window, a background sync
+        // window, or a window the user opens by hand shows up during the run,
+        // the diff can mis-select it instead of the one we spawned. This is
+        // the known tradeoff of id-diffing: it is subject-title-independent
+        // (works for empty/duplicate/rewritten subjects) at the cost of
+        // assuming a quiet window set for the ~seconds the run takes. See
+        // ATTEMPTS.md for why title-matching was abandoned.
+
         // 4. Poll for the viewer: the first window id not present before open.
         appendNewWindowPoll(
             &lines,
