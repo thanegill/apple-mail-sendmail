@@ -10,6 +10,18 @@ public struct ParsedAddress {
     }
 }
 
+/// Format a mailbox as either `Name <addr>` (when `name` is non-nil and
+/// non-empty) or bare `addr`. This is the single source of truth for the
+/// rule; it is shared by the classic path's `sender:` property, the .eml
+/// `From` header override, and the .eml To/Cc/Bcc serialization so all three
+/// stay in lockstep.
+func formatMailbox(name: String?, address: String) -> String {
+    if let n = name, !n.isEmpty {
+        return "\(n) <\(address)>"
+    }
+    return address
+}
+
 public enum AddressParser {
     /// Split a header value like `"Alice" <a@x>, b@y (Bob), Carol <c@z>` into
     /// individual addresses, then parse each. Comments in parentheses are
