@@ -100,6 +100,10 @@ public enum MIMEParser {
     /// final delimiter is `--boundary--`.
     private static func splitParts(_ body: Data, boundary: String) -> [Data] {
         let delim = Data("--\(boundary)".utf8)
+        // Materializing the part body into [UInt8] (rather than scanning Data
+        // subranges) is intentional-for-simplicity: one short-lived message per
+        // invocation makes the copy negligible, and index-based scanning keeps
+        // the boundary/CRLF-trimming logic readable. Not worth a rewrite.
         let bytes = [UInt8](body)
         let dbytes = [UInt8](delim)
         var positions: [Int] = []
