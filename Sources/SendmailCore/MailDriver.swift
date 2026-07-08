@@ -9,7 +9,7 @@ public enum MailDriver {
     ///   Launch Services (`open -a Mail file.eml`) so Mail spawns a viewer
     ///   window in WKWebView, then trigger "Send Again" (Cmd-Shift-D) via
     ///   System Events. That converts the viewer into a fresh editable
-    ///   compose with full WKWebView fidelity — the only path that preserves
+    ///   compose with full WKWebView fidelity -- the only path that preserves
     ///   tables, CSS padding, monospace backgrounds, etc. Requires
     ///   Accessibility permission for the calling process.
     /// - For plain-text-only messages, use the classic AppleScript path
@@ -79,7 +79,7 @@ public enum MailDriver {
     /// 3. `open -a Mail <eml>` via `do shell script` so Launch Services opens
     ///    the .eml as a Mail viewer window.
     /// 4. Polls for the viewer as the one window id that wasn't present
-    ///    before the open — matching by id, never by title, so it works for
+    ///    before the open -- matching by id, never by title, so it works for
     ///    messages with no Subject, duplicate subjects, or titles Mail
     ///    rewrites.
     /// 5. Snapshots ids again, then keystrokes Cmd-Shift-D (Send Again) to
@@ -144,7 +144,7 @@ public enum MailDriver {
         lines.append("")
         // 5. Snapshot ids again (now including the viewer) so we can detect
         //    the compose window Send Again creates. Then bring Mail to front
-        //    and keystroke Cmd-Shift-D — the viewer we just opened is the
+        //    and keystroke Cmd-Shift-D -- the viewer we just opened is the
         //    frontmost window, so the keystroke targets it.
         lines.append("tell application \"Mail\" to set beforeComposeIDs to id of every window")
         appendFrontmostAction(&lines, "keystroke \"d\" using {shift down, command down}")

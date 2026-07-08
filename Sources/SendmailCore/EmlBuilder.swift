@@ -5,7 +5,7 @@ import Foundation
 /// finalized from positional + `-t` logic; From set from `-f`/`-F`), then
 /// concatenate.
 ///
-/// Body bytes are passed through verbatim — no MIME re-encoding. The .eml
+/// Body bytes are passed through verbatim -- no MIME re-encoding. The .eml
 /// produced here is what `open -a Mail` opens, which Mail's WKWebView then
 /// renders.
 public enum EmlBuilder {
