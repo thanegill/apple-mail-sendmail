@@ -119,6 +119,35 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
         try expect(eml2.contains("To: Alice A <alice@x>"))
     },
 
+    TestCase(name: "crlf_in_display_name_does_not_inject_header") {
+        // A recipient display name carrying `\r\nBcc: evil@x` must not break
+        // out of the To: line into an injected Bcc: header. serialize()
+        // sanitizes CR/LF out of every header value.
+        var msg = ParsedMessage()
+        msg.to = [ParsedAddress(displayName: "Alice\r\nBcc: evil@x", address: "a@b")]
+        let out = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: msg, options: Options())
+        let s = String(data: out, encoding: .utf8) ?? ""
+        // Split just the header block (before the blank CRLF separator).
+        let headerBlock = s.components(separatedBy: "\r\n\r\n").first ?? s
+        let headerLines = headerBlock.components(separatedBy: "\r\n")
+        try expect(!headerLines.contains { $0.hasPrefix("Bcc:") }, "no injected Bcc: header line")
+        try expect(!s.contains("\r\nBcc: evil@x"), "the CRLF must be neutralized, not preserved")
+        // The address itself still survives on the To line.
+        try expect(s.contains("a@b"))
+    },
+
+    TestCase(name: "crlf_in_from_override_does_not_inject_header") {
+        var msg = ParsedMessage()
+        msg.to = [ParsedAddress(displayName: nil, address: "a@b")]
+        var opts = Options()
+        opts.fromAddress = "x@y\r\nX-Evil: 1"
+        let out = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: msg, options: opts)
+        let s = String(data: out, encoding: .utf8) ?? ""
+        let headerBlock = s.components(separatedBy: "\r\n\r\n").first ?? s
+        let headerLines = headerBlock.components(separatedBy: "\r\n")
+        try expect(!headerLines.contains { $0.hasPrefix("X-Evil:") }, "no injected X-Evil: header line")
+    },
+
     TestCase(name: "round_trip_through_parser_preserves_html_body") {
         let html = "<html><body><table><tr><td>X</td></tr></table></body></html>"
         let bytes = Data("""
