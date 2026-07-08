@@ -196,7 +196,10 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             try expect(script.contains("compose-"))
             try expect(script.contains(".eml"))
             try expect(script.contains("keystroke \"d\" using {shift down, command down}"))
-            try expect(script.contains("set subjLine to \"rich-html-subj\""))
+            // Windows are identified by id-diff, not by subject/title.
+            try expect(script.contains("set beforeOpenIDs to id of every window"))
+            try expect(script.contains("beforeOpenIDs does not contain (contents of wid)"))
+            try expect(!script.contains("subjLine"), "must not match windows by subject anymore")
         }
     },
 
@@ -251,7 +254,27 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.htmlBody = "<p>x</p>"
             let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("close w saving no"))
+            try expect(script.contains("close (first window whose id is viewerID) saving no"))
+        }
+    },
+
+    TestCase(name: "edit_draft_script_matches_by_window_id_for_empty_subject") {
+        // Regression: a message with no Subject must still identify the viewer
+        // and compose windows. The old title-matching path set an empty
+        // subjLine that never matched, so the poll timed out. Id-diffing has
+        // no dependence on the subject at all.
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.subject = ""
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>no subject here</p>"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("keystroke \"d\" using {shift down, command down}"), "empty-subject message must still reach the Send Again keystroke")
+            try expect(script.contains("set beforeOpenIDs to id of every window"))
+            try expect(script.contains("set beforeComposeIDs to id of every window"))
+            try expect(!script.contains("subjLine"), "empty subject must not leak a subject-match gate")
+            try expect(!script.contains("name of w"), "window identification must not depend on window title")
         }
     },
 
