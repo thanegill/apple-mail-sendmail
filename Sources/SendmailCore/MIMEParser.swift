@@ -76,6 +76,17 @@ public enum MIMEParser {
                 continue
             }
 
+            // Skip inline body parts (e.g. multipart/related images referenced
+            // by CID from the HTML): Content-Disposition: inline with no
+            // filename/name param. These ride along in the raw .eml and are not
+            // user-facing attachments. Genuine attachments -- disposition
+            // "attachment", a filename/name param present, or a bare non-text
+            // part with no disposition at all -- still fall through below.
+            let hasName = dispParams["filename"] != nil || subParams["name"] != nil
+            if dispMain == "inline" && !hasName {
+                continue
+            }
+
             let nameRaw = dispParams["filename"]
                 ?? subParams["name"]
                 ?? "attachment-\(msg.attachments.count + 1).bin"
