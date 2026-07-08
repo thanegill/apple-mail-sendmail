@@ -45,13 +45,7 @@ public enum EmlBuilder {
         }
         if let addr = options.fromAddress {
             out.removeAll { $0.0.lowercased() == "from" }
-            let value: String
-            if let name = options.fromName, !name.isEmpty {
-                value = "\(name) <\(addr)>"
-            } else {
-                value = addr
-            }
-            out.append(("From", value))
+            out.append(("From", formatMailbox(name: options.fromName, address: addr)))
         }
         return out
     }
@@ -71,7 +65,6 @@ public enum EmlBuilder {
     }
 
     private static func formatAddress(_ a: ParsedAddress) -> String {
-        guard let name = a.displayName, !name.isEmpty else { return a.address }
-        return "\(name) <\(a.address)>"
+        formatMailbox(name: a.displayName, address: a.address)
     }
 }

@@ -82,6 +82,43 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
         try expect(s.contains("\r\n\r\nbody line one"), "header/body separator must be a blank CRLF line")
     },
 
+    TestCase(name: "shared_mailbox_formatting_matches_classic_sender") {
+        // #19: the classic path's `sender:` property and the .eml `From`
+        // header both format via the single shared `formatMailbox` helper, so
+        // the same name+address must produce the same "Name <addr>" string.
+        var opts = Options()
+        opts.fromName = "Build Bot"
+        opts.fromAddress = "bot@x.com"
+        // .eml From header (EmlBuilder.applyOverrides -> formatMailbox).
+        var msg = ParsedMessage()
+        msg.to = [ParsedAddress(displayName: nil, address: "a@b")]
+        let out = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: msg, options: opts)
+        let eml = String(data: out, encoding: .utf8) ?? ""
+        try expect(eml.contains("From: Build Bot <bot@x.com>"))
+        // Classic path sender: (MailDriver.composeSender -> formatMailbox).
+        // Route through deliver on the plain-text path so we observe the
+        // emitted sender: property from the same inputs.
+        let tmp = try TempDir()
+        defer { tmp.cleanup() }
+        var plain = ParsedMessage()
+        plain.to = [ParsedAddress(displayName: nil, address: "a@b")]
+        plain.body = "hi"
+        let script = try MailDriver.deliver(
+            plain,
+            emlBytes: Data("Subject: p\r\nContent-Type: text/plain\r\n\r\nhi".utf8),
+            options: opts,
+            tmp: tmp,
+            runner: { _ in }
+        )
+        try expect(script.contains("sender:\"Build Bot <bot@x.com>\""))
+        // To/Cc/Bcc join uses the same helper too.
+        var withCc = ParsedMessage()
+        withCc.to = [ParsedAddress(displayName: "Alice A", address: "alice@x")]
+        let out2 = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: withCc, options: Options())
+        let eml2 = String(data: out2, encoding: .utf8) ?? ""
+        try expect(eml2.contains("To: Alice A <alice@x>"))
+    },
+
     TestCase(name: "round_trip_through_parser_preserves_html_body") {
         let html = "<html><body><table><tr><td>X</td></tr></table></body></html>"
         let bytes = Data("""

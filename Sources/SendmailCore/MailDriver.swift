@@ -123,63 +123,56 @@ public enum MailDriver {
         // 3. Open the .eml. Use POSIX file → quoted form to dodge shell injection.
         lines.append("do shell script \"open -a Mail \" & quoted form of \(pathLit)")
         lines.append("")
+        // SINGLE-NEW-WINDOW ASSUMPTION: each poll below (viewer after `open`,
+        // compose after Send Again) selects the FIRST window id that was not
+        // present in the pre-step snapshot, and assumes exactly one new window
+        // appears per step. If a session-restored window, a background sync
+        // window, or a window the user opens by hand shows up during the run,
+        // the diff can mis-select it instead of the one we spawned. This is
+        // the known tradeoff of id-diffing: it is subject-title-independent
+        // (works for empty/duplicate/rewritten subjects) at the cost of
+        // assuming a quiet window set for the ~seconds the run takes. See
+        // ATTEMPTS.md for why title-matching was abandoned.
+
         // 4. Poll for the viewer: the first window id not present before open.
-        lines.append("set viewerID to missing value")
-        lines.append("set deadline to (current date) + 5")
-        lines.append("repeat while (current date) < deadline and viewerID is missing value")
-        lines.append("    tell application \"Mail\"")
-        lines.append("        repeat with wid in (id of every window)")
-        lines.append("            if beforeOpenIDs does not contain (contents of wid) then")
-        lines.append("                set viewerID to (contents of wid)")
-        lines.append("                exit repeat")
-        lines.append("            end if")
-        lines.append("        end repeat")
-        lines.append("    end tell")
-        lines.append("    if viewerID is missing value then delay 0.1")
-        lines.append("end repeat")
-        lines.append("if viewerID is missing value then error \"Mail did not open a viewer for the eml within 5s\"")
+        appendNewWindowPoll(
+            &lines,
+            resultVar: "viewerID",
+            beforeVar: "beforeOpenIDs",
+            timeoutMessage: "Mail did not open a viewer for the eml within 5s"
+        )
         lines.append("")
         // 5. Snapshot ids again (now including the viewer) so we can detect
         //    the compose window Send Again creates. Then bring Mail to front
         //    and keystroke Cmd-Shift-D — the viewer we just opened is the
         //    frontmost window, so the keystroke targets it.
         lines.append("tell application \"Mail\" to set beforeComposeIDs to id of every window")
-        lines.append("tell application \"Mail\" to activate")
-        lines.append("delay 0.2")
-        lines.append("tell application \"System Events\"")
-        lines.append("    tell process \"Mail\"")
-        lines.append("        set frontmost to true")
-        lines.append("        keystroke \"d\" using {shift down, command down}")
-        lines.append("    end tell")
-        lines.append("end tell")
+        appendFrontmostAction(&lines, "keystroke \"d\" using {shift down, command down}")
         lines.append("")
         // 6. Poll for the compose: the first window id not present before the
         //    keystroke.
-        lines.append("set composeID to missing value")
-        lines.append("set deadline to (current date) + 5")
-        lines.append("repeat while (current date) < deadline and composeID is missing value")
-        lines.append("    tell application \"Mail\"")
-        lines.append("        repeat with wid in (id of every window)")
-        lines.append("            if beforeComposeIDs does not contain (contents of wid) then")
-        lines.append("                set composeID to (contents of wid)")
-        lines.append("                exit repeat")
-        lines.append("            end if")
-        lines.append("        end repeat")
-        lines.append("    end tell")
-        lines.append("    if composeID is missing value then delay 0.1")
-        lines.append("end repeat")
-        lines.append("if composeID is missing value then error \"Compose window did not appear after Send Again within 5s\"")
+        appendNewWindowPoll(
+            &lines,
+            resultVar: "composeID",
+            beforeVar: "beforeComposeIDs",
+            timeoutMessage: "Compose window did not appear after Send Again within 5s"
+        )
         lines.append("")
         if send {
             // 7. Click Message > Send via System Events.
-            lines.append("tell application \"Mail\" to activate")
-            lines.append("delay 0.2")
-            lines.append("tell application \"System Events\"")
-            lines.append("    tell process \"Mail\"")
-            lines.append("        set frontmost to true")
-            lines.append("        click menu item \"Send\" of menu \"Message\" of menu bar 1")
-            lines.append("    end tell")
-            lines.append("end tell")
+            appendFrontmostAction(&lines, "click menu item \"Send\" of menu \"Message\" of menu bar 1")
+            lines.append("")
+            // 7b. Verify the send actually happened. On a successful send Mail
+            //     closes the compose window, so its id disappears from
+            //     `id of every window`. Poll for that id to be GONE; if it is
+            //     still present after the deadline the send did not complete
+            //     -- `error` so NSAppleScript throws and the binary exits
+            //     non-zero instead of falsely reporting success.
+            appendWindowGonePoll(
+                &lines,
+                targetVar: "composeID",
+                timeoutMessage: "Send did not complete: the compose window is still open after 5s"
+            )
             lines.append("")
         }
         // 8. Close the leftover viewer by its exact id. Closing by title could
@@ -192,13 +185,77 @@ public enum MailDriver {
         return lines.joined(separator: "\n")
     }
 
+    // MARK: - Edit-draft script builders (shared)
+
+    /// Append a poll loop that waits for a brand-new Mail window id -- the
+    /// first id in `id of every window` that is NOT in the snapshot named by
+    /// `beforeVar`. Stores it in `resultVar`, or `error`s with
+    /// `timeoutMessage` if none appears within the deadline. See the
+    /// single-new-window assumption note at the call site.
+    private static func appendNewWindowPoll(
+        _ lines: inout [String],
+        resultVar: String,
+        beforeVar: String,
+        timeoutMessage: String
+    ) {
+        lines.append("set \(resultVar) to missing value")
+        lines.append("set deadline to (current date) + 5")
+        lines.append("repeat while (current date) < deadline and \(resultVar) is missing value")
+        lines.append("    tell application \"Mail\"")
+        lines.append("        repeat with wid in (id of every window)")
+        lines.append("            if \(beforeVar) does not contain (contents of wid) then")
+        lines.append("                set \(resultVar) to (contents of wid)")
+        lines.append("                exit repeat")
+        lines.append("            end if")
+        lines.append("        end repeat")
+        lines.append("    end tell")
+        lines.append("    if \(resultVar) is missing value then delay 0.1")
+        lines.append("end repeat")
+        lines.append("if \(resultVar) is missing value then error \(AppleScript.quote(timeoutMessage))")
+    }
+
+    /// Append a poll loop that waits for the window id stored in `targetVar`
+    /// to DISAPPEAR from `id of every window` (e.g. after a send closes the
+    /// compose). `error`s with `timeoutMessage` if it is still present at the
+    /// deadline, so a failed send surfaces as a non-zero exit.
+    private static func appendWindowGonePoll(
+        _ lines: inout [String],
+        targetVar: String,
+        timeoutMessage: String
+    ) {
+        lines.append("set \(targetVar)Gone to false")
+        lines.append("set deadline to (current date) + 5")
+        lines.append("repeat while (current date) < deadline and \(targetVar)Gone is false")
+        lines.append("    tell application \"Mail\" to set currentIDs to id of every window")
+        lines.append("    if currentIDs does not contain \(targetVar) then")
+        lines.append("        set \(targetVar)Gone to true")
+        lines.append("    else")
+        lines.append("        delay 0.1")
+        lines.append("    end if")
+        lines.append("end repeat")
+        lines.append("if \(targetVar)Gone is false then error \(AppleScript.quote(timeoutMessage))")
+    }
+
+    /// Append the focus preamble (activate Mail, settle, set the process
+    /// frontmost) and then run `action` inside `tell process "Mail"` via
+    /// System Events. Used for both the Send Again keystroke and the Send
+    /// menu click, which both require Mail to be the frontmost process.
+    private static func appendFrontmostAction(_ lines: inout [String], _ action: String) {
+        lines.append("tell application \"Mail\" to activate")
+        lines.append("delay 0.2")
+        lines.append("tell application \"System Events\"")
+        lines.append("    tell process \"Mail\"")
+        lines.append("        set frontmost to true")
+        lines.append("        \(action)")
+        lines.append("    end tell")
+        lines.append("end tell")
+    }
+
     // MARK: - Classic script (plain-text path)
 
     private static func composeSender(name: String?, address: String?) -> String? {
-        if let addr = address, let n = name, !n.isEmpty {
-            return "\(n) <\(addr)>"
-        }
-        return address
+        guard let addr = address else { return nil }
+        return formatMailbox(name: name, address: addr)
     }
 
     private static func buildClassicScript(
