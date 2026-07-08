@@ -102,6 +102,8 @@ Two non-obvious gotchas:
 
 The plain-text path is unchanged and does NOT require Accessibility — only Automation for Mail.
 
+**Bcc stays blind on the HTML path.** `EmlBuilder` serializes `Bcc:` as a plain rfc822 header into the `.eml`. Verified empirically (2026-07-08, via `View > Message > Raw Source` on a self-send with a marker Bcc address): Mail's Send Again consumes it as an envelope recipient and strips the `Bcc:` header from every transmitted copy — including the Bcc recipient's own — while still delivering to it. No special handling is needed and no warning should be emitted; this matches the classic path's dedicated bcc-recipient objects.
+
 ### Draft injection from outside Mail is not reachable — empirically confirmed
 
 Mail's "editable draft" state cannot be conjured by any combination of mbox headers, `.emlx` flag bits, IMAP `\Draft` flag, or Apple-internal headers. Editable drafts only exist when Mail itself creates the message — through its compose UI, `make new outgoing message` (AppleScript), or reply/forward/redirect derivatives of an existing message. Empirically verified during this branch (full probe scripts in `/tmp/import-redirect-probe/` during session work):
