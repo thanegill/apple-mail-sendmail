@@ -16,7 +16,7 @@ public enum MIMEParser {
         if mt.hasPrefix("multipart/") {
             walkMultipart(body: raw.body, params: params, into: &msg, depth: 0)
             if msg.body.isEmpty {
-                // No text part found in the multipart — leave body empty rather than dumping raw bytes.
+                // No text part found in the multipart -- leave body empty rather than dumping raw bytes.
                 msg.body = ""
             }
         } else {
@@ -196,6 +196,32 @@ public enum MIMEParser {
         return out
     }
 
+    // Compile the stripHTML patterns once at type init rather than on every
+    // call. `dropBlocks` matches whole <style>/<script>/<head> blocks and
+    // comments (replaced with ""); `toNewline` matches block-level break/close
+    // tags (replaced with "\n"). Both use .caseInsensitive, matching the old
+    // per-call replaceRegex behavior. A pattern that fails to compile is
+    // dropped from the array, exactly as the old guard-let-return-s did.
+    private static let dropBlockRegexes: [NSRegularExpression] = compileRegexes([
+        #"<style\b[^>]*>[\s\S]*?</style>"#,
+        #"<script\b[^>]*>[\s\S]*?</script>"#,
+        #"<head\b[^>]*>[\s\S]*?</head>"#,
+        #"<!--[\s\S]*?-->"#,
+    ])
+
+    private static let toNewlineRegexes: [NSRegularExpression] = compileRegexes([
+        #"<br\s*/?>"#,
+        #"</p\s*>"#,
+        #"</div\s*>"#,
+        #"</h[1-6]\s*>"#,
+        #"</li\s*>"#,
+        #"</tr\s*>"#,
+    ])
+
+    private static func compileRegexes(_ patterns: [String]) -> [NSRegularExpression] {
+        patterns.compactMap { try? NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
+    }
+
     /// Tag-strip an HTML body for a tolerable plain-text fallback.
     /// Drops <style>, <script>, and <head> block contents (not just their
     /// tags), turns block-level closing tags into newlines, strips the
@@ -203,26 +229,12 @@ public enum MIMEParser {
     private static func stripHTML(_ html: String) -> String {
         var s = html
 
-        let dropBlocks = [
-            #"<style\b[^>]*>[\s\S]*?</style>"#,
-            #"<script\b[^>]*>[\s\S]*?</script>"#,
-            #"<head\b[^>]*>[\s\S]*?</head>"#,
-            #"<!--[\s\S]*?-->"#,
-        ]
-        for pattern in dropBlocks {
-            s = replaceRegex(in: s, pattern: pattern, with: "")
+        for re in dropBlockRegexes {
+            s = replaceRegex(in: s, regex: re, with: "")
         }
 
-        let toNewline = [
-            #"<br\s*/?>"#,
-            #"</p\s*>"#,
-            #"</div\s*>"#,
-            #"</h[1-6]\s*>"#,
-            #"</li\s*>"#,
-            #"</tr\s*>"#,
-        ]
-        for pattern in toNewline {
-            s = replaceRegex(in: s, pattern: pattern, with: "\n")
+        for re in toNewlineRegexes {
+            s = replaceRegex(in: s, regex: re, with: "\n")
         }
 
         var out = ""
@@ -309,10 +321,7 @@ public enum MIMEParser {
         return out
     }
 
-    private static func replaceRegex(in s: String, pattern: String, with template: String) -> String {
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return s
-        }
+    private static func replaceRegex(in s: String, regex re: NSRegularExpression, with template: String) -> String {
         let ns = s as NSString
         return re.stringByReplacingMatches(
             in: s,
