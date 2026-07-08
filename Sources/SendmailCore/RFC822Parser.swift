@@ -42,6 +42,12 @@ public enum RFC822Parser {
 
     private static func splitHeadersAndBody(_ data: Data) -> (Data, Data) {
         // Search for the first blank line. Accept LF/LF, CR/LF/CR/LF, mixed.
+        // This materializes the whole message into a [UInt8] rather than
+        // scanning Data subranges. That copy is intentional-for-simplicity: the
+        // binary processes one short-lived message per invocation, so the extra
+        // allocation is negligible, and index-based [UInt8] scanning keeps the
+        // CRLF-boundary logic (which is fragile -- see the crlf_separator test)
+        // easy to read. Not worth a Data-subrange rewrite.
         let bytes = [UInt8](data)
         var i = 0
         while i < bytes.count {
