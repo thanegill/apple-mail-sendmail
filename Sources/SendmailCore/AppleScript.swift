@@ -37,6 +37,15 @@ public enum AppleScript {
     /// Wraps the result in double quotes. Newlines, tabs, and returns are
     /// escaped so the literal stays single-line; AppleScript decodes `\n`,
     /// `\r`, `\t` per the language reference.
+    ///
+    /// U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) can survive
+    /// RFC 2047 decoding into a Subject or display name. It is unverified
+    /// whether NSAppleScript's parser treats them as line terminators, so we
+    /// defensively map them to an escaped `\n` -- the same representation as a
+    /// literal newline -- rather than pass the raw code point through where it
+    /// could split the double-quoted literal. Other C0 control characters
+    /// (except the `\n`/`\r`/`\t` already handled above) are mapped to a space
+    /// for the same reason; this is cheap and keeps normal ASCII unchanged.
     public static func quote(_ s: String) -> String {
         var out = "\""
         for ch in s {
@@ -46,7 +55,18 @@ public enum AppleScript {
             case "\n": out += "\\n"
             case "\r": out += "\\r"
             case "\t": out += "\\t"
-            default: out.append(ch)
+            case "\u{2028}", "\u{2029}": out += "\\n"
+            default:
+                // Map any remaining C0 control (U+0000..U+001F) to a space so
+                // it can never terminate or corrupt the literal. Printable
+                // ASCII and all other Unicode pass through verbatim.
+                if let scalar = ch.unicodeScalars.first,
+                   ch.unicodeScalars.count == 1,
+                   scalar.value < 0x20 {
+                    out += " "
+                } else {
+                    out.append(ch)
+                }
             }
         }
         out += "\""
