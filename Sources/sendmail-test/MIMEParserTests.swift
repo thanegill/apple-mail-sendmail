@@ -244,6 +244,43 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectEqual(msg.body, "one\ntwo\nthree")
     },
 
+    TestCase(name: "inline_related_image_not_promoted_to_attachment") {
+        // Issue #17: a multipart/related inline image (Content-Disposition:
+        // inline, image/png, no filename, referenced by CID) must NOT become a
+        // phantom attachment. A genuine attachment sibling (disposition
+        // attachment with a filename) still must.
+        let input = """
+        Subject: related
+        MIME-Version: 1.0
+        Content-Type: multipart/related; boundary="REL"
+
+        --REL
+        Content-Type: text/html; charset=utf-8
+
+        <html><body><p>see <img src="cid:img1"></p></body></html>
+        --REL
+        Content-Type: image/png
+        Content-Disposition: inline
+        Content-ID: <img1>
+        Content-Transfer-Encoding: base64
+
+        SGVsbG8K
+        --REL
+        Content-Type: application/pdf; name="x.pdf"
+        Content-Disposition: attachment; filename="x.pdf"
+        Content-Transfer-Encoding: base64
+
+        SGVsbG8K
+        --REL--
+        """
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expect(msg.attachments.count == 1, "inline image must not be promoted to an attachment")
+        try expectEqual(msg.attachments[0].filename, "x.pdf")
+        try expectEqual(msg.attachments[0].contentType, "application/pdf")
+        try expectNotNil(msg.htmlBody)
+    },
+
     TestCase(name: "multipart_alternative_picks_text_plain") {
         let input = """
         Subject: alt
