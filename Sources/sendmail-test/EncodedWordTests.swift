@@ -39,4 +39,22 @@ let encodedWordTests = TestSuite(name: "EncodedWord", cases: [
             "prefix middle suffix"
         )
     },
+
+    // Issue #11: windows-1252 bytes 0x80-0x9F carry printable glyphs (curly
+    // quotes, euro sign), not the C1 control chars ISO-8859-1 has there.
+    TestCase(name: "windows_1252_curly_quotes") {
+        // 0x93 -> U+201C (left double quote), 0x94 -> U+201D (right double quote).
+        try expectEqual(
+            EncodedWord.decode("=?windows-1252?Q?=93hi=94?="),
+            "\u{201C}hi\u{201D}"
+        )
+    },
+
+    TestCase(name: "windows_1252_euro_sign") {
+        // 0x80 -> U+20AC (euro sign) in cp1252; a C1 control char in Latin-1.
+        try expectEqual(
+            EncodedWord.decode("=?cp1252?Q?=80?="),
+            "\u{20AC}"
+        )
+    },
 ])
