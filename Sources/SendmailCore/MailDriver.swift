@@ -209,10 +209,8 @@ public enum MailDriver {
     // MARK: - Classic script (plain-text path)
 
     private static func composeSender(name: String?, address: String?) -> String? {
-        if let addr = address, let n = name, !n.isEmpty {
-            return "\(n) <\(addr)>"
-        }
-        return address
+        guard let addr = address else { return nil }
+        return formatMailbox(name: name, address: addr)
     }
 
     private static func buildClassicScript(
