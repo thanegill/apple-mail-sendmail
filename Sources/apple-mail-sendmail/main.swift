@@ -27,12 +27,31 @@ do {
 var message = MIMEParser.parse(raw)
 
 if options.readRecipientsFromHeaders {
-    // -t: recipients come from headers; argv positionals are additive.
+    // -t: recipients come from headers; argv positionals are additive, but
+    // deduplicated. We skip any argv address already present among the
+    // header-derived To/Cc/Bcc (case-insensitive on the address) so a caller
+    // that passes an address it also listed in a header does not produce a
+    // duplicate recipient.
+    //
+    // NOTE: real sendmail's -t is SUBTRACTIVE, not additive: argv addresses
+    // are REMOVED from the header recipient list (they name addresses NOT to
+    // deliver to). We deliberately keep the additive-with-dedup behavior; the
+    // subtractive semantics are a larger, separately-decided change.
+    var seen = Set(
+        (message.to + message.cc + message.bcc).map { $0.address.lowercased() }
+    )
     for r in options.recipients {
+        let key = r.lowercased()
+        if seen.contains(key) { continue }
+        seen.insert(key)
         message.to.append(ParsedAddress(displayName: nil, address: r))
     }
 } else {
-    // Positional recipients override headers (legacy sendmail behavior).
+    // No -t: positional args are the envelope recipients, exactly like
+    // sendmail -- argv fully replaces the header-derived To/Cc/Bcc. Header
+    // Cc/Bcc are display-only and are NOT delivered to without -t (real
+    // sendmail ignores them for delivery too); a caller that wants header
+    // recipients honored should use -t.
     if !options.recipients.isEmpty {
         message.to = options.recipients.map { ParsedAddress(displayName: nil, address: $0) }
         message.cc = []
