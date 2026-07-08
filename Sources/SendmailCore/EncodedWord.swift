@@ -94,9 +94,19 @@ public enum EncodedWord {
         let cs = charset.lowercased()
         switch cs {
         case "utf-8", "utf8", "us-ascii", "ascii":
-            return String(data: bytes, encoding: .utf8)
-        case "iso-8859-1", "latin-1", "latin1", "windows-1252", "cp1252":
+            // Strict UTF-8 decode returns nil on ANY invalid byte, and callers
+            // coalesce nil to "" -- which silently drops the whole subject/body
+            // for a mislabeled sender with a stray high byte. Fall back to a
+            // lossy decode (substitutes U+FFFD) so we never return nil here.
+            if let s = String(data: bytes, encoding: .utf8) { return s }
+            return String(decoding: bytes, as: UTF8.self)
+        case "iso-8859-1", "latin-1", "latin1":
             return String(data: bytes, encoding: .isoLatin1)
+        case "windows-1252", "cp1252":
+            // Windows-1252 differs from ISO-8859-1 in 0x80-0x9F: cp1252 places
+            // curly quotes, em-dash, euro sign, etc. there, where Latin-1 has
+            // C1 control chars. Decode with the correct table.
+            return String(data: bytes, encoding: .windowsCP1252)
         default:
             // Try CFString lookup as a last resort.
             let encoding = CFStringConvertIANACharSetNameToEncoding(cs as CFString)
@@ -104,7 +114,9 @@ public enum EncodedWord {
                 let nsEnc = CFStringConvertEncodingToNSStringEncoding(encoding)
                 return String(data: bytes, encoding: String.Encoding(rawValue: nsEnc))
             }
-            return String(data: bytes, encoding: .utf8)
+            // Same non-nil-preserving fallback as the utf-8 case: never drop the
+            // whole value on an unknown or undecodable charset.
+            return String(decoding: bytes, as: UTF8.self)
         }
     }
 }
