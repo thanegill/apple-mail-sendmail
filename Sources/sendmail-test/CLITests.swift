@@ -133,6 +133,14 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expect(h.contains("SENDMAIL_DRY_RUN=1"), "missing SENDMAIL_DRY_RUN env var")
     },
 
+    TestCase(name: "tempfail_exit_code_is_75") {
+        // main.swift exits EX_TEMPFAIL when TempDir() creation fails so an MTA
+        // retries a transient temp-dir failure instead of bouncing it as a
+        // permanent EX_OSERR (71). Guard the constant value.
+        try expectEqual(ExitCode.tempFail.rawValue, 75)
+        try expectEqual(ExitCode.osErr.rawValue, 71)
+    },
+
     TestCase(name: "help_text_wraps_long_descriptions") {
         // Two-column descriptions wrap so column-2 lines stay <= 80. The
         // single-line USAGE synopsis is exempt from wrapping (swift-argument-
