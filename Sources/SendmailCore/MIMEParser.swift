@@ -181,8 +181,8 @@ public enum MIMEParser {
                     i += 3; continue // soft break "=\r\n"
                 }
                 if i + 2 < bytes.count {
-                    let hi = hexDigit(bytes[i + 1])
-                    let lo = hexDigit(bytes[i + 2])
+                    let hi = bytes[i + 1].hexNibble
+                    let lo = bytes[i + 2].hexNibble
                     if let hi = hi, let lo = lo {
                         out.append(UInt8(hi * 16 + lo))
                         i += 3
@@ -194,15 +194,6 @@ public enum MIMEParser {
             i += 1
         }
         return out
-    }
-
-    private static func hexDigit(_ b: UInt8) -> Int? {
-        switch b {
-        case 0x30...0x39: return Int(b - 0x30)
-        case 0x41...0x46: return Int(b - 0x41 + 10)
-        case 0x61...0x66: return Int(b - 0x61 + 10)
-        default: return nil
-        }
     }
 
     /// Tag-strip an HTML body for a tolerable plain-text fallback.

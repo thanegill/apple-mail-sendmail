@@ -22,6 +22,12 @@ let encodedWordTests = TestSuite(name: "EncodedWord", cases: [
         try expectEqual(EncodedWord.decode("=?UTF-8?Q?caf=C3=A9?="), "café")
     },
 
+    TestCase(name: "q_encoding_lowercase_hex_byte") {
+        // The shared hexNibble decoder must accept lowercase hex digits in the
+        // Q-encoding path; =c3=a9 decodes to the same "é" as uppercase.
+        try expectEqual(EncodedWord.decode("=?UTF-8?Q?caf=c3=a9?="), "café")
+    },
+
     TestCase(name: "iso_8859_1_q_encoding") {
         try expectEqual(EncodedWord.decode("=?ISO-8859-1?Q?caf=E9?="), "café")
     },
