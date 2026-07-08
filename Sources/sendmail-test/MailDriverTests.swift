@@ -234,6 +234,45 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
+    TestCase(name: "edit_draft_script_verifies_send_completed") {
+        // #13: on the --send path the emitted script must verify the compose
+        // window closed (id gone) after clicking Send, and error otherwise so
+        // the binary exits non-zero rather than falsely reporting success.
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var opts = Options()
+            opts.send = true
+            var msg = ParsedMessage()
+            msg.subject = "verify-send"
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
+            // The Send click comes first...
+            try expect(script.contains("click menu item \"Send\" of menu \"Message\" of menu bar 1"))
+            // ...then a gone-poll on composeID that errors on timeout.
+            try expect(script.contains("set composeIDGone to false"))
+            try expect(script.contains("if currentIDs does not contain composeID then"))
+            try expect(script.contains("if composeIDGone is false then error \"Send did not complete: the compose window is still open after 5s\""))
+            // Ordering: verification must come after the Send click.
+            let clickIdx = script.range(of: "click menu item \"Send\"")!.lowerBound
+            let verifyIdx = script.range(of: "set composeIDGone to false")!.lowerBound
+            try expect(clickIdx < verifyIdx, "verification must follow the Send click")
+        }
+    },
+
+    TestCase(name: "edit_draft_script_no_send_verification_for_drafts") {
+        // #13: the draft path must NOT emit the send-completion verification.
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.subject = "draft-no-verify"
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(!script.contains("composeIDGone"), "draft path must not verify a send that never happens")
+        }
+    },
+
     TestCase(name: "edit_draft_script_omits_send_click_for_drafts") {
         try withTempDir { tmp in
             let recorder = Recorder()
