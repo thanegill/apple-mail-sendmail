@@ -106,12 +106,23 @@ public enum AddressParser {
 
         if let lt = s.lastIndex(of: "<"), let gt = s.lastIndex(of: ">"), lt < gt {
             let addr = String(s[s.index(after: lt)..<gt]).trimmingCharacters(in: .whitespaces)
-            var name = String(s[..<lt]).trimmingCharacters(in: .whitespaces)
-            if name.hasPrefix("\"") && name.hasSuffix("\"") && name.count >= 2 {
-                name = String(name.dropFirst().dropLast())
+            if !addr.isEmpty {
+                var name = String(s[..<lt]).trimmingCharacters(in: .whitespaces)
+                if name.hasPrefix("\"") && name.hasSuffix("\"") && name.count >= 2 {
+                    name = String(name.dropFirst().dropLast())
+                }
+                let decoded = EncodedWord.decode(name)
+                return ParsedAddress(displayName: decoded.isEmpty ? nil : decoded, address: addr)
             }
-            let decoded = EncodedWord.decode(name)
-            return ParsedAddress(displayName: decoded.isEmpty ? nil : decoded, address: addr)
+            // Empty angle-bracket pair (e.g. the trailing `<>` in `<a@x> <>`).
+            // Fall back to the token with angle brackets removed as the
+            // address; never emit a ParsedAddress with an empty address.
+            let stripped = s
+                .replacingOccurrences(of: "<", with: "")
+                .replacingOccurrences(of: ">", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            if stripped.isEmpty { return nil }
+            return ParsedAddress(displayName: nil, address: stripped)
         }
         return ParsedAddress(displayName: nil, address: s)
     }

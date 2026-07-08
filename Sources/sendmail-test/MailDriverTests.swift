@@ -147,6 +147,22 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
+    TestCase(name: "subject_with_line_separator_does_not_split_literal") {
+        // AppleScript.quote must not pass U+2028 (LINE SEPARATOR) or U+2029
+        // (PARAGRAPH SEPARATOR) through raw -- they could split the
+        // double-quoted literal. They are mapped to an escaped \n.
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.subject = "before\u{2028}after\u{2029}end"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(!script.contains("\u{2028}"), "raw U+2028 must not appear in the emitted literal")
+            try expect(!script.contains("\u{2029}"), "raw U+2029 must not appear in the emitted literal")
+            try expect(script.contains("subject:\"before\\nafter\\nend\""))
+        }
+    },
+
     TestCase(name: "no_attachments_means_no_attachment_block") {
         try withTempDir { tmp in
             let recorder = Recorder()
