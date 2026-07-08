@@ -138,7 +138,7 @@ public enum CLI {
         print(helpText(programName: programName))
     }
 
-    /// Build the help text. Pure function for testability — `printHelp` just
+    /// Build the help text. Pure function for testability -- `printHelp` just
     /// writes the result to stdout. Mirrors the section structure used by
     /// swift-argument-parser (OVERVIEW / USAGE / OPTIONS / ENVIRONMENT /
     /// LEGACY FLAGS) without taking the dependency.
