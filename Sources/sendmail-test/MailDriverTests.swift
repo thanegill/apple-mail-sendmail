@@ -330,6 +330,60 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
+    TestCase(name: "edit_draft_html_with_bcc_warns_on_stderr") {
+        // #12: the HTML edit-draft path emits a one-line stderr warning when a
+        // Bcc recipient is present, because Send Again's blind-Bcc behavior is
+        // unverified. Capture real stderr via a pipe over fd 2.
+        try withTempDir { tmp in
+            var msg = ParsedMessage()
+            msg.subject = "bcc-warn"
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.bcc = [ParsedAddress(displayName: nil, address: "secret@x")]
+            msg.htmlBody = "<p>rich</p>"
+
+            let pipe = Pipe()
+            let savedStderr = dup(2)
+            fflush(stderr)
+            dup2(pipe.fileHandleForWriting.fileDescriptor, 2)
+
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: { _ in })
+
+            fflush(stderr)
+            dup2(savedStderr, 2)
+            close(savedStderr)
+            try? pipe.fileHandleForWriting.close()
+            let captured = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
+            try expect(script.contains("keystroke \"d\""), "still takes the edit-draft path")
+            try expect(captured.contains("warning: Bcc on the HTML path relies on Mail's Send Again keeping it blind (unverified)"), "must warn on stderr for HTML+bcc")
+        }
+    },
+
+    TestCase(name: "edit_draft_html_without_bcc_does_not_warn") {
+        // #12: no Bcc means no warning on the HTML path.
+        try withTempDir { tmp in
+            var msg = ParsedMessage()
+            msg.subject = "no-bcc"
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>rich</p>"
+
+            let pipe = Pipe()
+            let savedStderr = dup(2)
+            fflush(stderr)
+            dup2(pipe.fileHandleForWriting.fileDescriptor, 2)
+
+            _ = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: { _ in })
+
+            fflush(stderr)
+            dup2(savedStderr, 2)
+            close(savedStderr)
+            try? pipe.fileHandleForWriting.close()
+            let captured = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
+            try expect(!captured.contains("warning: Bcc on the HTML path"), "no bcc means no warning")
+        }
+    },
+
     TestCase(name: "edit_draft_script_uses_shared_poll_and_frontmost_helpers") {
         // #20: both window polls emit the same id-diff loop shape, and both
         // frontmost actions share the activate/delay/set-frontmost preamble.

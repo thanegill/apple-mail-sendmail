@@ -41,6 +41,16 @@ public enum EmlBuilder {
             out.append(("Cc", joinAddresses(finalRecipients.cc)))
         }
         if !finalRecipients.bcc.isEmpty {
+            // RISK (unverified): this serializes Bcc as a plain rfc822 header
+            // into the .eml that Mail's "Send Again" (Cmd-Shift-D) reopens.
+            // Whether Mail keeps this recipient BLIND -- stripping the Bcc
+            // header from the wire while still delivering to them -- has not
+            // been empirically confirmed for the Send Again compose. The
+            // classic AppleScript path uses Mail's dedicated `bcc recipient`
+            // objects, which ARE definitely blind. If a leaked Bcc is a
+            // concern, verify Send Again's behavior via View > Message > Raw
+            // Source on a test send before relying on this path. MailDriver
+            // emits a matching stderr warning when this path runs with a Bcc.
             out.append(("Bcc", joinAddresses(finalRecipients.bcc)))
         }
         if let addr = options.fromAddress {

@@ -82,6 +82,18 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
         try expect(s.contains("\r\n\r\nbody line one"), "header/body separator must be a blank CRLF line")
     },
 
+    TestCase(name: "bcc_is_serialized_as_plain_header") {
+        // #12: Bcc goes into the .eml as a plain header (blind-keeping by
+        // Mail's Send Again is unverified; see the RISK comment in EmlBuilder
+        // and the stderr warning MailDriver emits on this path).
+        var msg = ParsedMessage()
+        msg.to = [ParsedAddress(displayName: nil, address: "a@b")]
+        msg.bcc = [ParsedAddress(displayName: nil, address: "secret@x")]
+        let out = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: msg, options: Options())
+        let s = String(data: out, encoding: .utf8) ?? ""
+        try expect(s.contains("Bcc: secret@x"))
+    },
+
     TestCase(name: "shared_mailbox_formatting_matches_classic_sender") {
         // #19: the classic path's `sender:` property and the .eml `From`
         // header both format via the single shared `formatMailbox` helper, so

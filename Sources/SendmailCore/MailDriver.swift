@@ -27,6 +27,12 @@ public enum MailDriver {
         let sender = composeSender(name: options.fromName, address: options.fromAddress)
 
         if shouldUseEditDraft(msg) {
+            // Bcc on the edit-draft path is serialized as a plain header into
+            // the .eml (see EmlBuilder). Whether Mail's Send Again keeps it
+            // blind is unverified, so warn once when it is actually in play.
+            if !msg.bcc.isEmpty {
+                FileHandle.standardError.write(Data("warning: Bcc on the HTML path relies on Mail's Send Again keeping it blind (unverified); verify before relying on it.\n".utf8))
+            }
             let emlURL = try tmp.write(emlBytes, name: "compose-\(UUID().uuidString).eml")
             let script = buildEditDraftScript(
                 emlPath: emlURL.path,
