@@ -30,7 +30,6 @@ public enum MailDriver {
             let emlURL = try tmp.write(emlBytes, name: "compose-\(UUID().uuidString).eml")
             let script = buildEditDraftScript(
                 emlPath: emlURL.path,
-                subject: msg.subject,
                 send: options.send
             )
             try run(script)
@@ -71,26 +70,29 @@ public enum MailDriver {
     // MARK: - Edit-draft script (HTML path)
 
     /// Emit AppleScript that:
-    /// 1. Probes Accessibility (`tell System Events to get name of first
-    ///    process` — fails with -1719 when the controlling process lacks
-    ///    Accessibility permission). Re-throws with a clear remediation
+    /// 1. Probes Accessibility (reads a UI element of another process, which
+    ///    is Accessibility-gated and fails with -1719 when the controlling
+    ///    process lacks the grant). Re-throws with a clear remediation
     ///    message so the binary surfaces a useful error.
-    /// 2. `open -a Mail <eml>` via `do shell script` so Launch Services opens
+    /// 2. Launches Mail and snapshots its existing window ids, so any
+    ///    auto-restored windows are counted as "before".
+    /// 3. `open -a Mail <eml>` via `do shell script` so Launch Services opens
     ///    the .eml as a Mail viewer window.
-    /// 3. Polls Mail for a window matching the subject (the rfc822 Subject
-    ///    becomes the viewer window's title).
-    /// 4. Brings that viewer to front and sends Cmd-Shift-D via System
-    ///    Events. Mail's "Send Again" command converts the viewer into a
-    ///    new editable compose.
-    /// 5. If `send`, waits for the compose to appear (a second window with
-    ///    the same name) and clicks `Message > Send` via System Events.
-    /// 6. Closes the leftover viewer (best effort).
+    /// 4. Polls for the viewer as the one window id that wasn't present
+    ///    before the open — matching by id, never by title, so it works for
+    ///    messages with no Subject, duplicate subjects, or titles Mail
+    ///    rewrites.
+    /// 5. Snapshots ids again, then keystrokes Cmd-Shift-D (Send Again) to
+    ///    the frontmost (freshly opened) viewer. Mail converts it into a new
+    ///    editable compose window.
+    /// 6. Polls for the compose as the one new window id since the keystroke.
+    /// 7. If `send`, clicks `Message > Send` via System Events.
+    /// 8. Closes the leftover viewer by its exact id (closing by title could
+    ///    hit the compose window, which carries the same subject).
     static func buildEditDraftScript(
         emlPath: String,
-        subject: String,
         send: Bool
     ) -> String {
-        let subj = AppleScript.quote(subject)
         let pathLit = AppleScript.quote(emlPath)
         var lines: [String] = []
         lines.append("use scripting additions")
@@ -110,27 +112,38 @@ public enum MailDriver {
         lines.append("    end if")
         lines.append("end try")
         lines.append("")
-        // 2. Open the .eml. Use POSIX file → quoted form to dodge shell injection.
+        // 2. Launch Mail and let auto-restored windows settle, then snapshot
+        //    their ids. Anything present now is "before"; the eml viewer will
+        //    be the only new id after the open. `launch` is a no-op if Mail
+        //    is already running.
+        lines.append("tell application \"Mail\" to launch")
+        lines.append("delay 0.5")
+        lines.append("tell application \"Mail\" to set beforeOpenIDs to id of every window")
+        lines.append("")
+        // 3. Open the .eml. Use POSIX file → quoted form to dodge shell injection.
         lines.append("do shell script \"open -a Mail \" & quoted form of \(pathLit)")
         lines.append("")
-        // 3. Poll for the viewer window (subject == window name).
-        lines.append("set subjLine to \(subj)")
-        lines.append("set viewerW to missing value")
+        // 4. Poll for the viewer: the first window id not present before open.
+        lines.append("set viewerID to missing value")
         lines.append("set deadline to (current date) + 5")
-        lines.append("repeat while (current date) < deadline and viewerW is missing value")
+        lines.append("repeat while (current date) < deadline and viewerID is missing value")
         lines.append("    tell application \"Mail\"")
-        lines.append("        repeat with w in windows")
-        lines.append("            if (name of w) is subjLine then")
-        lines.append("                set viewerW to w")
+        lines.append("        repeat with wid in (id of every window)")
+        lines.append("            if beforeOpenIDs does not contain (contents of wid) then")
+        lines.append("                set viewerID to (contents of wid)")
         lines.append("                exit repeat")
         lines.append("            end if")
         lines.append("        end repeat")
         lines.append("    end tell")
-        lines.append("    if viewerW is missing value then delay 0.1")
+        lines.append("    if viewerID is missing value then delay 0.1")
         lines.append("end repeat")
-        lines.append("if viewerW is missing value then error \"Mail did not open a viewer for the eml within 5s\"")
+        lines.append("if viewerID is missing value then error \"Mail did not open a viewer for the eml within 5s\"")
         lines.append("")
-        // 4. Bring viewer to front and keystroke Cmd-Shift-D (Send Again).
+        // 5. Snapshot ids again (now including the viewer) so we can detect
+        //    the compose window Send Again creates. Then bring Mail to front
+        //    and keystroke Cmd-Shift-D — the viewer we just opened is the
+        //    frontmost window, so the keystroke targets it.
+        lines.append("tell application \"Mail\" to set beforeComposeIDs to id of every window")
         lines.append("tell application \"Mail\" to activate")
         lines.append("delay 0.2")
         lines.append("tell application \"System Events\"")
@@ -140,23 +153,25 @@ public enum MailDriver {
         lines.append("    end tell")
         lines.append("end tell")
         lines.append("")
-        // 5. Poll for the compose window (two windows with matching name).
-        lines.append("set composeAppeared to false")
+        // 6. Poll for the compose: the first window id not present before the
+        //    keystroke.
+        lines.append("set composeID to missing value")
         lines.append("set deadline to (current date) + 5")
-        lines.append("repeat while (current date) < deadline and composeAppeared is false")
+        lines.append("repeat while (current date) < deadline and composeID is missing value")
         lines.append("    tell application \"Mail\"")
-        lines.append("        set matchCount to 0")
-        lines.append("        repeat with w in windows")
-        lines.append("            if (name of w) is subjLine then set matchCount to matchCount + 1")
+        lines.append("        repeat with wid in (id of every window)")
+        lines.append("            if beforeComposeIDs does not contain (contents of wid) then")
+        lines.append("                set composeID to (contents of wid)")
+        lines.append("                exit repeat")
+        lines.append("            end if")
         lines.append("        end repeat")
         lines.append("    end tell")
-        lines.append("    if matchCount ≥ 2 then set composeAppeared to true")
-        lines.append("    if not composeAppeared then delay 0.1")
+        lines.append("    if composeID is missing value then delay 0.1")
         lines.append("end repeat")
-        lines.append("if not composeAppeared then error \"Compose window did not appear after Send Again within 5s\"")
+        lines.append("if composeID is missing value then error \"Compose window did not appear after Send Again within 5s\"")
         lines.append("")
         if send {
-            // 6. Click Message > Send via System Events.
+            // 7. Click Message > Send via System Events.
             lines.append("tell application \"Mail\" to activate")
             lines.append("delay 0.2")
             lines.append("tell application \"System Events\"")
@@ -167,17 +182,11 @@ public enum MailDriver {
             lines.append("end tell")
             lines.append("")
         }
-        // 7. Close the leftover viewer. Iterate windows by name and close the
-        //    first match — by z-order that is the older viewer, since the new
-        //    compose is the frontmost matching window.
+        // 8. Close the leftover viewer by its exact id. Closing by title could
+        //    hit the compose window, which shares the subject.
         lines.append("tell application \"Mail\"")
         lines.append("    try")
-        lines.append("        repeat with w in windows")
-        lines.append("            if (name of w) is subjLine then")
-        lines.append("                close w saving no")
-        lines.append("                exit repeat")
-        lines.append("            end if")
-        lines.append("        end repeat")
+        lines.append("        close (first window whose id is viewerID) saving no")
         lines.append("    end try")
         lines.append("end tell")
         return lines.joined(separator: "\n")
