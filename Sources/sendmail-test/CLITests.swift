@@ -59,6 +59,32 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expectEqual(opts.recipients, ["user@host"])
     },
 
+    TestCase(name: "dashB_consumes_separate_value_not_recipient") {
+        // -B takes a space-separated value (body type). 8BITMIME is the value,
+        // not a positional recipient.
+        let opts = try CLI.parse(["-B", "8BITMIME", "user@x.com"], env: [:])
+        try expectEqual(opts.recipients, ["user@x.com"])
+    },
+
+    TestCase(name: "dashN_consumes_separate_value_not_recipient") {
+        // -N takes a space-separated value (DSN notify).
+        let opts = try CLI.parse(["-N", "never", "user@x.com"], env: [:])
+        try expectEqual(opts.recipients, ["user@x.com"])
+    },
+
+    TestCase(name: "dashv_takes_no_value") {
+        // -v is verbose: it consumes no argv, so the following token is a
+        // recipient.
+        let opts = try CLI.parse(["-v", "user@x.com"], env: [:])
+        try expectEqual(opts.recipients, ["user@x.com"])
+    },
+
+    TestCase(name: "attached_only_flags_still_parse") {
+        // -oi and -bm carry attached values only and must not consume argv.
+        let opts = try CLI.parse(["-oi", "-bm", "user@x.com"], env: [:])
+        try expectEqual(opts.recipients, ["user@x.com"])
+    },
+
     TestCase(name: "double_dash_ends_options") {
         let opts = try CLI.parse(["--", "-not-a-flag@x.com"], env: [:])
         try expectEqual(opts.recipients, ["-not-a-flag@x.com"])
