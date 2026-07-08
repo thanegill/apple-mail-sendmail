@@ -15,6 +15,14 @@ public enum CLIError: Error {
 }
 
 public enum CLI {
+    // Legacy short flags whose value may be attached (-Bmime) OR the next argv
+    // (-B 8BITMIME). When the value isn't attached, consume the following argv so
+    // it isn't misparsed as a positional recipient. -O and -C follow the same
+    // rule but are handled explicitly (-O shares the value-swallow branch below;
+    // -C has its own case). -v (verbose) and -n (no aliasing) take no value and
+    // are deliberately absent here.
+    private static let separateValueFlags: Set<Character> = ["O", "B", "N", "R", "X"]
+
     public static func parse(_ argv: [String], env: [String: String], programName: String = "apple-mail-sendmail") throws -> Options {
         var opts = Options()
         if env["SENDMAIL_SEND"] == "1" {
@@ -96,10 +104,17 @@ public enum CLI {
                     }
                     j = chars.count
                 case "o", "b", "O", "q", "v", "N", "R", "X", "M", "n", "B":
-                    // Swallow the rest of this arg (e.g. -oi, -bm, -OFoo=bar, -q30m, -Bmime).
-                    // For -O with empty rest, also swallow the next argv (config form).
+                    // Legacy flags accepted for sendmail compatibility. Some take a
+                    // value that in standard sendmail may be SPACE-SEPARATED from the
+                    // flag (e.g. -B 8BITMIME, -N never, -R hdrs, -X logfile); if the
+                    // value isn't attached to this token, it's the next argv. Consume
+                    // it so it isn't misparsed as a positional recipient.
+                    //
+                    // No-value flags (-v verbose, -n no-aliasing) never consume argv.
+                    // Attached-only flags (-oi, -bm, -q30m, -Mx=y) just swallow the
+                    // rest of this token.
                     let rest = String(chars[(j + 1)...])
-                    if c == "O" && rest.isEmpty && i < argv.count {
+                    if separateValueFlags.contains(c) && rest.isEmpty && i < argv.count {
                         i += 1
                     }
                     j = chars.count
