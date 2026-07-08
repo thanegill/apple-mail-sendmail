@@ -57,4 +57,14 @@ let encodedWordTests = TestSuite(name: "EncodedWord", cases: [
             "\u{20AC}"
         )
     },
+
+    // Issue #15: a single invalid UTF-8 byte must not blank the whole value.
+    // Strict decode returns nil (coalesced to "" by callers); the lossy fallback
+    // substitutes U+FFFD and preserves the surrounding text.
+    TestCase(name: "utf8_invalid_byte_falls_back_lossy") {
+        // 0xA9 is a stray high byte, invalid as standalone UTF-8.
+        let decoded = EncodedWord.decode("=?UTF-8?Q?caf=A9?=")
+        try expect(!decoded.isEmpty, "invalid-byte utf-8 decode should not be empty")
+        try expect(decoded.hasPrefix("caf"), "surrounding ascii text should survive")
+    },
 ])
