@@ -84,7 +84,7 @@ Nixpkgs Swift 5.10 stdlib dylibs are built for macOS 14.0. Lower floors produce 
 
 ### HTML rendering uses `.eml` + Cmd-Shift-D ("Send Again"), not RTF
 
-Mail's compose body is a WKWebView. Its AppleScript dictionary `content` setter accepts only `«class RTF »` and plain-text byte formats — every other coercion class (HTML, RTFD even with valid bytes, WebArchive, the deprecated `html content` property, AppKit-bridge NSAttributedString) is rejected with -1700. The full 26-class empirical sweep lives in `ATTEMPTS.md` on master.
+Mail's compose body is a WKWebView. Its AppleScript dictionary `content` setter accepts only `«class RTF »` and plain-text byte formats — every other coercion class (HTML, RTFD even with valid bytes, WebArchive, the deprecated `html content` property, AppKit-bridge NSAttributedString) is rejected with -1700. The full 26-class empirical sweep is recorded in the README's "Alternatives considered" section. (An `ATTEMPTS.md` with the same material exists only on the archived `rich-text-suite-build` branch, not on master.)
 
 The viable path for full HTML fidelity is to **bypass the dictionary entirely**:
 
