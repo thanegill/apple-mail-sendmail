@@ -256,6 +256,51 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
+    TestCase(name: "edit_draft_path_carries_attachment_through_eml") {
+        // A message with an HTML body AND an attachment routes to the
+        // edit-draft path, which bypasses the classic `make new attachment`
+        // code -- the attachment rides inside the raw .eml instead. Verified
+        // live (2026-07-09): note7.txt arrived attached. This guards that the
+        // .eml handed to Mail still carries the attachment part and that the
+        // classic attach code is not emitted for HTML messages.
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.subject = "html-attach"
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>body</p>"
+            msg.attachments = [
+                Attachment(filename: "note7.txt", contentType: "text/plain", data: Data("hi\n".utf8))
+            ]
+            let emlText = "To: u@h\r\n"
+                + "Subject: html-attach\r\n"
+                + "MIME-Version: 1.0\r\n"
+                + "Content-Type: multipart/mixed; boundary=\"B\"\r\n"
+                + "\r\n"
+                + "--B\r\n"
+                + "Content-Type: text/html; charset=utf-8\r\n"
+                + "\r\n"
+                + "<p>body</p>\r\n"
+                + "--B\r\n"
+                + "Content-Type: text/plain; name=\"note7.txt\"\r\n"
+                + "Content-Disposition: attachment; filename=\"note7.txt\"\r\n"
+                + "\r\n"
+                + "hi\r\n"
+                + "--B--\r\n"
+            let script = try MailDriver.deliver(msg, emlBytes: Data(emlText.utf8), options: Options(), tmp: tmp, runner: recorder.run)
+            // Routes to edit-draft, not the classic attachment code.
+            try expect(script.contains("keystroke \"d\" using {shift down, command down}"), "html+attachment must take the edit-draft path")
+            try expect(!script.contains("make new attachment"), "classic attachment code is bypassed for HTML messages")
+            // The attachment survives via the .eml pass-through.
+            let emlFiles = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+                .filter { $0.hasSuffix(".eml") }
+            try expectEqual(emlFiles.count, 1)
+            let written = String(data: try Data(contentsOf: tmp.url.appendingPathComponent(emlFiles[0])), encoding: .utf8) ?? ""
+            try expect(written.contains("Content-Disposition: attachment"), "attachment disposition must survive into the .eml")
+            try expect(written.contains("filename=\"note7.txt\""), "the .eml handed to Mail must still carry the attachment part")
+        }
+    },
+
     TestCase(name: "edit_draft_script_clicks_message_send_when_send_flag") {
         try withTempDir { tmp in
             let recorder = Recorder()
