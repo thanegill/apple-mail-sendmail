@@ -219,6 +219,26 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
+    TestCase(name: "edit_draft_poll_materializes_window_id_list_before_iterating") {
+        // Regression: `repeat with wid in (id of every window)` keeps the id
+        // list as a live Mail reference, so `item i of id of every window`
+        // is sent back to Mail and fails with -1700 ("can't make ... into
+        // type specifier"), aborting right after the .eml opens (the viewer
+        // just sits there, never converted via Send Again). The poll must
+        // assign the list to a plain variable first, then iterate that.
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.subject = "poll-coercion"
+            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            msg.htmlBody = "<p>rich</p>"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("set winIDs to id of every window"), "poll must materialize the id list to a variable")
+            try expect(script.contains("repeat with wid in winIDs"), "poll must iterate the materialized list")
+            try expect(!script.contains("repeat with wid in (id of every window)"), "must not iterate the live Mail reference (-1700)")
+        }
+    },
+
     TestCase(name: "edit_draft_script_writes_eml_with_html_body") {
         try withTempDir { tmp in
             let recorder = Recorder()
@@ -361,8 +381,12 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             try expect(script.contains("set composeID to missing value"))
             try expect(script.contains("beforeOpenIDs does not contain (contents of wid)"))
             try expect(script.contains("beforeComposeIDs does not contain (contents of wid)"))
-            // Shared frontmost preamble appears (at least once, for the keystroke).
-            try expect(script.contains("tell application \"Mail\" to activate\ndelay 0.2\ntell application \"System Events\"\n    tell process \"Mail\"\n        set frontmost to true\n        keystroke \"d\" using {shift down, command down}"))
+            // Shared frontmost preamble appears for the keystroke: activate,
+            // set frontmost, wait until actually frontmost, then act.
+            try expect(script.contains("tell application \"Mail\" to activate"))
+            try expect(script.contains("set frontmost to true"))
+            try expect(script.contains("repeat until frontmost or (current date) > fdeadline"))
+            try expect(script.contains("keystroke \"d\" using {shift down, command down}"))
             // Timeout messages preserved verbatim.
             try expect(script.contains("Mail did not open a viewer for the eml within 5s"))
             try expect(script.contains("Compose window did not appear after Send Again within 5s"))
