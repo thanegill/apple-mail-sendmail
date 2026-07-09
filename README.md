@@ -109,7 +109,8 @@ EOF
 ```
 
 With `-t`, positional addresses are added on top of the header
-recipients.
+recipients, deduplicated: an address already present in a header is
+not added a second time.
 
 ### From overrides
 
@@ -126,7 +127,10 @@ hint.
 
 If the input is a multipart message, parts with `Content-Disposition:
 attachment` (or any part carrying a `filename=` parameter) are decoded
-and attached to the compose window.
+and attached. Plain-text messages attach them via Mail's dictionary
+(`make new attachment`); HTML messages carry them inside the `.eml`
+that Send Again reconstructs (see Rich HTML rendering), so both paths
+deliver attachments.
 
 ```sh
 apple-mail-sendmail -t <<'EOF'
@@ -217,9 +221,11 @@ SENDMAIL_DRY_RUN=1 apple-mail-sendmail -t < msg.eml
 | `-h`, `--help`   | Print usage                                              |
 | `--version`      | Print version                                            |
 
-Legacy sendmail flags accepted and silently ignored for compatibility:
-`-i`, `-oi`, `-bm`, `-bs`, `-oem`, `-oeq`, `-O*`, `-q*`, `-v`, `-N*`,
-`-R*`, `-X*`, `-M*`, `-B*`, `-C *`.
+Legacy sendmail flags accepted for compatibility and otherwise ignored:
+`-i`, `-oi`, `-bm`, `-bs`, `-oem`, `-oeq`, `-O*`, `-q*`, `-v`, `-n`,
+`-M*`. The value-taking flags `-B`, `-N`, `-R`, `-X`, `-O`, and `-C`
+consume their argument (attached like `-B8BITMIME`, or the next token
+like `-B 8BITMIME`) so the value is not mistaken for a recipient.
 
 ## Exit codes
 
@@ -232,7 +238,7 @@ Following `sysexits.h`:
 |   65 | Data error (unparseable message)                              |
 |   67 | No recipients resolved                                        |
 |   71 | AppleScript execution failed                                  |
-|   75 | Mail.app could not be launched                                |
+|   75 | Temporary failure: could not create the temp file (EX_TEMPFAIL) |
 |   78 | Automation permission denied                                  |
 
 ## Alternatives considered
@@ -240,8 +246,11 @@ Following `sysexits.h`:
 Recorded so future contributors (and future Claude sessions) don't redo
 the research. Each of these was empirically probed against current
 macOS Mail (verified on Sequoia/Tahoe, 2026) and ruled out in favor of
-the dictionary rich-text-suite approach actually in use. Findings are
-based on running probes, not just reading documentation.
+the `.eml` + Cmd-Shift-D approach described under "Rich HTML rendering"
+above. Findings are based on running probes, not just reading
+documentation. Some entries below describe the earlier RTF-read and
+rich-text-suite approaches, which worked but were themselves superseded
+by `.eml` + Cmd-Shift-D for true WKWebView fidelity.
 
 ### Architecture-level dead-ends
 
@@ -351,9 +360,9 @@ versions of this branch used it. But:
 - **Mail's compose-format setting controlled survival.** With Mail's
   "Composing → Message Format" set to Plain Text, NSSharingService's
   per-paragraph fonts and background colors were stripped on receipt;
-  only Rich Text preserved them. The rich-text-suite path (our
-  current approach) sidesteps this since it sets fonts via dictionary
-  properties.
+  only Rich Text preserved them. The later rich-text-suite path
+  sidestepped this by setting fonts via dictionary properties (itself
+  since superseded by `.eml` + Cmd-Shift-D).
 
 ### `mailto:` URL via `GetURL` / `open`
 
@@ -394,7 +403,12 @@ populated from query params (verified empirically). But:
   but never descend into the `AXWebArea`. The body is not in Tab's
   focus chain.
 
-### Why the RTF-read approach won
+### The RTF-read approach (worked, then superseded)
+
+Before the `.eml` + Cmd-Shift-D path, the binary rendered HTML to RTF
+and set it via the dictionary. It worked, but RTF is a fidelity
+ceiling -- tables flatten, CSS padding and `<pre>` backgrounds are
+lost -- so it was superseded. The mechanics, kept for reference:
 
 Mail's `rich text` class (the type of `outgoing message`'s
 `content`) is backed by `NSTextStorage`. Setting that property to a
