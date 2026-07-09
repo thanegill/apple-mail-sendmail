@@ -58,7 +58,7 @@ stdin bytes -> RFC822Parser -> MIMEParser -> ParsedMessage -> MailDriver -> Scri
 
 ### Tests don't need WebKit or pandoc anymore
 
-The edit-draft path is pure script emission + .eml byte assembly. The test runner injects a recording `ScriptRunner`, so Mail.app is never invoked. `nix build .#default`'s `checkPhase` runs the full 85-test suite in the sandbox without any WebKit/pandoc/Accessibility prerequisites.
+The edit-draft path is pure script emission + .eml byte assembly. The test runner injects a recording `ScriptRunner`, so Mail.app is never invoked. `nix build .#default`'s `checkPhase` runs the full test suite in the sandbox without any WebKit/pandoc/Accessibility prerequisites.
 
 ## Project-specific constraints (read before changing)
 
@@ -105,6 +105,8 @@ Before the Cmd-Shift-D keystroke (and the Send menu click), the emitter **waits 
 The plain-text path is unchanged and does NOT require Accessibility — only Automation for Mail.
 
 **Bcc stays blind on the HTML path.** `EmlBuilder` serializes `Bcc:` as a plain rfc822 header into the `.eml`. Verified empirically (2026-07-08, via `View > Message > Raw Source` on a self-send with a marker Bcc address): Mail's Send Again consumes it as an envelope recipient and strips the `Bcc:` header from every transmitted copy — including the Bcc recipient's own — while still delivering to it. No special handling is needed and no warning should be emitted; this matches the classic path's dedicated bcc-recipient objects.
+
+**HTML messages with attachments work via the `.eml` pass-through.** A message with an HTML body AND attachments routes to the edit-draft path, so `MailDriver.deliver`'s classic `make new attachment` block (after the `shouldUseEditDraft` early return) is bypassed. The attachment is NOT lost -- it rides inside the raw `.eml` that Send Again reconstructs. Verified live (2026-07-09): a `multipart/mixed` html+attachment message arrived with the file attached (Mail nests the sent parts as `multipart/alternative` > `multipart/mixed`, a little oddly but valid). So the `make new attachment` code being dead for HTML messages is expected, not a bug; do not "fix" it by forcing html+attachment onto the classic path.
 
 ### Draft injection from outside Mail is not reachable — empirically confirmed
 
