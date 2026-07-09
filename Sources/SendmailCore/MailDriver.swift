@@ -202,7 +202,14 @@ public enum MailDriver {
         lines.append("set deadline to (current date) + 5")
         lines.append("repeat while (current date) < deadline and \(resultVar) is missing value")
         lines.append("    tell application \"Mail\"")
-        lines.append("        repeat with wid in (id of every window)")
+        // Materialize the id list into an AppleScript variable before
+        // iterating. `repeat with wid in (id of every window)` keeps the
+        // right-hand side as a live Mail reference, so dereferencing
+        // `item i of id of every window` gets sent back to Mail and fails
+        // with -1700 ("can't make ... into type specifier"). Assigning to a
+        // plain variable first forces evaluation to a list value.
+        lines.append("        set winIDs to id of every window")
+        lines.append("        repeat with wid in winIDs")
         lines.append("            if \(beforeVar) does not contain (contents of wid) then")
         lines.append("                set \(resultVar) to (contents of wid)")
         lines.append("                exit repeat")
@@ -242,10 +249,19 @@ public enum MailDriver {
     /// menu click, which both require Mail to be the frontmost process.
     private static func appendFrontmostAction(_ lines: inout [String], _ action: String) {
         lines.append("tell application \"Mail\" to activate")
-        lines.append("delay 0.2")
         lines.append("tell application \"System Events\"")
         lines.append("    tell process \"Mail\"")
         lines.append("        set frontmost to true")
+        // Wait until Mail is actually the frontmost process before acting.
+        // A fixed delay races on a busy Mail (e.g. right after a previous
+        // send), so the keystroke/menu click can land on the wrong app or
+        // window and Send Again never fires. Poll instead, then a short
+        // settle for the window to become key.
+        lines.append("        set fdeadline to (current date) + 3")
+        lines.append("        repeat until frontmost or (current date) > fdeadline")
+        lines.append("            delay 0.05")
+        lines.append("        end repeat")
+        lines.append("        delay 0.3")
         lines.append("        \(action)")
         lines.append("    end tell")
         lines.append("end tell")
