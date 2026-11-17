@@ -1,6 +1,26 @@
 import Foundation
 import SendmailCore
 
+private func attachmentFilenames(contentDisposition: String) throws -> [String] {
+    let input = """
+    Subject: 2231
+    MIME-Version: 1.0
+    Content-Type: multipart/mixed; boundary="BOUND"
+
+    --BOUND
+    Content-Type: text/plain; charset=utf-8
+
+    Body.
+    --BOUND
+    Content-Type: application/pdf
+    Content-Disposition: \(contentDisposition)
+
+    x
+    --BOUND--
+    """
+    return MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8))).attachments.map(\.filename)
+}
+
 let mimeTests = TestSuite(name: "MIMEParser", cases: [
     TestCase(name: "simple_text_plain") {
         let input = "Subject: Hi\nContent-Type: text/plain; charset=utf-8\n\nHello.\n"
@@ -393,6 +413,109 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
         try expectEqual(msg.body, "Body.")
         try expectEqual(msg.attachments.map(\.filename), ["attachment-1.bin", "Notes.CSV"])
+    },
+
+    TestCase(name: "rfc2231_extended_filename_preferred_over_plain") {
+        let input = """
+        Subject: 2231
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="BOUND"
+
+        --BOUND
+        Content-Type: text/plain; charset=utf-8
+
+        Body.
+        --BOUND
+        Content-Type: application/pdf
+        Content-Disposition: attachment; filename="ete.pdf"; filename*=UTF-8''%C3%A9t%C3%A9.pdf
+
+        x
+        --BOUND--
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.attachments.map(\.filename), ["\u{E9}t\u{E9}.pdf"])
+    },
+
+    TestCase(name: "rfc2231_content_type_name_with_charset_and_language") {
+        // No Content-Disposition: the name* parameter alone identifies the
+        // attachment, in a non-UTF-8 charset with a language tag.
+        let input = """
+        Subject: 2231
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="BOUND"
+
+        --BOUND
+        Content-Type: text/plain; charset=utf-8
+
+        Body.
+        --BOUND
+        Content-Type: text/plain; name*=iso-8859-1'fr'R%E9sum%E9.txt
+
+        x
+        --BOUND--
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "Body.")
+        try expectEqual(msg.attachments.map(\.filename), ["R\u{E9}sum\u{E9}.txt"])
+    },
+
+    TestCase(name: "rfc2231_filename_continuations") {
+        // Encoded (*N*) and literal (*N) segments are joined in index order;
+        // only segment 0 carries the charset prefix.
+        let input = """
+        Subject: 2231
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="BOUND"
+
+        --BOUND
+        Content-Type: text/plain; charset=utf-8
+
+        Body.
+        --BOUND
+        Content-Type: application/pdf
+        Content-Disposition: attachment; filename*1*=%C3%A9-Long; filename*0*=UTF-8''%C3%A9t; filename*2=" Name.pdf"
+
+        x
+        --BOUND--
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.attachments.map(\.filename), ["\u{E9}t\u{E9}-Long Name.pdf"])
+    },
+
+    TestCase(name: "rfc2231_literal_continuations_rfc2047_decoded") {
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: #"attachment; filename*0="=?UTF-8?B?w6l0"; filename*1="w6kucGRm?=""#),
+            ["\u{E9}t\u{E9}.pdf"]
+        )
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: #"attachment; filename*0="=?UTF-8?B?w6l0w6kucGRm?=""#),
+            ["\u{E9}t\u{E9}.pdf"]
+        )
+    },
+
+    TestCase(name: "rfc2231_continuation_gap_stops_joining") {
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: "attachment; filename*0*=UTF-8''a; filename*2*=c"),
+            ["a"]
+        )
+    },
+
+    TestCase(name: "rfc2231_malformed_percent_escapes_kept_literal") {
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: "attachment; filename*=UTF-8''a%ZZb%"),
+            ["a%ZZb%"]
+        )
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: "attachment; filename*=UTF-8''a%4"),
+            ["a%4"]
+        )
+    },
+
+    TestCase(name: "rfc2231_extended_preferred_over_continuations") {
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: "attachment; filename*0*=UTF-8''cont.pdf; filename*=UTF-8''whole.pdf"),
+            ["whole.pdf"]
+        )
     },
 
     TestCase(name: "stripHTML_does_not_double_decode_escaped_entity") {

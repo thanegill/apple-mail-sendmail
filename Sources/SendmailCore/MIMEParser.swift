@@ -56,9 +56,10 @@ public enum MIMEParser {
             let cte = (sub.value(for: "Content-Transfer-Encoding") ?? "").lowercased()
             let decoded = decodeTransfer(sub.body, encoding: cte)
 
+            let partName = parameterValue(dispParams, named: "filename")
+                ?? parameterValue(subParams, named: "name")
             let isAttachment = dispMain == "attachment"
-                || dispParams["filename"] != nil
-                || subParams["name"] != nil
+                || partName != nil
                 || (mt.hasPrefix("text/") == false && mt != "")
 
             // Treat text/* without an explicit attachment disposition as a body candidate.
@@ -84,17 +85,81 @@ public enum MIMEParser {
             // user-facing attachments. Genuine attachments -- disposition
             // "attachment", a filename/name param present, or a bare non-text
             // part with no disposition at all -- still fall through below.
-            let hasName = dispParams["filename"] != nil || subParams["name"] != nil
-            if dispMain == "inline" && !hasName {
+            if dispMain == "inline" && partName == nil {
                 continue
             }
 
-            let nameRaw = dispParams["filename"]
-                ?? subParams["name"]
-                ?? "attachment-\(msg.attachments.count + 1).bin"
-            let filename = EncodedWord.decode(nameRaw)
+            let filename = partName ?? "attachment-\(msg.attachments.count + 1).bin"
             msg.attachments.append(Attachment(filename: filename, contentType: mt, data: decoded))
         }
+    }
+
+    /// Resolve a filename-style parameter to display text. An RFC 2231
+    /// extended form (`name*=charset'lang'%XX..` or continuations `name*0*=`,
+    /// `name*1=`, ...) wins over the plain `name=` that senders include as a
+    /// legacy fallback; the plain form is RFC 2047-decoded.
+    private static func parameterValue(_ params: [String: String], named name: String) -> String? {
+        if let extended = params["\(name)*"] {
+            return decodeExtendedValue([(text: extended, isEncoded: true)])
+        }
+
+        var segments: [(text: String, isEncoded: Bool)] = []
+        while true {
+            let index = segments.count
+            if let encoded = params["\(name)*\(index)*"] {
+                segments.append((encoded, true))
+            } else if let plain = params["\(name)*\(index)"] {
+                segments.append((plain, false))
+            } else {
+                break
+            }
+        }
+        if !segments.isEmpty {
+            return decodeExtendedValue(segments)
+        }
+
+        return params[name].map { EncodedWord.decode($0) }
+    }
+
+    /// Join RFC 2231 segments into one string. Only the first segment may
+    /// carry the `charset'language'` prefix, and only when it is encoded.
+    /// All-literal continuations get the same RFC 2047 decoding as a plain
+    /// parameter, since some senders split an encoded-word across them.
+    private static func decodeExtendedValue(_ segments: [(text: String, isEncoded: Bool)]) -> String {
+        guard segments.contains(where: \.isEncoded) else {
+            return EncodedWord.decode(segments.map(\.text).joined())
+        }
+        var charset = "utf-8"
+        var bytes = Data()
+        for (index, segment) in segments.enumerated() {
+            var text = Substring(segment.text)
+            if index == 0 && segment.isEncoded {
+                let pieces = text.split(separator: "'", maxSplits: 2, omittingEmptySubsequences: false)
+                if pieces.count == 3 {
+                    if !pieces[0].isEmpty { charset = String(pieces[0]) }
+                    text = pieces[2]
+                }
+            }
+            bytes.append(segment.isEncoded ? percentDecode(text) : Data(text.utf8))
+        }
+        return EncodedWord.decodeBytes(bytes, charset: charset) ?? String(decoding: bytes, as: UTF8.self)
+    }
+
+    private static func percentDecode(_ text: Substring) -> Data {
+        let bytes = [UInt8](text.utf8)
+        var out = Data()
+        var i = 0
+        while i < bytes.count {
+            if bytes[i] == 0x25, i + 2 < bytes.count,
+               let hi = bytes[i + 1].hexNibble, let lo = bytes[i + 2].hexNibble {
+                out.append(UInt8(hi * 16 + lo))
+                i += 3
+                continue
+            }
+            out.append(bytes[i])
+            i += 1
+        }
+        return out
     }
 
     /// Split a multipart body on its boundary into the inner parts. Per RFC 2046,
