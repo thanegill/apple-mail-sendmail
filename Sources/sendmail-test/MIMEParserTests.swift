@@ -311,6 +311,90 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectNotNil(msg.htmlBody)
     },
 
+    TestCase(name: "attachment_filename_preserves_case") {
+        let input = """
+        Subject: case
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="BOUND"
+
+        --BOUND
+        Content-Type: text/plain; charset=utf-8
+
+        Body.
+        --BOUND
+        Content-Type: application/pdf
+        Content-Disposition: attachment; filename="Report-Q3.PDF"
+        Content-Transfer-Encoding: base64
+
+        SGVsbG8K
+        --BOUND--
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.attachments.count, 1)
+        try expectEqual(msg.attachments[0].filename, "Report-Q3.PDF")
+    },
+
+    TestCase(name: "attachment_filename_encoded_word_decoded") {
+        // The base64 payload of the encoded-word is case-sensitive; "w6l0w6kucGRm"
+        // is the UTF-8 bytes of "\u{E9}t\u{E9}.pdf".
+        let input = """
+        Subject: ew
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="BOUND"
+
+        --BOUND
+        Content-Type: text/plain; charset=utf-8
+
+        Body.
+        --BOUND
+        Content-Type: application/pdf
+        Content-Disposition: attachment; filename="=?UTF-8?B?w6l0w6kucGRm?="
+        Content-Transfer-Encoding: base64
+
+        SGVsbG8K
+        --BOUND--
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.attachments.count, 1)
+        try expectEqual(msg.attachments[0].filename, "\u{E9}t\u{E9}.pdf")
+    },
+
+    TestCase(name: "uppercase_disposition_type_and_param_name") {
+        // The disposition type and parameter names are case-insensitive
+        // (RFC 2183): a bare ATTACHMENT on a text part must still be an
+        // attachment, and an INLINE image without a name must still be skipped.
+        let input = """
+        Subject: upper
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="BOUND"
+
+        --BOUND
+        Content-Type: text/plain; charset=utf-8
+
+        Body.
+        --BOUND
+        Content-Type: text/plain; charset=utf-8
+        Content-Disposition: ATTACHMENT
+
+        attached text
+        --BOUND
+        Content-Type: text/csv
+        Content-Disposition: ATTACHMENT; Filename="Notes.CSV"
+
+        a,b
+        --BOUND
+        Content-Type: image/png
+        Content-Disposition: INLINE
+        Content-Transfer-Encoding: base64
+
+        SGVsbG8K
+        --BOUND--
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "Body.")
+        try expectEqual(msg.attachments.map(\.filename), ["attachment-1.bin", "Notes.CSV"])
+    },
+
     TestCase(name: "stripHTML_does_not_double_decode_escaped_entity") {
         // Issue #18: `&amp;lt;` must decode to the literal `&lt;`, not `<`.
         // The old chained-replace turned `&amp;` into `&` first, then the
