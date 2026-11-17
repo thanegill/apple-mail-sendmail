@@ -468,4 +468,54 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             try expect(script.contains("keystroke \"d\""), "wrapper-with-html must take the edit-draft path")
         }
     },
+
+    TestCase(name: "deliver_then_clean_up_removes_tmp_after_html_success") {
+        let tmp = try TempDir()
+        defer { tmp.cleanup() }
+        var filesSeenByRunner: [String] = []
+        var msg = ParsedMessage()
+        msg.to = [ParsedAddress(displayName: nil, address: "rcpt@example.test")]
+        msg.htmlBody = "<p>hi</p>"
+        try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp) { _ in
+            filesSeenByRunner = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+        }
+        try expect(filesSeenByRunner.contains { $0.hasSuffix(".eml") }, "eml must exist while the script runs")
+        try expect(!FileManager.default.fileExists(atPath: tmp.url.path), "temp dir left behind after success")
+    },
+
+    TestCase(name: "deliver_then_clean_up_removes_tmp_after_classic_success") {
+        let tmp = try TempDir()
+        defer { tmp.cleanup() }
+        var filesSeenByRunner: [String] = []
+        var msg = ParsedMessage()
+        msg.to = [ParsedAddress(displayName: nil, address: "rcpt@example.test")]
+        msg.body = "plain"
+        msg.attachments = [
+            Attachment(filename: "note.txt", contentType: "text/plain", data: Data("hello\n".utf8))
+        ]
+        try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp) { _ in
+            filesSeenByRunner = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+        }
+        try expect(filesSeenByRunner.contains("body.txt"), "body must exist while the script runs")
+        try expect(filesSeenByRunner.contains { $0.hasPrefix("att-") }, "attachment must exist while the script runs")
+        try expect(!FileManager.default.fileExists(atPath: tmp.url.path), "temp dir left behind after success")
+    },
+
+    TestCase(name: "deliver_then_clean_up_removes_tmp_when_runner_throws") {
+        let tmp = try TempDir()
+        defer { tmp.cleanup() }
+        var msg = ParsedMessage()
+        msg.to = [ParsedAddress(displayName: nil, address: "rcpt@example.test")]
+        msg.body = "plain"
+        var thrown: Error?
+        do {
+            try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp) { _ in
+                throw AppleScript.Failure(code: -1743, message: "denied")
+            }
+        } catch {
+            thrown = error
+        }
+        try expectEqual((thrown as? AppleScript.Failure)?.code, -1743)
+        try expect(!FileManager.default.fileExists(atPath: tmp.url.path), "temp dir left behind after runner failure")
+    },
 ])
