@@ -14,6 +14,9 @@ public struct Attachment {
 
 public struct ParsedMessage {
     public var subject: String = ""
+    /// First mailbox of the `From` header. The classic path uses it as the
+    /// account-selecting `sender` when `-f` is not given.
+    public var from: ParsedAddress? = nil
     public var to: [ParsedAddress] = []
     public var cc: [ParsedAddress] = []
     public var bcc: [ParsedAddress] = []
