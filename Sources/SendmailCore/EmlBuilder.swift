@@ -50,7 +50,7 @@ public enum EmlBuilder {
         }
         if let addr = options.fromAddress {
             out.removeAll { $0.0.lowercased() == "from" }
-            out.append(("From", formatMailbox(name: options.fromName, address: addr)))
+            out.append(("From", formatMailbox(name: options.fromName, address: addr, for: .rfc822Header)))
         }
         return out
     }
@@ -94,6 +94,6 @@ public enum EmlBuilder {
     }
 
     private static func formatAddress(_ a: ParsedAddress) -> String {
-        formatMailbox(name: a.displayName, address: a.address)
+        formatMailbox(name: a.displayName, address: a.address, for: .rfc822Header)
     }
 }

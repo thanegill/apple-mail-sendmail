@@ -10,16 +10,50 @@ public struct ParsedAddress {
     }
 }
 
+/// Where a formatted mailbox string ends up. The two destinations differ only
+/// in how a non-ASCII display name is written.
+enum MailboxFormatTarget {
+    /// A header line in the .eml that Mail opens. Non-ASCII display names are
+    /// RFC 2047 encoded so the file stays plain RFC 5322.
+    case rfc822Header
+    /// Mail's AppleScript `sender` property. Mail encodes headers itself on
+    /// send, so non-ASCII stays literal; pre-encoding it would risk Mail
+    /// treating the encoded-word as literal text.
+    case appleScriptSender
+}
+
 /// Format a mailbox as either `Name <addr>` (when `name` is non-nil and
 /// non-empty) or bare `addr`. This is the single source of truth for the
 /// rule; it is shared by the classic path's `sender:` property, the .eml
 /// `From` header override, and the .eml To/Cc/Bcc serialization so all three
 /// stay in lockstep.
-func formatMailbox(name: String?, address: String) -> String {
-    if let n = name, !n.isEmpty {
-        return "\(n) <\(address)>"
+///
+/// A display name containing anything outside RFC 5322 `atext` and space
+/// (e.g. the comma in `Doe, John`) is written as a quoted-string; unquoted,
+/// a re-parser would split it into several mailboxes.
+func formatMailbox(name: String?, address: String, for target: MailboxFormatTarget) -> String {
+    guard let name, !name.isEmpty else { return address }
+    return "\(formatDisplayName(name, for: target)) <\(address)>"
+}
+
+private func formatDisplayName(_ name: String, for target: MailboxFormatTarget) -> String {
+    if target == .rfc822Header && !name.unicodeScalars.allSatisfy(\.isASCII) {
+        return EncodedWord.encode(name)
     }
-    return address
+    guard name.unicodeScalars.contains(where: displayNameScalarNeedsQuoting) else { return name }
+    let escaped = name
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+    return "\"\(escaped)\""
+}
+
+private let rfc5322AtextSymbols = Set("!#$%&'*+-/=?^_`{|}~".unicodeScalars)
+
+private func displayNameScalarNeedsQuoting(_ scalar: Unicode.Scalar) -> Bool {
+    guard scalar.isASCII else { return false }
+    if scalar == " " { return false }
+    if CharacterSet.alphanumerics.contains(scalar) { return false }
+    return !rfc5322AtextSymbols.contains(scalar)
 }
 
 public enum AddressParser {
@@ -88,6 +122,7 @@ public enum AddressParser {
         // Strip comments in parentheses (not nested in quotes).
         var noComments = ""
         var inQuotes = false
+        var quotedPairPending = false
         var paren = 0
         for ch in trimmed {
             if !inQuotes {
@@ -97,7 +132,13 @@ public enum AddressParser {
                 if paren == 0 { noComments.append(ch) }
                 continue
             }
-            if ch == "\"" { inQuotes = false }
+            if quotedPairPending {
+                quotedPairPending = false
+            } else if ch == "\\" {
+                quotedPairPending = true
+            } else if ch == "\"" {
+                inQuotes = false
+            }
             noComments.append(ch)
         }
 
@@ -107,11 +148,8 @@ public enum AddressParser {
         if let lt = s.lastIndex(of: "<"), let gt = s.lastIndex(of: ">"), lt < gt {
             let addr = String(s[s.index(after: lt)..<gt]).trimmingCharacters(in: .whitespaces)
             if !addr.isEmpty {
-                var name = String(s[..<lt]).trimmingCharacters(in: .whitespaces)
-                if name.hasPrefix("\"") && name.hasSuffix("\"") && name.count >= 2 {
-                    name = String(name.dropFirst().dropLast())
-                }
-                let decoded = EncodedWord.decode(name)
+                let phrase = String(s[..<lt]).trimmingCharacters(in: .whitespaces)
+                let decoded = EncodedWord.decode(unquotePhrase(phrase))
                 return ParsedAddress(displayName: decoded.isEmpty ? nil : decoded, address: addr)
             }
             // Empty angle-bracket pair (e.g. the trailing `<>` in `<a@x> <>`).
@@ -125,5 +163,32 @@ public enum AddressParser {
             return ParsedAddress(displayName: nil, address: stripped)
         }
         return ParsedAddress(displayName: nil, address: s)
+    }
+
+    /// Decode an RFC 5322 display-name phrase: drop the delimiters of every
+    /// quoted-string segment and unescape the quoted-pairs inside them, so
+    /// `"Doe, John" Jr` becomes `Doe, John Jr` and `"Smith \"Bob\""` becomes
+    /// `Smith "Bob"`. Unquoted atoms pass through unchanged.
+    private static func unquotePhrase(_ phrase: String) -> String {
+        var out = ""
+        var inQuotes = false
+        var quotedPairPending = false
+        for ch in phrase {
+            if quotedPairPending {
+                out.append(ch)
+                quotedPairPending = false
+                continue
+            }
+            if ch == "\"" {
+                inQuotes.toggle()
+                continue
+            }
+            if inQuotes && ch == "\\" {
+                quotedPairPending = true
+                continue
+            }
+            out.append(ch)
+        }
+        return out
     }
 }
