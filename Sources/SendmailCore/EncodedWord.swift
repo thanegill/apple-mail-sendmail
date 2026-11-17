@@ -55,6 +55,28 @@ public enum EncodedWord {
         return out
     }
 
+    /// Encode `input` as one or more space-separated UTF-8 `B` encoded-words.
+    /// Each word carries at most 45 bytes (60 base64 chars), keeping it under
+    /// RFC 2047's 75-character limit, and is split only between scalars so
+    /// every word decodes to whole characters.
+    public static func encode(_ input: String) -> String {
+        let maxBytesPerWord = 45
+        var chunks: [Data] = []
+        var current = Data()
+        for scalar in input.unicodeScalars {
+            let scalarBytes = Data(String(scalar).utf8)
+            if current.count + scalarBytes.count > maxBytesPerWord {
+                chunks.append(current)
+                current = Data()
+            }
+            current.append(scalarBytes)
+        }
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
+            .map { "=?UTF-8?B?\($0.base64EncodedString())?=" }
+            .joined(separator: " ")
+    }
+
     private static func decodeWord(charset: String, encoding: String, payload: String) -> String? {
         let bytes: Data
         switch encoding {

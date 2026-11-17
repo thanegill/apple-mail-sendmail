@@ -271,7 +271,7 @@ public enum MailDriver {
 
     private static func composeSender(name: String?, address: String?) -> String? {
         guard let addr = address else { return nil }
-        return formatMailbox(name: name, address: addr)
+        return formatMailbox(name: name, address: addr, for: .appleScriptSender)
     }
 
     private static func buildClassicScript(
