@@ -40,6 +40,18 @@
                 runHook postCheck
               '';
 
+              # Exercises main.swift's --help/--version handling, which the
+              # in-process test runner cannot reach because it exits.
+              doInstallCheck = true;
+              nativeInstallCheckInputs = [ pkgs.versionCheckHook ];
+              versionCheckProgramArg = "--version";
+              installCheckPhase = ''
+                runHook preInstallCheck
+                help_output="$("$out/bin/apple-mail-sendmail" --help < /dev/null)"
+                grep -q '^USAGE: apple-mail-sendmail ' <<< "$help_output"
+                runHook postInstallCheck
+              '';
+
               meta = {
                 description = "sendmail-compatible CLI that hands messages to Apple Mail";
                 platforms = pkgs.lib.platforms.darwin;

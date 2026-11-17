@@ -1,6 +1,14 @@
 import Foundation
 
+public enum InfoRequest: Equatable {
+    case help
+    case version
+}
+
 public struct Options {
+    /// Set when argv asks for help or version output instead of delivery;
+    /// the caller prints it and exits 0 without reading stdin.
+    public var infoRequest: InfoRequest? = nil
     public var readRecipientsFromHeaders: Bool = false
     public var fromAddress: String? = nil
     public var fromName: String? = nil
@@ -15,6 +23,8 @@ public enum CLIError: Error {
 }
 
 public enum CLI {
+    public static let versionText = "apple-mail-sendmail 0.1.0"
+
     // Legacy short flags whose value may be attached (-Bmime) OR the next argv
     // (-B 8BITMIME). When the value isn't attached, consume the following argv so
     // it isn't misparsed as a positional recipient. -O and -C follow the same
@@ -23,7 +33,7 @@ public enum CLI {
     // are deliberately absent here.
     private static let separateValueFlags: Set<Character> = ["O", "B", "N", "R", "X"]
 
-    public static func parse(_ argv: [String], env: [String: String], programName: String = "apple-mail-sendmail") throws -> Options {
+    public static func parse(_ argv: [String], env: [String: String]) throws -> Options {
         var opts = Options()
         if env["SENDMAIL_SEND"] == "1" {
             opts.send = true
@@ -52,12 +62,12 @@ public enum CLI {
                 switch arg {
                 case "--send":
                     opts.send = true
-                case "--help", "-h":
-                    printHelp(programName: programName)
-                    exit(0)
+                case "--help":
+                    opts.infoRequest = .help
+                    return opts
                 case "--version":
-                    print("apple-mail-sendmail 0.1.0")
-                    exit(0)
+                    opts.infoRequest = .version
+                    return opts
                 default:
                     throw CLIError.usage("unknown option: \(arg)")
                 }
@@ -101,6 +111,22 @@ public enum CLI {
                         }
                         opts.fromName = argv[i]
                         i += 1
+                    }
+                    j = chars.count
+                case "h":
+                    // sendmail's hop count, ignored. The value is required and must
+                    // be digits: a bare -h at a terminal would otherwise block
+                    // reading stdin, and -ht would silently eat the "t".
+                    var hopCount = String(chars[(j + 1)...])
+                    if hopCount.isEmpty {
+                        guard i < argv.count else {
+                            throw CLIError.usage("-h requires a hop count (use --help for usage)")
+                        }
+                        hopCount = argv[i]
+                        i += 1
+                    }
+                    guard !hopCount.isEmpty, hopCount.allSatisfy({ $0.isASCII && $0.isNumber }) else {
+                        throw CLIError.usage("bad hop count: \(hopCount)")
                     }
                     j = chars.count
                 case "o", "b", "O", "q", "v", "N", "R", "X", "M", "n", "B":
@@ -148,7 +174,7 @@ public enum CLI {
             ("-f <addr>",           "Set the From address (Mail.app account selector)."),
             ("-F <name>",           "Set the From display name."),
             ("--send",              "Actually deliver the message. Default is draft for review."),
-            ("-h, --help",          "Show this help."),
+            ("--help",              "Show this help."),
             ("--version",           "Show version."),
         ]
         let environment: [(String, String)] = [
@@ -176,6 +202,7 @@ public enum CLI {
         out += "  Accepted and silently ignored for sendmail compatibility:\n"
         let legacy = "-i, -oi, -bm, -bs, -oem, -oeq, -O*, -q*, -v, -N*, -R*, -X*, -M*, -B*, -C <file>"
         out += wrap(legacy, width: 78, indent: 2).joined(separator: "\n") + "\n"
+        out += "  -h <hops> (hop count) is also ignored, but its value must be digits.\n"
         return out
     }
 

@@ -8,11 +8,22 @@ let env = ProcessInfo.processInfo.environment
 
 let options: Options
 do {
-    options = try CLI.parse(argv, env: env, programName: programName)
+    options = try CLI.parse(argv, env: env)
 } catch let CLIError.usage(msg) {
     die(msg, code: .usage)
 } catch {
     die("\(error)", code: .usage)
+}
+
+switch options.infoRequest {
+case .help:
+    CLI.printHelp(programName: programName)
+    exit(ExitCode.ok.rawValue)
+case .version:
+    print(CLI.versionText)
+    exit(ExitCode.ok.rawValue)
+case nil:
+    break
 }
 
 let stdinData = FileHandle.standardInput.readDataToEndOfFile()
