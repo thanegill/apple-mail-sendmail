@@ -126,7 +126,8 @@ hint.
 ### Attachments
 
 If the input is a multipart message, parts with `Content-Disposition:
-attachment` (or any part carrying a `filename=` parameter) are decoded
+attachment` (or any part carrying a `filename=` / `name=` parameter,
+including the RFC 2231 `filename*=` / `name*=` forms) are decoded
 and attached. Plain-text messages attach them via Mail's dictionary
 (`make new attachment`); HTML messages carry them inside the `.eml`
 that Send Again reconstructs (see Rich HTML rendering), so both paths
