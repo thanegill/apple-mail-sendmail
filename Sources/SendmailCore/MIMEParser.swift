@@ -43,8 +43,10 @@ public enum MIMEParser {
             let ctRaw = sub.value(for: "Content-Type") ?? "text/plain"
             let (mainType, subParams) = RFC822Parser.parseStructured(ctRaw)
             let mt = mainType.lowercased()
-            let disposition = (sub.value(for: "Content-Disposition") ?? "").lowercased()
-            let (dispMain, dispParams) = RFC822Parser.parseStructured(disposition)
+            // Lowercase only the disposition type: the filename parameter value
+            // must keep its case (and any encoded-word payload with it).
+            let (dispType, dispParams) = RFC822Parser.parseStructured(sub.value(for: "Content-Disposition") ?? "")
+            let dispMain = dispType.lowercased()
 
             if mt.hasPrefix("multipart/") {
                 walkMultipart(body: sub.body, params: subParams, into: &msg, depth: depth + 1)
