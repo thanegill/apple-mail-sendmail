@@ -25,7 +25,9 @@ func formatMailbox(name: String?, address: String) -> String {
 public enum AddressParser {
     /// Split a header value like `"Alice" <a@x>, b@y (Bob), Carol <c@z>` into
     /// individual addresses, then parse each. Comments in parentheses are
-    /// stripped; quoted-string display names are honored.
+    /// stripped; quoted-string display names are honored. RFC 5322 groups
+    /// (`Team: a@x, b@y;`) contribute their member mailboxes and the group
+    /// name is dropped, so `undisclosed-recipients:;` yields nothing.
     public static func parse(_ value: String) -> [ParsedAddress] {
         let tokens = split(value)
         return tokens.compactMap { parseOne($0) }
@@ -37,6 +39,8 @@ public enum AddressParser {
         var inQuotes = false
         var angle = 0
         var paren = 0
+        var domainLiteralDepth = 0
+        var inGroup = false
         var escape = false
         for ch in s {
             if escape {
@@ -54,7 +58,22 @@ public enum AddressParser {
                 if ch == "<" { angle += 1; current.append(ch); continue }
                 if ch == ">" { angle = max(0, angle - 1); current.append(ch); continue }
                 if ch == "(" { paren += 1; current.append(ch); continue }
+                if ch == "[" { domainLiteralDepth += 1; current.append(ch); continue }
+                if ch == "]" { domainLiteralDepth = max(0, domainLiteralDepth - 1); current.append(ch); continue }
                 if ch == "," && angle == 0 {
+                    out.append(current)
+                    current = ""
+                    continue
+                }
+                let outsideAddressDelimiters = angle == 0 && domainLiteralDepth == 0
+                if ch == ":" && outsideAddressDelimiters && !inGroup {
+                    // `current` holds the group's display name, which is not a recipient.
+                    inGroup = true
+                    current = ""
+                    continue
+                }
+                if ch == ";" && outsideAddressDelimiters && inGroup {
+                    inGroup = false
                     out.append(current)
                     current = ""
                     continue
