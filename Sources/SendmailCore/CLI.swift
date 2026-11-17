@@ -27,11 +27,9 @@ public enum CLI {
 
     // Legacy short flags whose value may be attached (-Bmime) OR the next argv
     // (-B 8BITMIME). When the value isn't attached, consume the following argv so
-    // it isn't misparsed as a positional recipient. -O and -C follow the same
-    // rule but are handled explicitly (-O shares the value-swallow branch below;
-    // -C has its own case). -v (verbose) and -n (no aliasing) take no value and
-    // are deliberately absent here.
-    private static let separateValueFlags: Set<Character> = ["O", "B", "N", "R", "X"]
+    // it isn't misparsed as a positional recipient. -v (verbose) and -n (no
+    // aliasing) take no value and are deliberately absent here.
+    private static let separateValueFlags: Set<Character> = ["O", "B", "N", "R", "X", "C"]
 
     public static func parse(_ argv: [String], env: [String: String]) throws -> Options {
         var opts = Options()
@@ -129,10 +127,10 @@ public enum CLI {
                         throw CLIError.usage("bad hop count: \(hopCount)")
                     }
                     j = chars.count
-                case "o", "b", "O", "q", "v", "N", "R", "X", "M", "n", "B":
+                case "o", "b", "O", "q", "v", "N", "R", "X", "M", "n", "B", "C":
                     // Legacy flags accepted for sendmail compatibility. Some take a
                     // value that in standard sendmail may be SPACE-SEPARATED from the
-                    // flag (e.g. -B 8BITMIME, -N never, -R hdrs, -X logfile); if the
+                    // flag (e.g. -B 8BITMIME, -N never, -R hdrs, -X logfile, -C cf); if the
                     // value isn't attached to this token, it's the next argv. Consume
                     // it so it isn't misparsed as a positional recipient.
                     //
@@ -141,13 +139,6 @@ public enum CLI {
                     // rest of this token.
                     let rest = String(chars[(j + 1)...])
                     if separateValueFlags.contains(c) && rest.isEmpty && i < argv.count {
-                        i += 1
-                    }
-                    j = chars.count
-                case "C":
-                    // Config file: takes a value either attached or as next argv.
-                    let rest = String(chars[(j + 1)...])
-                    if rest.isEmpty && i < argv.count {
                         i += 1
                     }
                     j = chars.count
@@ -187,8 +178,9 @@ public enum CLI {
         out += "\n"
         out += "  By default, opens a visible compose window for review (does not send).\n"
         out += "  Pass --send (or set SENDMAIL_SEND=1) to deliver instead. HTML email\n"
-        out += "  bodies are rendered into the compose window using Mail's configured\n"
-        out += "  Message font and Fixed-width font.\n"
+        out += "  bodies are rendered by Mail itself, so the HTML's own CSS (fonts,\n"
+        out += "  colors, tables) is kept; text the CSS does not style falls back to\n"
+        out += "  Mail's Fonts & Colors preferences.\n"
         out += "\n"
         out += "USAGE: \(programName) [-t] [-f <addr>] [-F <name>] [--send] [<recipient> ...]\n"
         out += "\n"

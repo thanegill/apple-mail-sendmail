@@ -75,6 +75,11 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expectEqual(opts.recipients, ["user@host"])
     },
 
+    TestCase(name: "C_with_attached_value_does_not_consume_next_arg") {
+        let opts = try CLI.parse(["-C/etc/mail.cf", "user@host"], env: [:])
+        try expectEqual(opts.recipients, ["user@host"])
+    },
+
     TestCase(name: "dashB_consumes_separate_value_not_recipient") {
         // -B takes a space-separated value (body type). 8BITMIME is the value,
         // not a positional recipient.
@@ -208,6 +213,12 @@ let cliTests = TestSuite(name: "CLI", cases: [
         let h = CLI.helpText()
         try expect(h.contains("SENDMAIL_SEND=1"), "missing SENDMAIL_SEND env var")
         try expect(h.contains("SENDMAIL_DRY_RUN=1"), "missing SENDMAIL_DRY_RUN env var")
+    },
+
+    TestCase(name: "help_text_does_not_claim_binary_applies_font_prefs") {
+        let h = CLI.helpText()
+        try expect(!h.contains("Message font"), "help still claims Mail's Message font is applied")
+        try expect(h.contains("CSS"), "help should say the HTML's own CSS is kept")
     },
 
     TestCase(name: "tempfail_exit_code_is_75") {
