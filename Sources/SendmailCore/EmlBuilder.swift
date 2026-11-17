@@ -34,6 +34,8 @@ public enum EmlBuilder {
         var out = headers
         let strip: Set<String> = ["to", "cc", "bcc"]
         out.removeAll { strip.contains($0.0.lowercased()) }
+        // No `undisclosed-recipients:;` placeholder for an empty To: Mail's compose
+        // rejects group syntax as an invalid address and blocks the send.
         if !finalRecipients.to.isEmpty {
             out.append(("To", joinAddresses(finalRecipients.to)))
         }

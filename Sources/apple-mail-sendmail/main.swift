@@ -60,7 +60,7 @@ if options.readRecipientsFromHeaders {
 }
 
 if message.to.isEmpty && message.cc.isEmpty && message.bcc.isEmpty {
-    die("no recipients (use -t or pass them on the command line)", code: .noUser)
+    die("no recipients: To/Cc/Bcc held no addresses and none were given on the command line", code: .noUser)
 }
 
 if options.fromAddress != nil {
