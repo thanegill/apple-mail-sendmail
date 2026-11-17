@@ -5,6 +5,7 @@ public enum MIMEParser {
     public static func parse(_ raw: RawMessage) -> ParsedMessage {
         var msg = ParsedMessage()
         msg.subject = EncodedWord.decode(raw.value(for: "Subject") ?? "")
+        msg.from = raw.value(for: "From").flatMap { AddressParser.parse($0).first }
         msg.to = raw.values(for: "To").flatMap { AddressParser.parse($0) }
         msg.cc = raw.values(for: "Cc").flatMap { AddressParser.parse($0) }
         msg.bcc = raw.values(for: "Bcc").flatMap { AddressParser.parse($0) }
