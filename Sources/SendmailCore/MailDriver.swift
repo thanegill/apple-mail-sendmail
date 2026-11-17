@@ -3,6 +3,24 @@ import Foundation
 public typealias ScriptRunner = (String) throws -> Void
 
 public enum MailDriver {
+    /// `deliver`, then remove `tmp` whether delivery succeeded or threw.
+    ///
+    /// The executable must call this rather than relying on a top-level
+    /// `defer`: its exit paths go through `exit()`, which terminates the
+    /// process without unwinding top-level scope, so such a `defer` never
+    /// runs and the message (eml, body, attachments) would stay on disk.
+    @discardableResult
+    public static func deliverThenCleanUp(
+        _ msg: ParsedMessage,
+        emlBytes: Data,
+        options: Options,
+        tmp: TempDir,
+        runner: ScriptRunner? = nil
+    ) throws -> String {
+        defer { tmp.cleanup() }
+        return try deliver(msg, emlBytes: emlBytes, options: options, tmp: tmp, runner: runner)
+    }
+
     /// Hand the parsed message to Mail.app.
     ///
     /// - For messages with an HTML body, write a temp `.eml`, open it via
