@@ -25,6 +25,10 @@ Install into your profile:
 nix profile install github:thanegill/apple-mail-sendmail
 ```
 
+To pin a release, add its tag to the flake reference, e.g.
+`github:thanegill/apple-mail-sendmail/vX.Y.Z` (see
+[Releases](https://github.com/thanegill/apple-mail-sendmail/releases)).
+
 Or build locally:
 
 ```sh
@@ -313,6 +317,13 @@ capture server; `nix run .#e2e-vm` runs it in a disposable Tart VM. Its
 setup, safety rules and scenarios are in
 [`tests/e2e/README.md`](tests/e2e/README.md).
 
+### Releases
+
+`nix run .#release -- prepare X.Y.Z` opens a release PR; once it is
+merged, `nix run .#release -- tag X.Y.Z` tags `vX.Y.Z` and publishes the
+GitHub release. The version policy, steps and recovery are in
+[RELEASING.md](RELEASING.md).
+
 ## Layout
 
 ```
@@ -326,5 +337,9 @@ setup, safety rules and scenarios are in
 │   └── sendmail-test/        (test runner + assertion harness)
 ├── tests/
 │   └── e2e/                  (live end-to-end harness, `nix run .#e2e`)
+├── scripts/
+│   └── release.sh            (`nix run .#release`)
+├── .github/                  (CI workflow, release-notes categories)
+├── RELEASING.md
 └── README.md
 ```
