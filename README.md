@@ -300,6 +300,10 @@ swift run sendmail-test
 Tests also run automatically as part of `nix build .#default`
 (in the package's `checkPhase`) and `nix flake check`.
 
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs
+`nix flake check -L` on a `macos-latest` runner for every pull request
+and every push to `master`.
+
 ### End-to-end tests
 
 The unit tests only check the generated AppleScript. A separate

@@ -11,6 +11,8 @@ nix build               # builds binary + runs all unit tests
 nix flake check         # same, plus evaluates other flake outputs
 ```
 
+CI (`.github/workflows/ci.yml`) runs `nix flake check -L` on `macos-latest` for every PR and every push to `master`, with Nix installed by `DeterminateSystems/nix-installer-action` and `sandbox = false` so the AppleScriptCompile suite runs instead of skipping. Actions are pinned to full commit SHAs with the version in a comment; lint workflow edits with `nix run nixpkgs#actionlint -- .github/workflows/*.yml`.
+
 For iterative work, enter the dev shell and use Swift directly:
 
 ```sh
