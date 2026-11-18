@@ -52,6 +52,13 @@ readonly SCENARIOS=(
   attachment-filename-plain
   draft-later-plain-attachment
   draft-later-html-attachment
+  subject-folded
+  subject-re
+  subject-fwd
+  subject-encoded-adjacent
+  subject-encoded-q
+  subject-encoded-charsets
+  subject-encoded-text
 )
 
 mode=live
@@ -454,6 +461,9 @@ clear_mailpit() {
 reset_expectations() {
   NAME=$1
   SUBJECT="e2e ${RUN_ID} ${NAME}"
+  # The Subject field as the fixture writes it, when that is not SUBJECT
+  # itself (folded or encoded); SUBJECT is then its decoded value.
+  SUBJECT_HEADER=""
   BODY_MARKER="e2e-body ${RUN_ID} ${NAME}"
   FIXTURE="$workdir/fixtures/${NAME}.eml"
   DESCRIPTION=""
@@ -470,6 +480,7 @@ reset_expectations() {
   EXPECT_HTML=""
   EXPECT_ATTACH=()
   ALLOW_MULTIPLE=false
+  EXPECT_TITLE_TRACE=false
 }
 
 define_scenario() {
@@ -725,6 +736,65 @@ To: to-draft-html@example.test
 Subject: ${SUBJECT}"
 }
 
+# The subject-* scenarios check that Mail titles the viewer and the compose
+# with the Subject as the binary decodes it (the title check before each
+# press), and that Mail sends that Subject.
+write_subject_fixture() {
+  SEND_ARGS=(-t -f "$ACCOUNT_A")
+  EXPECT_FROM_ADDR=$ACCOUNT_A
+  EXPECT_TO=("to-${NAME}@example.test")
+  EXPECT_TITLE_TRACE=true
+  printf 'From: %s\nTo: %s\nSubject: %s\n\n%s\n' \
+    "$ACCOUNT_A" "to-${NAME}@example.test" "${SUBJECT_HEADER:-$SUBJECT}" "$BODY_MARKER" >"$FIXTURE"
+}
+
+define_subject_folded() {
+  DESCRIPTION="plain, --send: Subject folded across lines, with runs of spaces and tabs"
+  SUBJECT_HEADER="${SUBJECT} fold"$'\n\t'"A  B"$'\n   '"C"$'\t\t'"D"
+  SUBJECT="${SUBJECT} fold"$'\t'"A  B   C"$'\t\t'"D"
+  write_subject_fixture
+}
+
+define_subject_re() {
+  DESCRIPTION="plain, --send: Subject with a leading Re:"
+  SUBJECT="Re: ${SUBJECT}"
+  write_subject_fixture
+}
+
+define_subject_fwd() {
+  DESCRIPTION="plain, --send: Subject with a leading Fwd:"
+  SUBJECT="Fwd: ${SUBJECT}"
+  write_subject_fixture
+}
+
+define_subject_encoded_adjacent() {
+  DESCRIPTION="plain, --send: Subject word split over two folded encoded-words (whitespace between them dropped)"
+  SUBJECT_HEADER="${SUBJECT} =?UTF-8?B?R3LDvA==?="$'\n \t'"=?UTF-8?B?w59l?="
+  SUBJECT="${SUBJECT} Grüße"
+  write_subject_fixture
+}
+
+define_subject_encoded_q() {
+  DESCRIPTION="plain, --send: Q-encoded Subject with _ for a space and =5F for an underscore"
+  SUBJECT_HEADER="${SUBJECT} =?UTF-8?Q?Caf=C3=A9_au_lait_=5F_1=3D1?="
+  SUBJECT="${SUBJECT} Café au lait _ 1=1"
+  write_subject_fixture
+}
+
+define_subject_encoded_charsets() {
+  DESCRIPTION="plain, --send: Subject word split over adjacent ISO-8859-1 Q and UTF-8 B encoded-words"
+  SUBJECT_HEADER="${SUBJECT} =?ISO-8859-1?Q?Gr=FC?= =?UTF-8?B?w59l?="
+  SUBJECT="${SUBJECT} Grüße"
+  write_subject_fixture
+}
+
+define_subject_encoded_text() {
+  DESCRIPTION="plain, --send: Subject with an encoded-word between plain words"
+  SUBJECT_HEADER="${SUBJECT} before =?UTF-8?Q?=C3=BCber?= after"
+  SUBJECT="${SUBJECT} before über after"
+  write_subject_fixture
+}
+
 binary_args() {
   local -n args_out=$1
   args_out=()
@@ -969,9 +1039,22 @@ guard_scenario() {
   if [[ -z $EXPECT_FROM_ADDR ]] || ! is_e2e_sender "$EXPECT_FROM_ADDR"; then
     GUARD_REASONS+=("$NAME: expected From ${EXPECT_FROM_ADDR:-none} is not an e2e account")
   fi
-  grep -qxF "Subject: $SUBJECT" "$FIXTURE" ||
+  if [[ $SUBJECT != *"e2e ${RUN_ID} ${NAME}"* || $(fixture_subject_field "$FIXTURE") != "Subject: ${SUBJECT_HEADER:-$SUBJECT}" ]]; then
     GUARD_REASONS+=("$NAME: fixture Subject is not the unique run subject")
+  fi
   ((${#GUARD_REASONS[@]} == 0))
+}
+
+# Prints the top-level Subject field with its folds as written, or a line
+# that matches no field if there is not exactly one.
+fixture_subject_field() {
+  awk '
+    /^\r?$/ { exit }
+    in_subject && /^[ \t]/ { print; next }
+    { in_subject = 0 }
+    tolower($0) ~ /^subject[ \t]*:/ { count++; in_subject = 1; print }
+    END { if (count != 1) print "(" count + 0 " Subject fields)" }
+  ' "$1"
 }
 
 
@@ -1685,6 +1768,15 @@ message_ids_for_subject() {
     jq -r --arg subject "$SUBJECT" '.messages[]? | select(.Subject == $subject) | .ID'
 }
 
+# For a failure report: the Subjects, as JSON strings, of messages that
+# arrived for this scenario under another Subject.
+subjects_of_this_scenario() {
+  local listing subjects
+  listing=$("${CURL[@]}" -fsS --max-time 5 "$API/messages?limit=500") || return 0
+  subjects=$(jq -r --arg token "${RUN_ID} ${NAME}" '[.messages[]? | .Subject | select(contains($token)) | tojson] | join(", ")' <<<"$listing") || return 0
+  [[ -z $subjects ]] || printf '; arrived instead: %s' "$subjects"
+}
+
 wait_for_messages() {
   local timeout=$1 deadline
   deadline=$((SECONDS + timeout))
@@ -1872,7 +1964,7 @@ check_delivery() {
   FAILURES=()
   wait_for_messages "$timeout"
   if ((${#MESSAGE_IDS[@]} == 0)); then
-    fail_check "no message with subject \"$SUBJECT\" arrived within ${timeout}s"
+    fail_check "no message with subject $(jq -n --arg s "$SUBJECT" '$s') arrived within ${timeout}s$(subjects_of_this_scenario)"
     return 1
   fi
   if [[ $ALLOW_MULTIPLE == false ]] && ((${#MESSAGE_IDS[@]} != 1)); then
@@ -1895,6 +1987,92 @@ check_delivery() {
     fail_check "Bcc (envelope-only) recipients: expected [$(sorted_lines "${expected_bcc[@]}" | paste -sd, -)] got [$(printf '%s' "$actual_bcc" | paste -sd, -)]"
 
   ((${#FAILURES[@]} == 0))
+}
+
+# Before each press, AXEmlDelivery traces the window title that passed the
+# Subject check, as Swift's String(reflecting:) prints it, then the press.
+# Input: the trace messages in order, as a JSON array of strings. Output:
+# {reasons, titles}; every press must directly follow a passed check on the
+# same window whose title, whitespace collapsed, is SUBJECT.
+# shellcheck disable=SC2016 # jq variables, not shell ones
+readonly TITLE_TRACE_JQ='
+  def unreflect:
+    if test("^\"([^\"\\\\]|\\\\.)*\"$") and ([scan("\\\\(.)") | .[0]] | all(IN("t", "n", "r", "\"", "'"'"'", "\\")))
+    then .[1:-1] | gsub("\\\\(?<c>.)"; {"t": "\t", "n": "\n", "r": "\r"}[.c] // .c)
+    else null end;
+  def norm: [splits("\\s+")] | map(select(length > 0)) | join(" ");
+  def press_window:
+    if startswith("pressing Message > Send Again on the eml viewer window, found by ") then "eml viewer"
+    elif startswith("pressing Message > Send on the compose window, found by ") then "compose"
+    else null end;
+  def title_line:
+    (capture("^the (?<window>eml viewer|compose) window'"'"'s title \\(AXTitle\\) (?<title>\".*\") matches the Subject$") // null);
+  ($subject | norm) as $want
+  | [.[] | strings] as $m
+  | [range(0; $m | length) | select($m[.] | startswith("pressing "))] as $press_at
+  | [$press_at[] | $m[.] | press_window] as $windows
+  | [$press_at[] as $i
+      | ($m[$i] | press_window) as $window
+      | (if $i > 0 then ($m[$i - 1] | title_line) else null end) as $checked
+      | if $window == null then "unexpected press in the trace: \($m[$i])"
+        elif $checked == null or $checked.window != $window then "the \($window) press does not directly follow a passed title check on that window"
+        elif ($checked.title | unreflect) == null then "unparseable title in the trace: \($checked.title)"
+        elif ($checked.title | unreflect | norm) != $want then "Mail titled the \($window) window \($checked.title), not the Subject \($subject | tojson)"
+        else empty end] as $reasons
+  | ([$windows[] | select(. == "eml viewer")] | length) as $send_again
+  | ([$windows[] | select(. == "compose")] | length) as $sends
+  | {
+      reasons: ($reasons
+        + (if $send_again != 1 then ["expected 1 Send Again press in the trace, found \($send_again)"] else [] end)
+        + (if $send and $sends == 0 then ["no Send press in the trace"]
+           elif ($send | not) and $sends > 0 then ["a draft traced \($sends) Send press(es)"]
+           else [] end)),
+      titles: [$m[] | title_line | select(. != null) | "\(.window): \(.title)"]
+    }
+'
+
+TITLE_TRACE_TITLES=()
+
+# check_title_trace FILE: FILE holds one JSON string per trace message.
+check_title_trace() {
+  local trace_file=$1 result reason send=false
+  TITLE_TRACE_TITLES=()
+  [[ $DELIVERY == send ]] && send=true
+  if ! result=$(jq -s -c --arg subject "$SUBJECT" --argjson send "$send" "$TITLE_TRACE_JQ" "$trace_file" 2>&1); then
+    fail_check "could not analyse the binary's trace: $result"
+    return
+  fi
+  mapfile -t TITLE_TRACE_TITLES < <(jq -r '.titles[]' <<<"$result")
+  while IFS= read -r reason; do
+    [[ -n $reason ]] && fail_check "title check trace: $reason"
+  done < <(jq -r '.reasons[]' <<<"$result")
+}
+
+read_binary_trace() {
+  local since=$1 trace_file=$2
+  /usr/bin/log show --style ndjson --start "$since" --predicate 'subsystem == "apple-mail-sendmail"' \
+    >"$trace_file.ndjson" 2>"$trace_file.stderr" || return 1
+  jq -c --arg binary "$SENDMAIL_BIN" 'select(.eventType == "logEvent" and .processImagePath == $binary) | .eventMessage' \
+    "$trace_file.ndjson" >"$trace_file"
+}
+
+# Adds to FAILURES. The log can lag the binary's exit, so an incomplete trace
+# is read again a few times.
+verify_title_trace() {
+  local since=$1 trace_file="$workdir/logs/$NAME.trace" attempt title earlier=("${FAILURES[@]}")
+  for attempt in 1 2 3 4 5; do
+    FAILURES=("${earlier[@]}")
+    if read_binary_trace "$since" "$trace_file"; then
+      check_title_trace "$trace_file"
+    else
+      fail_check "could not read the binary's unified-log trace: $(tail -n 1 "$trace_file.stderr")"
+    fi
+    ((${#FAILURES[@]} == ${#earlier[@]})) && break
+    sleep 1
+  done
+  for title in "${TITLE_TRACE_TITLES[@]}"; do
+    log "e2e: $NAME: title check passed on the $title"
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -2029,6 +2207,8 @@ run_live_scenario() {
   # From here on Mail may hold a message of ours, so cleanup drains its
   # Outbox before stopping Mailpit. A refusal before this point must not.
   mail_touched=true
+  local trace_since
+  trace_since=$(date '+%Y-%m-%d %H:%M:%S')
   run_bounded 120 env -u SENDMAIL_SEND -u SENDMAIL_NO_UI -u SENDMAIL_DRY_RUN "$SENDMAIL_BIN" "${args[@]}" <"$(checked_fixture "$name")" \
     >"$workdir/logs/$name.stdout" 2>"$workdir/logs/$name.stderr" || status=$?
   if ((status != 0)); then
@@ -2053,14 +2233,14 @@ run_live_scenario() {
     fi
   fi
 
-  if check_delivery "$delivery_timeout"; then
-    if ((${#reasons[@]} > 0)); then
-      record "$name" FAIL "${reasons[@]}"
-    else
-      record "$name" PASS
-    fi
-  else
+  check_delivery "$delivery_timeout" || true
+  if [[ $EXPECT_TITLE_TRACE == true ]]; then
+    verify_title_trace "$trace_since"
+  fi
+  if ((${#reasons[@]} + ${#FAILURES[@]} > 0)); then
     record "$name" FAIL "${reasons[@]}" "${FAILURES[@]}"
+  else
+    record "$name" PASS
   fi
   sleep 2
 }
@@ -2162,16 +2342,20 @@ cli_from_header() {
 
 # Writes the message as Mail should put it on the wire: the fixture minus its
 # Bcc header, with From taken from -f/-F when they are given and the
-# attachment carrying the exact name Mail should send.
+# attachment carrying the exact name Mail should send. A folded or encoded
+# Subject goes out as one encoded-word of SUBJECT, because Mailpit's parser
+# turns a fold and the whitespace around it into a single space.
 write_wire_message() {
-  local attachment_name=""
+  local attachment_name="" subject_override=""
   ((${#EXPECT_ATTACH[@]} > 0)) && attachment_name=${EXPECT_ATTACH[0]%%|*}
-  awk -v from_override="$(cli_from_header)" -v attachment_name="$attachment_name" '
+  [[ -n $SUBJECT_HEADER ]] && subject_override="Subject: =?UTF-8?B?$(printf '%s' "$SUBJECT" | base64 -w 0)?="
+  awk -v from_override="$(cli_from_header)" -v subject_override="$subject_override" -v attachment_name="$attachment_name" '
     BEGIN { in_headers = 1 }
     in_headers && /^\r?$/ { in_headers = 0 }
     in_headers && /^[Bb][Cc][Cc]:/ { skipping = 1; next }
     in_headers && skipping && /^[ \t]/ { next }
     in_headers && from_override != "" && /^[Ff][Rr][Oo][Mm]:/ { skipping = 0; print from_override; next }
+    in_headers && subject_override != "" && /^[Ss][Uu][Bb][Jj][Ee][Cc][Tt]:/ { skipping = 1; print subject_override; next }
     !in_headers && attachment_name != "" && /^Content-Disposition: attachment/ {
       print "Content-Disposition: attachment; filename=\"" attachment_name "\""; next
     }
@@ -2400,6 +2584,23 @@ self_test_guards() {
 
   sed -i 's/^Subject: .*/Subject: a reused subject/' "$FIXTURE"
   run_guard_case "Subject is not the unique run subject" refused
+
+  define_scenario subject-folded
+  sed -i 's/^   C/ C/' "$FIXTURE"
+  run_guard_case "folded Subject with a changed continuation line" refused
+
+  define_scenario subject-folded
+  sed -i '/^Subject:/,/^[^ \t]/ { /^[ \t]/d }' "$FIXTURE"
+  run_guard_case "folded Subject without its continuation lines" refused
+
+  define_scenario subject-encoded-q
+  set_fixture_header "Subject: ${SUBJECT_HEADER}"
+  run_guard_case "two Subject fields" refused
+
+  define_scenario subject-re
+  SUBJECT="Re: a reused subject"
+  sed -i "s/^Subject: .*/Subject: ${SUBJECT}/" "$FIXTURE"
+  run_guard_case "Subject without the run id and scenario name" refused
 
   sed -i 's/^To: .*/To: someone@gmail.com/' "$FIXTURE"
   run_guard_case "To at a real domain" refused
@@ -3712,6 +3913,82 @@ self_test_display_names() {
   quirk_wire_case "From: =?utf-8?B?\"Backer, Anna\"?= (wrong name)" FAIL '"Backer, Anna"'
 }
 
+# Each folded or encoded fixture Subject, decoded by Mailpit's parser,
+# against the scenario's SUBJECT, whitespace collapsed (that parser turns a
+# fold into one space).
+# shellcheck disable=SC2031 # the self-test's subshells set their own API
+self_test_subject_decoding() {
+  printf 'fixture Subjects decoded by Mailpit\n'
+  local name recipients=() decoded
+  for name in "${SCENARIOS[@]}"; do
+    define_scenario "$name"
+    [[ -n $SUBJECT_HEADER ]] || continue
+    mapfile -t recipients < <(expected_envelope_recipients)
+    clear_mailpit
+    inject "$FIXTURE" "$EXPECT_FROM_ADDR" "${recipients[@]}"
+    decoded=$("${CURL[@]}" -fsS --max-time 5 "$API/messages?limit=500" |
+      jq -r --arg token "${RUN_ID} ${NAME}" '[.messages[]? | .Subject | select(contains($token))] | if length == 1 then .[0] else "(\(length) messages)" end')
+    if [[ $(normalized_whitespace "$decoded") == "$(normalized_whitespace "$SUBJECT")" ]]; then
+      self_test_expect same "$name" same
+    else
+      self_test_expect same "$name" different "Mailpit decoded $(jq -n --arg s "$decoded" '$s'), the scenario expects $(jq -n --arg s "$SUBJECT" '$s')"
+    fi
+  done
+}
+
+normalized_whitespace() {
+  jq -nr --arg s "$1" '$s | [splits("\\s+")] | map(select(length > 0)) | join(" ")'
+}
+
+# shellcheck disable=SC2031 # the subshell in self_test_preflight_refusal has its own workdir
+self_test_title_trace() {
+  printf 'title-check trace analysis\n'
+  define_scenario subject-folded
+  local trace_file="$workdir/logs/crafted.trace" reflected
+  reflected=$(jq -nr --arg s "$SUBJECT" '$s | tojson')
+  local viewer_check="the eml viewer window's title (AXTitle) ${reflected} matches the Subject"
+  local compose_check="the compose window's title (AXTitle) ${reflected} matches the Subject"
+  local send_again="pressing Message > Send Again on the eml viewer window, found by its shift-cmd-D shortcut"
+  local send="pressing Message > Send on the compose window, found by its shift-cmd-D shortcut"
+
+  trace_case() {
+    local wanted=$1 label=$2
+    shift 2
+    if (($# > 0)); then printf '%s\n' "$@" | jq -R . >"$trace_file"; else : >"$trace_file"; fi
+    FAILURES=()
+    check_title_trace "$trace_file"
+    if ((${#FAILURES[@]} == 0)); then
+      self_test_expect "$wanted" "$label" PASS
+    else
+      self_test_expect "$wanted" "$label" FAIL "${FAILURES[@]}"
+    fi
+  }
+
+  trace_case PASS "checks then presses, title with tab escapes" "$viewer_check" "$send_again" "$compose_check" "$send"
+  trace_case PASS "Send retried, each press checked" "$viewer_check" "$send_again" "$compose_check" "$send" "$compose_check" "$send"
+  trace_case PASS "title with whitespace collapsed by Mail" \
+    "the eml viewer window's title (AXTitle) $(jq -nr --arg s "$(normalized_whitespace "$SUBJECT")" '$s | tojson') matches the Subject" \
+    "$send_again" "$compose_check" "$send"
+  trace_case FAIL "empty trace"
+  trace_case FAIL "no title check before Send Again" "$send_again" "$compose_check" "$send"
+  trace_case FAIL "no title check before Send" "$viewer_check" "$send_again" "$send"
+  trace_case FAIL "a retried Send without its check" "$viewer_check" "$send_again" "$compose_check" "$send" "$send"
+  trace_case FAIL "viewer check before the Send press" "$viewer_check" "$send_again" "$viewer_check" "$send"
+  trace_case FAIL "no Send press for --send" "$viewer_check" "$send_again"
+  trace_case FAIL "Send Again pressed twice" "$viewer_check" "$send_again" "$viewer_check" "$send_again" "$compose_check" "$send"
+  trace_case FAIL "title differs from the Subject" \
+    "the eml viewer window's title (AXTitle) \"Re: ${SUBJECT//$'\t'/\\t}\" matches the Subject" "$send_again" "$compose_check" "$send"
+  trace_case FAIL "title with an unknown escape" \
+    "the eml viewer window's title (AXTitle) \"${SUBJECT//$'\t'/\\u\{09\}}\" matches the Subject" "$send_again" "$compose_check" "$send"
+  trace_case FAIL "title with an unescaped quote" \
+    "the eml viewer window's title (AXTitle) \"a\" b\" matches the Subject" "$send_again" "$compose_check" "$send"
+  trace_case FAIL "unexpected press" "$viewer_check" "$send_again" "$compose_check" "pressing Message > Send Now on the compose window"
+
+  DELIVERY=draft-later
+  trace_case PASS "draft: one checked Send Again" "$viewer_check" "$send_again"
+  trace_case FAIL "draft that traced a Send" "$viewer_check" "$send_again" "$compose_check" "$send"
+}
+
 # A producer that prints the match first and then a lot more: `producer |
 # grep -q` would report some of those matches as failures (status 141).
 # mail_is_running must find all of them and treat a failing producer as
@@ -3948,6 +4225,8 @@ cmd_self_test() {
   self_test_smtp_alias
   self_test_pipefail
   self_test_display_names
+  self_test_subject_decoding
+  self_test_title_trace
   self_test_live_helpers
   self_test_assertions
   log "e2e: self-test ran $SELF_TEST_CASES cases, $SELF_TEST_MISMATCHES unexpected"
