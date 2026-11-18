@@ -1,0 +1,65 @@
+From: sender@example.test
+To: Recipient Number 0 <recipient-number-0@example.test>,
+ Recipient Number 1 <recipient-number-1@example.test>,
+ Recipient Number 2 <recipient-number-2@example.test>,
+ Recipient Number 3 <recipient-number-3@example.test>,
+ Recipient Number 4 <recipient-number-4@example.test>,
+ Recipient Number 5 <recipient-number-5@example.test>,
+ Recipient Number 6 <recipient-number-6@example.test>,
+ Recipient Number 7 <recipient-number-7@example.test>,
+ Recipient Number 8 <recipient-number-8@example.test>,
+ Recipient Number 9 <recipient-number-9@example.test>,
+ Recipient Number 10 <recipient-number-10@example.test>,
+ Recipient Number 11 <recipient-number-11@example.test>,
+ Recipient Number 12 <recipient-number-12@example.test>,
+ Recipient Number 13 <recipient-number-13@example.test>,
+ Recipient Number 14 <recipient-number-14@example.test>,
+ Recipient Number 15 <recipient-number-15@example.test>,
+ Recipient Number 16 <recipient-number-16@example.test>,
+ Recipient Number 17 <recipient-number-17@example.test>,
+ Recipient Number 18 <recipient-number-18@example.test>,
+ Recipient Number 19 <recipient-number-19@example.test>,
+ Recipient Number 20 <recipient-number-20@example.test>,
+ Recipient Number 21 <recipient-number-21@example.test>,
+ Recipient Number 22 <recipient-number-22@example.test>,
+ Recipient Number 23 <recipient-number-23@example.test>,
+ Recipient Number 24 <recipient-number-24@example.test>,
+ Recipient Number 25 <recipient-number-25@example.test>,
+ Recipient Number 26 <recipient-number-26@example.test>,
+ Recipient Number 27 <recipient-number-27@example.test>,
+ Recipient Number 28 <recipient-number-28@example.test>,
+ Recipient Number 29 <recipient-number-29@example.test>
+References: <message-id-0.1234567890@mail.example.test>
+ <message-id-1.1234567890@mail.example.test>
+ <message-id-2.1234567890@mail.example.test>
+ <message-id-3.1234567890@mail.example.test>
+ <message-id-4.1234567890@mail.example.test>
+ <message-id-5.1234567890@mail.example.test>
+ <message-id-6.1234567890@mail.example.test>
+ <message-id-7.1234567890@mail.example.test>
+ <message-id-8.1234567890@mail.example.test>
+ <message-id-9.1234567890@mail.example.test>
+ <message-id-10.1234567890@mail.example.test>
+ <message-id-11.1234567890@mail.example.test>
+ <message-id-12.1234567890@mail.example.test>
+ <message-id-13.1234567890@mail.example.test>
+ <message-id-14.1234567890@mail.example.test>
+ <message-id-15.1234567890@mail.example.test>
+ <message-id-16.1234567890@mail.example.test>
+ <message-id-17.1234567890@mail.example.test>
+ <message-id-18.1234567890@mail.example.test>
+ <message-id-19.1234567890@mail.example.test>
+ <message-id-20.1234567890@mail.example.test>
+ <message-id-21.1234567890@mail.example.test>
+ <message-id-22.1234567890@mail.example.test>
+ <message-id-23.1234567890@mail.example.test>
+ <message-id-24.1234567890@mail.example.test>
+ <message-id-25.1234567890@mail.example.test>
+ <message-id-26.1234567890@mail.example.test>
+ <message-id-27.1234567890@mail.example.test>
+ <message-id-28.1234567890@mail.example.test>
+ <message-id-29.1234567890@mail.example.test>
+Subject: long folded headers
+Content-Type: text/plain; charset=utf-8
+
+body

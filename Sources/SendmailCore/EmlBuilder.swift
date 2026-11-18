@@ -60,7 +60,7 @@ public enum EmlBuilder {
     static func serialize(headers: [(String, String)], body: Data) -> Data {
         var out = Data()
         for (k, v) in headers {
-            out.append(Data("\(sanitizeHeaderValue(k)): \(sanitizeHeaderValue(v))\r\n".utf8))
+            out.append(Data("\(fold("\(sanitizeHeaderValue(k)): \(sanitizeHeaderValue(v))"))\r\n".utf8))
         }
         out.append(Data("\r\n".utf8))
         out.append(body)
@@ -89,6 +89,32 @@ public enum EmlBuilder {
             }
         }
         return out
+    }
+
+    /// Keep a header line within RFC 5322's 998-octet limit (2.1.1) by
+    /// inserting a CRLF before a space, which unfolding removes again. The
+    /// parser unfolds each header onto one line, so a long References or a
+    /// long To list would otherwise be written past the limit. A run with no
+    /// space to break at stays long.
+    static func fold(_ line: String) -> String {
+        let maxLineOctets = 998
+        guard line.utf8.count > maxLineOctets else { return line }
+        var folded = ""
+        var currentLineOctets = 0
+        for (index, word) in line.split(separator: " ", omittingEmptySubsequences: false).enumerated() {
+            let wordOctets = word.utf8.count
+            if index == 0 {
+                folded = String(word)
+                currentLineOctets = wordOctets
+            } else if !word.isEmpty && currentLineOctets + 1 + wordOctets > maxLineOctets {
+                folded += "\r\n " + word
+                currentLineOctets = 1 + wordOctets
+            } else {
+                folded += " " + word
+                currentLineOctets += 1 + wordOctets
+            }
+        }
+        return folded
     }
 
     private static func joinAddresses(_ addrs: [ParsedAddress]) -> String {

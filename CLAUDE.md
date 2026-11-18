@@ -97,7 +97,8 @@ below) with both SendmailCore (via `sendmail-test
 dump mode) and CPython's `email` package (`policy.default`), and compares the
 decoded Subject, From, To/Cc/Bcc mailboxes, text/plain and text/html bodies,
 and attachment filenames and decoded bytes. It also re-parses the `.eml`
-`EmlBuilder` writes and checks Python reads back the same recipients. Python
+`EmlBuilder` writes, checking that Python reads back the same recipients and
+that no header line exceeds RFC 5322's 998 octets. Python
 picks body and attachment parts by SendmailCore's own rules, so only the MIME
 decoding is compared, not the part-selection policy.
 

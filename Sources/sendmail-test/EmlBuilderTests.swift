@@ -25,6 +25,27 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
         try expect(s.contains("body line one\nbody line two"))
     },
 
+    // RFC 5322 2.1.1: a line is at most 998 octets before its CRLF. The parser
+    // unfolds headers, so long ones must be folded again on the way out.
+    TestCase(name: "long_header_lines_are_folded_within_998_octets") {
+        let references = (0..<40).map { "<message-id-\($0).1234567890@mail.example.test>" }
+        let source = try RFC822Parser.parse(Data(
+            "Subject: hi\nReferences: \(references.joined(separator: "\n "))\nContent-Type: text/plain\n\nbody\n".utf8
+        ))
+        var msg = ParsedMessage()
+        msg.to = (0..<40).map { ParsedAddress(displayName: "Recipient \($0)", address: "recipient-\($0)@example.test") }
+        let out = EmlBuilder.buildEml(raw: source, finalRecipients: msg, options: Options())
+        let headerSection = String(decoding: out, as: UTF8.self).components(separatedBy: "\r\n\r\n")[0]
+        for line in headerSection.components(separatedBy: "\r\n") {
+            try expect(line.utf8.count <= 998, "line of \(line.utf8.count) octets: \(line.prefix(40))...")
+        }
+        let reparsed = try RFC822Parser.parse(out)
+        try expectEqual(reparsed.value(for: "References"), references.joined(separator: " "))
+        let reparsedTo = AddressParser.parse(reparsed.value(for: "To") ?? "")
+        try expectEqual(reparsedTo.map(\.address), msg.to.map(\.address))
+        try expectEqual(reparsedTo.map(\.displayName), msg.to.map(\.displayName))
+    },
+
     TestCase(name: "replaces_to_with_finalized_recipients") {
         var msg = ParsedMessage()
         msg.to = [ParsedAddress(displayName: nil, address: "new@to")]

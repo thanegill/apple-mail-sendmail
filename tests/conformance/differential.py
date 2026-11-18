@@ -15,7 +15,8 @@ under a classified finding in expected-divergences.json; an unlisted
 divergence, or a listed one that no longer occurs, fails the run.
 
 It also re-parses the .eml that EmlBuilder writes for each message and checks
-that Python reads back the same To/Cc/Bcc mailboxes SendmailCore parsed.
+that Python reads back the same To/Cc/Bcc mailboxes SendmailCore parsed, and
+that no header line of it exceeds RFC 5322's 998-octet limit.
 """
 
 import argparse
@@ -31,6 +32,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CORPUS_SUFFIXES = {".eml", ".txt"}
 ADDRESS_FIELDS = ("to", "cc", "bcc")
+MAX_LINE_OCTETS = 998  # RFC 5322 2.1.1, excluding the CRLF
 CLASSES = {
     "ours-bug": "SendmailCore disagrees with the spec; fix it",
     "python-quirk": "Python's email package is lenient or wrong; the spec is on our side",
@@ -196,7 +198,13 @@ def compare(ours, reference):
     if not attachments_agree(our_attachments, reference["attachments"]):
         yield "attachments", summarize(our_attachments), summarize(reference["attachments"])
 
-    rebuilt = parse_reference(base64.b64decode(ours["rebuiltEmlBase64"]))
+    rebuilt_bytes = base64.b64decode(ours["rebuiltEmlBase64"])
+    rebuilt_header_section = rebuilt_bytes.split(b"\r\n\r\n", 1)[0]
+    longest_line = max(len(line) for line in rebuilt_header_section.split(b"\r\n"))
+    if longest_line > MAX_LINE_OCTETS:
+        yield "rebuilt-eml.line-length", longest_line, MAX_LINE_OCTETS
+
+    rebuilt = parse_reference(rebuilt_bytes)
     for field in ADDRESS_FIELDS:
         our_list = [normalized_mailbox(m) for m in ours[field]]
         reparsed = [normalized_mailbox(m) for m in mailboxes(rebuilt, field)]
