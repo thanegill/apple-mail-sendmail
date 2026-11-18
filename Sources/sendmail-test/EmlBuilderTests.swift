@@ -167,4 +167,47 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
         try expect(s.contains("<td>X</td>"))
         try expect(s.contains("To: you@host"))
     },
+
+    TestCase(name: "bcc_only_message_gets_no_to_header") {
+        let bytes = Data("""
+        Subject: bcc only
+        From: me@host.test
+        To: undisclosed-recipients:;
+        Bcc: hidden@x.test
+        Content-Type: text/plain; charset=utf-8
+
+        body
+        """.utf8)
+        let raw = try RFC822Parser.parse(bytes)
+        let msg = MIMEParser.parse(raw)
+        try expect(msg.to.isEmpty, "empty group must not become a To recipient")
+        try expectEqual(msg.bcc.map(\.address), ["hidden@x.test"])
+        let out = EmlBuilder.buildEml(raw: raw, finalRecipients: msg, options: Options())
+        let s = String(data: out, encoding: .utf8) ?? ""
+        let headerLines = s.components(separatedBy: "\r\n\r\n")[0].components(separatedBy: "\r\n")
+        let toLines = headerLines.filter { $0.lowercased().hasPrefix("to:") }
+        try expectEqual(toLines, [])
+        try expect(headerLines.contains("Bcc: hidden@x.test"))
+
+        let reparsedRaw = try RFC822Parser.parse(out)
+        let reparsed = MIMEParser.parse(reparsedRaw)
+        try expect(reparsed.to.isEmpty, "re-parse must give zero To recipients")
+        try expectEqual(reparsed.bcc.map(\.address), ["hidden@x.test"])
+    },
+
+    TestCase(name: "to_header_omitted_when_there_are_no_recipients") {
+        let out = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: ParsedMessage(), options: Options())
+        let s = String(data: out, encoding: .utf8) ?? ""
+        try expect(!s.contains("To:"), "no To header without any recipient")
+    },
+
+    TestCase(name: "cc_only_message_gets_no_to_header") {
+        var msg = ParsedMessage()
+        msg.cc = [ParsedAddress(displayName: nil, address: "copied@x.test")]
+        let out = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: msg, options: Options())
+        let s = String(data: out, encoding: .utf8) ?? ""
+        let headerLines = s.components(separatedBy: "\r\n\r\n")[0].components(separatedBy: "\r\n")
+        try expect(!headerLines.contains { $0.lowercased().hasPrefix("to:") }, "empty To must be omitted even with Cc present")
+        try expect(headerLines.contains("Cc: copied@x.test"))
+    },
 ])
