@@ -4,6 +4,10 @@ Notable changes to apple-mail-sendmail. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Development
+
+- The Nix build is bit-for-bit reproducible: the binary's `LC_UUID` no longer changes between builds of the same source.
+
 ## [0.2.0] - 2026-11-18
 
 ### Added

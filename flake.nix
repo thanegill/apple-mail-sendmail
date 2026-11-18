@@ -75,6 +75,9 @@
                 ];
               };
               nativeBuildInputs = [ pkgs.swift pkgs.swiftpm ];
+              # Keeps LC_UUID deterministic: ld hashes the debug stabs, whose order
+              # varies run to run, and stripping them later leaves the UUID behind.
+              swiftpmFlags = [ "-Xlinker" "-S" ];
 
               preBuild = ''
                 export CFFIXED_USER_HOME="$TMPDIR"
