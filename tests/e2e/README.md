@@ -302,7 +302,8 @@ guest's `tcc.log` and prints the relevant `AUTHREQ` lines.
 ### Preparing the golden VM
 
 `nix run .#e2e-vm -- --setup-golden` (`--base-image REF` for another
-image than `ghcr.io/cirruslabs/macos-golden-gate-base:latest`) pulls the
+image than the pinned `ghcr.io/cirruslabs/macos-golden-gate-base` digest
+in `vm.sh`) pulls the
 base image the first time (about 32 GB to download, about 50 GB on
 disk), boots it with a window, and automatically sets up SSH, auto-login,
 no sleep, Nix, the `e2e-b-smtp.test` lines in `/etc/hosts`, and a running

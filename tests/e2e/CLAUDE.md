@@ -53,6 +53,7 @@ Guidance for changing the live end-to-end harness (`e2e.sh`, `nix run .#e2e`) an
 ## Running it in a Tart VM (`vm.sh`)
 
 - Agents must not create, clone, run, stop or delete VMs, pull images, or run either mode without the user's explicit go-ahead: setup pulls about 32 GB, and a run drives Mail (inside the VM). Fine without asking: `tart list`, the wrapper's own `--help`, `nix run .#e2e-vm -- -- --help` and `-- --list` (run on the host, where they only print), and building the package. Every other harness argument set boots a clone once the host-side argument check passes.
+- The base image is pinned by digest (`base_image` in `vm.sh`); rebuild the golden VM after bumping it.
 - Every boot passes `tart run --no-audio` (in `start_vm`'s `run_args`), so no VM plays sound on the host; keep it when adding display modes.
 - Every step that can take long runs through `run_interruptibly` (a background job plus `wait`), because bash runs an INT/TERM trap only after a foreground child exits, so a supervisor's TERM-then-KILL would otherwise leak a running clone. Keep new long steps on that path, and test signal handling with a stub `tart` on `PATH`, never a real VM. `run_interruptibly` passes its stdin on explicitly (`<&0`): a non-interactive bash gives background jobs `/dev/null`.
 - Remote commands whose status is a yes/no answer go through `guest_test` (0 yes, 1 no, anything else stops setup), and those whose exit code overlaps failures (`lsof`, `pgrep` via `tart exec`) report it in-band.
