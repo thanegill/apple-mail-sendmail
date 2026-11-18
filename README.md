@@ -239,8 +239,9 @@ nix develop --command swift run sendmail-test
 
 The unit tests never drive Mail.app. The live end-to-end harness, which
 does, is described in [`tests/e2e/README.md`](tests/e2e/README.md).
-Maintainer notes are in [CLAUDE.md](CLAUDE.md), and the release
-procedure in [RELEASING.md](RELEASING.md).
+Maintainer notes are in [CLAUDE.md](CLAUDE.md), the release
+procedure in [RELEASING.md](RELEASING.md), and the changes in each
+release in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

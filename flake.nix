@@ -184,6 +184,7 @@
               pkgs.gh
               pkgs.nix
               pkgs.coreutils
+              pkgs.gawk
               pkgs.gnused
               pkgs.gnugrep
             ];

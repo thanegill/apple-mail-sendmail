@@ -6,19 +6,27 @@ Usage:
 
 prepare  Open the release PR for vX.Y.Z: branch release/vX.Y.Z from
          origin/master in a temporary worktree, set PackageVersion.string in
-         Sources/SendmailCore/Version.swift, run `nix flake check -L`, commit
-         "Release vX.Y.Z", push the branch and open a PR labelled `release`.
-         Your checkout is never switched or modified.
+         Sources/SendmailCore/Version.swift, rename CHANGELOG.md's
+         "## [Unreleased]" section to "## [X.Y.Z] - <UTC date>" under a new
+         empty "## [Unreleased]", compare the [Unreleased] link from vX.Y.Z
+         and add an [X.Y.Z] link comparing the previous tag to vX.Y.Z, run
+         `nix flake check -L`, commit "Release vX.Y.Z", push the branch and
+         open a PR labelled `release` whose body carries the new section.
+         Refuses if the [Unreleased] section is missing or has no entries,
+         or the [Unreleased] link is missing. Your checkout is never
+         switched or modified.
 
 tag      After that PR has merged: tag its merge commit with the annotated
-         tag vX.Y.Z, push the tag, and create the GitHub release with
-         generated notes. Deletes the local release/vX.Y.Z branch if it is
-         fully merged into origin/master.
+         tag vX.Y.Z, push the tag, and create the GitHub release with the
+         "## [X.Y.Z]" section of CHANGELOG.md at that commit as its notes.
+         Deletes the local release/vX.Y.Z branch if it is fully merged into
+         origin/master.
 
-  --dry-run  prepare: stop after the local commit, print what would be pushed
-             and opened, then delete the worktree and branch.
-             tag: print the tag, push and release that would be made, and
-             change nothing.
+  --dry-run  prepare: stop after the local commit, print it, the CHANGELOG
+             diff and what would be pushed and opened, then delete the
+             worktree and branch.
+             tag: print the tag, push and release that would be made and the
+             release notes, and change nothing.
 EOF
 }
 
@@ -29,6 +37,7 @@ die() {
 
 base_branch=master
 version_file=Sources/SendmailCore/Version.swift
+changelog_file=CHANGELOG.md
 version_line_regex='^( *public static let string = ")([0-9]+\.[0-9]+\.[0-9]+)"$'
 semver_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 
@@ -98,12 +107,38 @@ origin_ref_exists() {
   esac
 }
 
-release_notes() {
-  local target="$1" previous_tag_args=()
-  [[ -z "$highest_tag" ]] || previous_tag_args=(-f "previous_tag_name=$highest_tag")
-  gh api "repos/{owner}/{repo}/releases/generate-notes" \
-    -f "tag_name=$tag" -f "target_commitish=$target" "${previous_tag_args[@]}" --jq .body ||
-    die "could not generate the release notes preview"
+changelog_at() {
+  git show "$1:$changelog_file" 2>/dev/null
+}
+
+# Exits 3 when there is no "## [$1]" heading.
+changelog_section() {
+  awk -v heading="## [$1]" '
+    found && (/^## / || /^\[[^]]+\]: /) { ended = 1 }
+    found && !ended { lines[++count] = $0; next }
+    !found && ($0 == heading || index($0, heading " ") == 1) { found = 1 }
+    END {
+      if (!found) exit 3
+      first = 1
+      while (first <= count && lines[first] ~ /^[[:space:]]*$/) first++
+      last = count
+      while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+      for (i = first; i <= last; i++) print lines[i]
+    }
+  '
+}
+
+changelog_entries() {
+  local changelog="$1" name="$2" source_name="$3" hint="$4" section status=0
+  section="$(changelog_section "$name" <<<"$changelog")" || status=$?
+  case "$status" in
+    0) ;;
+    3) die "$source_name has no '## [$name]' heading; $hint" ;;
+    *) die "could not read the [$name] section of $source_name (awk exited $status)" ;;
+  esac
+  grep -qvE '^[[:space:]]*(#{1,6}([[:space:]].*)?)?$' <<<"$section" ||
+    die "the [$name] section of $source_name has no entries, only blank lines or empty subheadings; $hint"
+  printf '%s\n' "$section"
 }
 
 gh auth status >/dev/null 2>&1 || die "the GitHub CLI is not logged in (see 'gh auth status'; run 'gh auth login')"
@@ -135,6 +170,19 @@ prepare() {
   ! git rev-parse --quiet --verify "refs/heads/$release_branch" >/dev/null ||
     die "local branch $release_branch already exists; delete it first (git branch -D $release_branch)"
 
+  local base_changelog notes
+  base_changelog="$(changelog_at "origin/$base_branch")" || die "origin/$base_branch has no $changelog_file"
+  notes="$(changelog_entries "$base_changelog" Unreleased "$changelog_file on origin/$base_branch" \
+    "add this release's changes under '## [Unreleased]', merge that, and re-run")"
+  ! changelog_section "$new_version" <<<"$base_changelog" >/dev/null ||
+    die "$changelog_file on origin/$base_branch already has a '## [$new_version]' section"
+  ! grep -qF "[$new_version]: " <<<"$base_changelog" ||
+    die "$changelog_file on origin/$base_branch already has a '[$new_version]: ' link"
+  local repo_url
+  repo_url="$(sed -nE 's#^\[Unreleased\]: (https://[^ ]+)/compare/[^ ]+\.\.\.HEAD$#\1#p' <<<"$base_changelog")"
+  [[ -n "$repo_url" && "$repo_url" != *$'\n'* ]] ||
+    die "$changelog_file on origin/$base_branch needs exactly one '[Unreleased]: https://github.com/<owner>/<repo>/compare/<previous tag>...HEAD' link"
+
   temp_root="$(mktemp -d "${TMPDIR:-/tmp}/apple-mail-sendmail-release.XXXXXX")"
   worktree_dir="$temp_root/worktree"
   branch_pushed=false
@@ -149,21 +197,45 @@ prepare() {
   [[ "$(sed -nE "s/$version_line_regex/\2/p" "$version_file")" == "$new_version" ]] ||
     die "failed to set the version in $version_file"
 
+  local release_heading unreleased_link release_link
+  release_heading="## [$new_version] - $(date -u +%F)"
+  unreleased_link="[Unreleased]: $repo_url/compare/$tag...HEAD"
+  if [[ -n "$highest_tag" ]]; then
+    release_link="[$new_version]: $repo_url/compare/$highest_tag...$tag"
+  else
+    release_link="[$new_version]: $repo_url/releases/tag/$tag"
+  fi
+  awk -v unreleased="## [Unreleased]" -v released="$release_heading" \
+    -v unreleased_link="$unreleased_link" -v release_link="$release_link" '
+    !renamed && ($0 == unreleased || index($0, unreleased " ") == 1) {
+      print unreleased; print ""; print released; renamed = 1; next
+    }
+    !linked && index($0, "[Unreleased]: ") == 1 {
+      print unreleased_link; print release_link; linked = 1; next
+    }
+    { print }
+  ' "$changelog_file" >"$temp_root/$changelog_file"
+  mv "$temp_root/$changelog_file" "$changelog_file"
+  [[ "$(changelog_section "$new_version" <"$changelog_file")" == "$notes" ]] ||
+    die "failed to rename the [Unreleased] section of $changelog_file to [$new_version]"
+  if ! grep -qxF "$unreleased_link" "$changelog_file" || ! grep -qxF "$release_link" "$changelog_file"; then
+    die "failed to update the [Unreleased] and [$new_version] links in $changelog_file"
+  fi
+
   echo "release: running nix flake check -L"
   nix flake check -L || die "nix flake check failed; nothing was pushed"
 
-  git commit --quiet -m "Release $tag" -- "$version_file"
+  git commit --quiet -m "Release $tag" -- "$version_file" "$changelog_file"
 
-  local notes pr_title pr_body_file
-  notes="$(release_notes "$base_branch")"
+  local pr_title pr_body_file
   pr_title="Release $tag"
   pr_body_file="$temp_root/pr-body.md"
   cat >"$pr_body_file" <<EOF
-Sets \`PackageVersion.string\` to \`$new_version\`.
+Sets \`PackageVersion.string\` to \`$new_version\` and dates the \`$changelog_file\` section.
 
-After this merges, \`nix run .#release -- tag $new_version\` tags the merge commit \`$tag\` and publishes the GitHub release with generated notes.
+After this merges, \`nix run .#release -- tag $new_version\` tags the merge commit \`$tag\` and publishes the GitHub release with the notes below, taken from \`$changelog_file\`.
 
-## Release notes preview
+## Release notes
 
 $notes
 EOF
@@ -172,6 +244,9 @@ EOF
     echo
     echo "release: dry run; the local commit was:"
     git show --stat HEAD
+    echo
+    echo "release: the $changelog_file change:"
+    git --no-pager diff HEAD^ HEAD -- "$changelog_file"
     echo
     echo "release: would run: git push -u origin $release_branch"
     echo "release: would create the 'release' label if it is missing"
@@ -239,6 +314,12 @@ tag_release() {
 
   echo "release: PR #$pr_number merged $release_branch as $merge_sha"
 
+  local merge_changelog notes
+  merge_changelog="$(changelog_at "$merge_sha")" ||
+    die "$changelog_file is missing at PR #$pr_number's merge commit $merge_sha; $manual_hint"
+  notes="$(changelog_entries "$merge_changelog" "$new_version" \
+    "$changelog_file at PR #$pr_number's merge commit $merge_sha" "$manual_hint")"
+
   local branch_merged=false
   if git rev-parse --quiet --verify "refs/heads/$release_branch" >/dev/null &&
     git merge-base --is-ancestor "refs/heads/$release_branch" "origin/$base_branch"; then
@@ -248,16 +329,20 @@ tag_release() {
   if [[ "$dry_run" == true ]]; then
     echo "release: would run: git tag --annotate $tag -m 'apple-mail-sendmail $tag' $merge_sha"
     echo "release: would run: git push origin refs/tags/$tag"
-    echo "release: would run: gh release create $tag --verify-tag --generate-notes --title $tag"
+    echo "release: would run: gh release create $tag --verify-tag --title $tag --notes-file <notes below>"
     if [[ "$branch_merged" == true ]]; then
       echo "release: would delete the local branch $release_branch (fully merged into origin/$base_branch)"
     fi
-    echo "----- release notes preview -----"
-    release_notes "$merge_sha"
-    echo "---------------------------------"
+    echo "----- release notes -----"
+    printf '%s\n' "$notes"
+    echo "-------------------------"
     echo "release: dry run complete; nothing was tagged, pushed or released"
     return 0
   fi
+
+  notes_file="$(mktemp "${TMPDIR:-/tmp}/apple-mail-sendmail-$tag-notes.XXXXXX")"
+  trap 'rm -f "$notes_file"' EXIT
+  printf '%s\n' "$notes" >"$notes_file"
 
   git tag --annotate "$tag" -m "apple-mail-sendmail $tag" "$merge_sha"
   if ! git push origin "refs/tags/$tag"; then
@@ -266,8 +351,10 @@ tag_release() {
   fi
   echo "release: pushed $tag ($merge_sha)"
 
-  gh release create "$tag" --verify-tag --generate-notes --title "$tag" ||
-    die "$tag is pushed but creating the release failed; run: gh release create $tag --verify-tag --generate-notes --title $tag"
+  if ! gh release create "$tag" --verify-tag --title "$tag" --notes-file "$notes_file"; then
+    trap - EXIT
+    die "$tag is pushed but creating the release failed; run: gh release create $tag --verify-tag --title $tag --notes-file $notes_file"
+  fi
 
   if [[ "$branch_merged" == true ]]; then
     if git branch --quiet -D "$release_branch"; then
