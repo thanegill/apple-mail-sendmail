@@ -16,9 +16,6 @@ struct TestFailure: Error {
     let line: UInt
 }
 
-/// Thrown by a test that wants to record itself as skipped (e.g. the
-/// environment lacks an OS framework the test needs). The harness reports
-/// these separately from passes and failures.
 struct TestSkipped: Error {
     let reason: String
 }
@@ -90,8 +87,6 @@ func expectThrows(
     throw TestFailure(message: "expected error, got success", file: file, line: line)
 }
 
-/// "Suite.case" of the test currently running, for helpers that record
-/// artifacts and need to say which test produced them.
 private(set) var currentTestName = ""
 
 func runSuites(_ suites: [TestSuite]) -> Int32 {

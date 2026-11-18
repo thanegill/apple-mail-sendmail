@@ -3,15 +3,11 @@ import Foundation
 public enum InfoRequest: Equatable {
     case help
     case version
-    /// Report the Accessibility and Automation grants; exits 0 only when
-    /// both are in place.
     case checkPermissions
 }
 
 public struct Options {
-    /// Set when argv asks for help, version or permission-check output
-    /// instead of delivery; the caller prints it and exits without reading
-    /// stdin.
+    /// When set, the caller prints it and exits without reading stdin.
     public var infoRequest: InfoRequest? = nil
     public var readRecipientsFromHeaders: Bool = false
     public var fromAddress: String? = nil
@@ -32,10 +28,8 @@ public enum CLIError: Error {
 public enum CLI {
     public static let versionText = "apple-mail-sendmail \(PackageVersion.string)"
 
-    // Legacy short flags whose value may be attached (-Bmime) OR the next argv
-    // (-B 8BITMIME). When the value isn't attached, consume the following argv so
-    // it isn't misparsed as a positional recipient. -v (verbose) and -n (no
-    // aliasing) take no value and are deliberately absent here.
+    // A value not attached to the flag is the next argv, consumed so it is not
+    // taken for a recipient. -v and -n take no value and are deliberately absent.
     private static let separateValueFlags: Set<Character> = ["O", "B", "N", "R", "X", "C"]
 
     public static func parse(_ argv: [String], env: [String: String]) throws -> Options {
@@ -63,7 +57,7 @@ public enum CLI {
                 continue
             }
             if arg == "-" {
-                // stdin marker; some callers pass it. Treat as no-op.
+                // stdin marker; some callers pass it.
                 continue
             }
             if arg.hasPrefix("--") {
@@ -91,7 +85,6 @@ public enum CLI {
                 continue
             }
 
-            // Short flag cluster: walk chars after the leading '-'.
             let chars = Array(arg.dropFirst())
             var j = 0
             while j < chars.count {
@@ -143,14 +136,6 @@ public enum CLI {
                     }
                     j = chars.count
                 case "o", "b", "O", "q", "N", "R", "X", "M", "B", "C":
-                    // Legacy flags accepted for sendmail compatibility. Some take a
-                    // value that in standard sendmail may be SPACE-SEPARATED from the
-                    // flag (e.g. -B 8BITMIME, -N never, -R hdrs, -X logfile, -C cf); if the
-                    // value isn't attached to this token, it's the next argv. Consume
-                    // it so it isn't misparsed as a positional recipient.
-                    //
-                    // Attached-only flags (-oi, -bm, -q30m, -Mx=y) just swallow the
-                    // rest of this token.
                     let rest = String(chars[(j + 1)...])
                     if separateValueFlags.contains(c) && rest.isEmpty && i < argv.count {
                         i += 1
@@ -169,10 +154,6 @@ public enum CLI {
         print(helpText(programName: programName))
     }
 
-    /// Build the help text. Pure function for testability -- `printHelp` just
-    /// writes the result to stdout. Mirrors the section structure used by
-    /// swift-argument-parser (OVERVIEW / USAGE / OPTIONS / ENVIRONMENT /
-    /// LEGACY FLAGS) without taking the dependency.
     public static func helpText(programName: String = "apple-mail-sendmail") -> String {
         let options: [(String, String)] = [
             ("-t",                  "Read recipients from To, Cc, and Bcc headers."),
@@ -218,9 +199,6 @@ public enum CLI {
         return out
     }
 
-    /// Format a list of (label, description) pairs into a two-column block.
-    /// Column 1 indented 2, padded to a common width; column 2 wraps at 80
-    /// chars total and continuation lines align under column 2.
     private static func formatTwoColumn(_ rows: [(String, String)]) -> String {
         let labelIndent = "  "
         let labelWidth = max(20, (rows.map { $0.0.count }.max() ?? 0) + 2)
@@ -232,8 +210,6 @@ public enum CLI {
         for (label, desc) in rows {
             let padding = String(repeating: " ", count: max(0, labelWidth - label.count))
             let wrapped = wrap(desc, width: descWidth, indent: descStart)
-            // First line carries the label; subsequent wrapped lines start
-            // already-indented from `wrap`.
             if let first = wrapped.first {
                 lines.append("\(labelIndent)\(label)\(padding)\(gap)\(first.dropFirst(descStart))")
                 for rest in wrapped.dropFirst() {
@@ -244,8 +220,7 @@ public enum CLI {
         return lines.joined(separator: "\n")
     }
 
-    /// Simple greedy word-wrap. Returns each output line already indented by
-    /// `indent` spaces (so the caller can splice the first line in place).
+    /// Every line, the first included, comes back indented by `indent`.
     private static func wrap(_ text: String, width: Int, indent: Int) -> [String] {
         let pad = String(repeating: " ", count: indent)
         let words = text.split(separator: " ")

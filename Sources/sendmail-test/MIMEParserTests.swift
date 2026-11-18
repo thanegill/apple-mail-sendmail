@@ -45,8 +45,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "quoted_printable_lowercase_hex") {
-        // The shared hexNibble decoder must accept lowercase hex digits;
-        // =c3=a9 is the same "é" byte pair as the uppercase =C3=A9 form.
         let input = """
         Subject: QP
         Content-Type: text/plain; charset=utf-8
@@ -60,8 +58,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "quoted_printable_invalid_hex_kept_literal") {
-        // A '=' not followed by two hex digits is not an escape; the shared
-        // hexNibble decoder returns nil and the bytes pass through verbatim.
         let input = """
         Subject: QP
         Content-Type: text/plain; charset=utf-8
@@ -74,9 +70,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectEqual(msg.body, "a=ZZb")
     },
 
-    // RFC 2045 section 6.7: trailing whitespace on an encoded line is transport
-    // padding and must be deleted (rule 3), so `= ` then a line break is still
-    // a soft line break (rule 5). Encoded whitespace (=20, =09) is kept.
     TestCase(name: "rfc2045_quoted_printable_transport_padding") {
         for lineBreak in ["\n", "\r\n"] {
             let body = ["padded   ", "soft= \t", "break", "kept=20", "tab=09", "end="].joined(separator: lineBreak)
@@ -198,12 +191,8 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "html_body_preserved_alongside_plain_text") {
-        // The parser should keep both the stripped plain-text body (fallback)
-        // and the raw HTML in htmlBody (for the rich-HTML render path).
-        //
-        // Regression: an older code path classified the text/html part as a
-        // phantom attachment whenever text/plain had already filled the body
-        // slot, producing an `att-NN-attachment-N.bin` in the compose window.
+        // The text/html part must not become a phantom attachment once
+        // text/plain has filled the body.
         let input = """
         Subject: dual
         Content-Type: multipart/alternative; boundary="ALT"
@@ -227,10 +216,8 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "multipart_mixed_wrapper_with_no_attachments") {
-        // email-output structure: outer multipart/mixed exists for potential
-        // attachments, but when no --attach is given the wrapper contains only
-        // the inner multipart/alternative body. The parser must not see this
-        // outer wrapper as a signal that attachments exist.
+        // email-output's shape without --attach: a multipart/mixed wrapper
+        // around only the multipart/alternative body.
         let input = """
         Subject: wrapped
         MIME-Version: 1.0
@@ -277,8 +264,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "html_style_block_contents_dropped") {
-        // Regression: an HTML email with a <style> block in <head> must not
-        // dump CSS rules into the plain-text fallback.
         let input = """
         Subject: styled
         Content-Type: text/html; charset=utf-8
@@ -303,9 +288,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "multipart_alternative_empty_plain_falls_back_to_html") {
-        // Regression for email-output style: text/plain part is empty (or
-        // whitespace only), so the parser must use the text/html part's
-        // stripped text content as the body.
         let input = """
         Subject: empty plain fallback
         Content-Type: multipart/alternative; boundary="ALT"
@@ -336,10 +318,7 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "inline_related_image_not_promoted_to_attachment") {
-        // Issue #17: a multipart/related inline image (Content-Disposition:
-        // inline, image/png, no filename, referenced by CID) must NOT become a
-        // phantom attachment. A genuine attachment sibling (disposition
-        // attachment with a filename) still must.
+        // A named attachment beside the inline image still counts.
         let input = """
         Subject: related
         MIME-Version: 1.0
@@ -421,9 +400,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "uppercase_disposition_type_and_param_name") {
-        // The disposition type and parameter names are case-insensitive
-        // (RFC 2183): a bare ATTACHMENT on a text part must still be an
-        // attachment, and an INLINE image without a name must still be skipped.
         let input = """
         Subject: upper
         MIME-Version: 1.0
@@ -478,8 +454,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "rfc2231_content_type_name_with_charset_and_language") {
-        // No Content-Disposition: the name* parameter alone identifies the
-        // attachment, in a non-UTF-8 charset with a language tag.
         let input = """
         Subject: 2231
         MIME-Version: 1.0
@@ -501,8 +475,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "rfc2231_filename_continuations") {
-        // Encoded (*N*) and literal (*N) segments are joined in index order;
-        // only segment 0 carries the charset prefix.
         let input = """
         Subject: 2231
         MIME-Version: 1.0
@@ -534,8 +506,7 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         )
     },
 
-    // RFC 2231 sections 3, 4 and 4.1, with the examples' `title` and `URL`
-    // parameters renamed to `filename`.
+    // The RFC's `title` and `URL` parameters are renamed to `filename`.
     TestCase(name: "rfc2231_section_examples") {
         try expectEqual(
             try attachmentFilenames(contentDisposition: #"attachment; filename*0="ftp://"; filename*1="cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar""#),
@@ -551,16 +522,12 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         )
     },
 
-    // RFC 2045 section 5.1: `charset=us-ascii (Plain text)` carries a comment
-    // after the value.
     TestCase(name: "rfc2045_charset_followed_by_comment") {
         let input = "Content-Type: text/plain; charset=iso-8859-1 (Latin text)\nContent-Transfer-Encoding: quoted-printable\n\ncaf=E9"
         let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
         try expectEqual(msg.body, "caf\u{E9}")
     },
 
-    // RFC 2046 section 5.1.1's sample message: a preamble, a body part with no
-    // header fields (implicitly typed US-ASCII text), and an epilogue.
     TestCase(name: "rfc2046_sec5_1_1_sample_with_headerless_part") {
         let input = """
         From: Nathaniel Borenstein <nsb@bellcore.com>
@@ -619,8 +586,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         }
     },
 
-    // RFC 2046 section 5.1.5: in multipart/digest a part without Content-Type
-    // is message/rfc822, so the digested messages are not read as body text.
     TestCase(name: "rfc2046_digest_parts_default_to_message_rfc822") {
         let input = """
         Subject: Internet Digest, volume 42
@@ -655,8 +620,7 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expect(String(decoding: msg.attachments[0].data, as: UTF8.self).hasPrefix("From: someone-else\n"))
     },
 
-    // RFC 2231 applies to every parameter, not just filenames: boundary*= and
-    // charset*= (as CPython's test_email msg_33 sends them).
+    // As CPython's test_email msg_33 sends them.
     TestCase(name: "rfc2231_extended_boundary_and_charset") {
         let input = """
         Content-Type: multipart/signed; micalg*=ansi-x3.4-1968''pgp-md5;
@@ -699,9 +663,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "stripHTML_does_not_double_decode_escaped_entity") {
-        // Issue #18: `&amp;lt;` must decode to the literal `&lt;`, not `<`.
-        // The old chained-replace turned `&amp;` into `&` first, then the
-        // resulting `&lt;` into `<`.
         let input = "Subject: e\nContent-Type: text/html; charset=utf-8\n\n<p>&amp;lt;</p>"
         let raw = try RFC822Parser.parse(Data(input.utf8))
         let msg = MIMEParser.parse(raw)
@@ -709,8 +670,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "stripHTML_decodes_numeric_and_hex_references") {
-        // Issue #18: decimal `&#8217;` and hex `&#x2019;` both decode to the
-        // right-single-quotation-mark glyph (U+2019).
         let rsquo = "\u{2019}"
         let dec = "Subject: e\nContent-Type: text/html; charset=utf-8\n\n<p>it&#8217;s</p>"
         let msgDec = MIMEParser.parse(try RFC822Parser.parse(Data(dec.utf8)))
@@ -722,7 +681,6 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
     },
 
     TestCase(name: "stripHTML_basic_tag_and_entity_mix") {
-        // Issue #18: a mix of tags and named entities renders correctly.
         let input = """
         Subject: mix
         Content-Type: text/html; charset=utf-8

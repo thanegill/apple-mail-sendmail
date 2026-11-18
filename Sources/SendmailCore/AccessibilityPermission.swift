@@ -1,9 +1,9 @@
 import ApplicationServices
 import Foundation
 
-/// Whether this process may drive another app's UI, which the .eml path
-/// needs and `--no-ui`'s Apple Event path does not. TCC charges the grant to the
-/// responsible process (the terminal, or whatever launched the binary).
+/// The .eml path needs this grant; `--no-ui`'s Apple Event path does not.
+/// TCC charges it to the responsible process (the terminal, or whatever
+/// launched the binary), not to the binary.
 public struct AccessibilityPermission {
     let isGranted: () -> Bool
     let osMajorVersion: Int
@@ -13,7 +13,7 @@ public struct AccessibilityPermission {
         self.isGranted = isGranted
     }
 
-    /// The real check, `AXIsProcessTrusted()`, which never prompts.
+    /// `AXIsProcessTrusted()` never prompts.
     public static func system() -> AccessibilityPermission {
         AccessibilityPermission(osMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion) {
             AXIsProcessTrusted()
@@ -32,7 +32,8 @@ public struct AccessibilityNotGranted: Error, CustomStringConvertible {
         self.osMajorVersion = osMajorVersion
     }
 
-    /// macOS 27 renamed the Accessibility pane.
+    /// macOS 27 renamed the Accessibility pane. ProcessInfo reports 27 there
+    /// even though this binary is built against SDK 14.4.
     public var settingsLocation: String {
         osMajorVersion >= 27
             ? "System Settings > Privacy & Security > Device Control and Data Access"

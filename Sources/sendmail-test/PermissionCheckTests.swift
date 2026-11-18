@@ -1,8 +1,6 @@
 import Foundation
 import SendmailCore
 
-/// Answers the permission checks from fixed values and records each
-/// Automation check, with whether Mail was running at the time.
 private final class FakePermissionProbe: PermissionProbe {
     let accessibility: Bool
     /// One answer per Automation check; the last one repeats.

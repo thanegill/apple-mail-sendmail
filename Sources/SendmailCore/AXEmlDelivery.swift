@@ -1,8 +1,8 @@
 import ApplicationServices
 import Foundation
 
-/// The .eml path through Accessibility and Launch Services, with no Apple
-/// Events: executes `EmlPlan.steps`.
+/// Sends no Apple Events, so the .eml path needs Accessibility but no
+/// Automation grant.
 public struct AXEmlDelivery: EmlDelivery {
     let ax: AXClient
     let workspace: MailWorkspace
@@ -10,9 +10,8 @@ public struct AXEmlDelivery: EmlDelivery {
     let accessibility: AccessibilityPermission
     let trace: (String) -> Void
 
-    /// `trace` receives one line per notable decision, such as how a menu
-    /// item was found or skipping a window check; it must not write to the
-    /// caller's stdout or stderr.
+    /// `trace` must not write to the caller's stdout or stderr, where cron
+    /// would mail it.
     public init(
         ax: AXClient, workspace: MailWorkspace, clock: Clock, accessibility: AccessibilityPermission,
         trace: @escaping (String) -> Void = { _ in }
@@ -132,7 +131,6 @@ private final class PlanRun {
         return windows
     }
 
-    /// Waits up to 5s for the window list to stay the same for 0.6s.
     func settledWindows() throws -> [UIElement] {
         let quiet: TimeInterval = 0.6
         let deadline = clock.now + 5
@@ -200,8 +198,8 @@ private final class PlanRun {
         return title
     }
 
-    /// Each top-level menu-bar item's title and the items of its menu, read
-    /// afresh on every call.
+    /// Read afresh on every call, never cached: Mail's menus change with its
+    /// key window.
     func topLevelMenus() -> [(title: String?, items: [UIElement])] {
         guard let app, case let .element(menuBar)? = ax.attribute(kAXMenuBarAttribute, of: app) else { return [] }
         return children(menuBar).map { barItem in
@@ -223,10 +221,8 @@ private final class PlanRun {
         case title
     }
 
-    /// The menu item to press for `item`: the only enabled item with its
-    /// shortcut in any top-level menu, else the item with its fallback title
-    /// (enabled or not), else nil. Throws when several enabled items share
-    /// the shortcut, since pressing any of them is a guess.
+    /// Throws when several enabled items share the shortcut: pressing any of
+    /// them is a guess.
     func resolve(_ item: MenuItemTarget) throws -> (element: UIElement, foundBy: FoundBy)? {
         let menus = topLevelMenus()
         let byShortcut = menus.flatMap(\.items).filter { hasShortcut($0, of: item) && isEnabled($0) }
@@ -253,7 +249,6 @@ private final class PlanRun {
         _ = ax.setAttribute(kAXFrontmostAttribute, of: try requireApp(), to: true)
     }
 
-    /// nil when every check holds for `target`.
     func failedCheck(_ check: GuardCheck, target: UIElement, window: EmlWindow) throws -> String? {
         let app = try requireApp()
         switch check {
@@ -272,7 +267,6 @@ private final class PlanRun {
         }
     }
 
-    /// nil when `target` passes `check`, or when the check cannot apply.
     func failedContentCheck(_ check: WindowCheck, target: UIElement, window: EmlWindow) -> String? {
         switch check {
         case .titleMatchesSubject:
@@ -284,9 +278,8 @@ private final class PlanRun {
         }
     }
 
-    /// Raises `target` and re-runs every check until all hold, then looks the
-    /// menu item up again and presses it once. Never presses unverified; on
-    /// timeout it throws naming the last failed check.
+    /// Never presses unverified: the item is looked up afresh after every
+    /// check holds, and a timeout throws without pressing.
     func guardedPress(
         _ item: MenuItemTarget, on target: UIElement, window: EmlWindow,
         checks: [GuardCheck], verify: [WindowCheck], timeout: TimeInterval
@@ -342,10 +335,10 @@ private final class PlanRun {
         }
     }
 
-    /// Mail closes the compose when it accepts Send, so a compose still open
-    /// after the gone-poll means the press was not taken and pressing again
-    /// cannot send twice. An AXPress can report kAXErrorCannotComplete even
-    /// when it acted, so the press result never decides a retry.
+    /// Retrying is safe only because Mail closes the compose when it accepts
+    /// Send: a compose still open means the press was not taken. AXPress can
+    /// return kAXErrorCannotComplete (-25204) even when it acted, so the
+    /// press result never decides a retry. Never press through a sheet.
     func pressUntilClosed(
         _ item: MenuItemTarget, window: EmlWindow, checks: [GuardCheck], verify: [WindowCheck], guardTimeout: TimeInterval,
         maxPresses: Int, readyTimeout: TimeInterval, goneTimeout: TimeInterval
@@ -390,7 +383,6 @@ private final class PlanRun {
 
     // MARK: - Closing
 
-    /// Presses the window's close button and waits up to 2s for it to go.
     /// Best effort: by now the message is in its compose or sent, so a
     /// viewer left open must not fail the run.
     func closeWindow(_ target: UIElement) {

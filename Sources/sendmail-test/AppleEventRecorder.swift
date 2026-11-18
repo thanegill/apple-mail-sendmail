@@ -2,8 +2,6 @@ import CoreServices
 import Foundation
 import SendmailCore
 
-/// A decoded Apple Event parameter, so tests assert on structure rather than
-/// on raw descriptors. Four-character codes are kept as their ASCII spelling.
 indirect enum AEValue: Equatable, CustomStringConvertible {
     case text(String)
     case bool(Bool)
@@ -14,9 +12,7 @@ indirect enum AEValue: Equatable, CustomStringConvertible {
     case fileURL(String)
     case null
     case record([String: AEValue])
-    /// `<want> <seld> of <from>` with key form `form`.
     case specifier(want: String, from: AEValue, form: String, seld: AEValue)
-    /// `<position> <object>`.
     case insertion(position: String, object: AEValue)
     case unknown(String)
 
@@ -37,7 +33,6 @@ indirect enum AEValue: Equatable, CustomStringConvertible {
         }
     }
 
-    /// Every text value inside, depth first.
     var texts: [String] {
         switch self {
         case let .text(value): return [value]
@@ -113,15 +108,13 @@ struct RecordedEvent: CustomStringConvertible {
     var description: String { "\(name) " + AEValue.record(params).description }
 }
 
-/// The specifier the recorder hands back for a new outgoing message, as
-/// Mail would: `outgoing message id 7 of application "Mail"`.
+/// As Mail answers `make new outgoing message`:
+/// `outgoing message id 7 of application "Mail"`.
 let recordedMessageSpecifier = AEValue.specifier(want: "bcke", from: .null, form: "ID  ", seld: .integer(7))
 
-/// Records each event the plain path sends, decoded, and answers like Mail:
-/// `make new outgoing message` returns a message specifier.
 final class AppleEventRecorder: AppleEventSending {
     private(set) var events: [RecordedEvent] = []
-    /// Fail the event at this index (0-based) with this error.
+    /// 0-based event index.
     var failure: (index: Int, error: AppleEventError)?
     /// Runs before each event is answered.
     var onSend: ((RecordedEvent) throws -> Void)?
@@ -174,7 +167,6 @@ final class AppleEventRecorder: AppleEventSending {
 
     var names: [String] { events.map(\.name) }
 
-    /// The `make new outgoing message` event's properties.
     var messageProperties: [String: AEValue] {
         guard let make = events.first(where: { $0.name == "core/crel" && $0.params["kocl"] == .type("bcke") }),
               case let .record(fields)? = make.params["prdt"]
@@ -186,7 +178,6 @@ final class AppleEventRecorder: AppleEventSending {
         events.filter { $0.name == "core/crel" && $0.params["kocl"] == .type(elementClass) }
     }
 
-    /// Every text parameter of every event.
     var allTexts: [String] { events.flatMap { AEValue.record($0.params).texts } }
 }
 

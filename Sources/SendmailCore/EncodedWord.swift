@@ -1,9 +1,6 @@
 import Foundation
 
 extension UInt8 {
-    /// Decode a single ASCII hex digit (0-9, A-F, a-f) to its 0-15 value, or
-    /// nil if the byte is not a hex digit. Shared by the quoted-printable
-    /// (MIMEParser) and RFC 2047 Q-encoding (EncodedWord) decoders.
     var hexNibble: Int? {
         switch self {
         case 0x30...0x39: return Int(self - 0x30)
@@ -15,8 +12,6 @@ extension UInt8 {
 }
 
 public enum EncodedWord {
-    /// Decode RFC 2047 encoded-words within a header value. Whitespace between
-    /// adjacent encoded-words is dropped, as required by the spec.
     public static func decode(_ input: String) -> String {
         if !input.contains("=?") { return input }
         let pattern = #"=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?="#
@@ -34,7 +29,6 @@ public enum EncodedWord {
             let r = m.range
             var prefix = ns.substring(with: NSRange(location: cursor, length: r.location - cursor))
             if previousWasEncoded && !prefix.isEmpty && prefix.trimmingCharacters(in: .whitespaces).isEmpty {
-                // Per RFC 2047: drop whitespace between two adjacent encoded-words.
                 prefix = ""
             }
             out += prefix
@@ -55,10 +49,8 @@ public enum EncodedWord {
         return out
     }
 
-    /// Encode `input` as one or more space-separated UTF-8 `B` encoded-words.
-    /// Each word carries at most 45 bytes (60 base64 chars), keeping it under
-    /// RFC 2047's 75-character limit, and is split only between scalars so
-    /// every word decodes to whole characters.
+    /// 45 bytes per word keeps it under RFC 2047's 75-character limit; words
+    /// split only between scalars, so each decodes to whole characters.
     public static func encode(_ input: String) -> String {
         let maxBytesPerWord = 45
         var chunks: [Data] = []
@@ -97,12 +89,12 @@ public enum EncodedWord {
         var i = 0
         while i < chars.count {
             let b = chars[i]
-            if b == 0x5F { // '_' → space
+            if b == 0x5F {
                 out.append(0x20)
                 i += 1
                 continue
             }
-            if b == 0x3D && i + 2 < chars.count { // '='
+            if b == 0x3D && i + 2 < chars.count {
                 let hi = chars[i + 1].hexNibble
                 let lo = chars[i + 2].hexNibble
                 if let hi = hi, let lo = lo {
@@ -121,28 +113,22 @@ public enum EncodedWord {
         let cs = charset.lowercased()
         switch cs {
         case "utf-8", "utf8", "us-ascii", "ascii":
-            // Strict UTF-8 decode returns nil on ANY invalid byte, and callers
-            // coalesce nil to "" -- which silently drops the whole subject/body
-            // for a mislabeled sender with a stray high byte. Fall back to a
-            // lossy decode (substitutes U+FFFD) so we never return nil here.
+            // Never nil: callers coalesce nil to "", which would drop a whole
+            // subject or body over one stray high byte.
             if let s = String(data: bytes, encoding: .utf8) { return s }
             return String(decoding: bytes, as: UTF8.self)
         case "iso-8859-1", "latin-1", "latin1":
             return String(data: bytes, encoding: .isoLatin1)
         case "windows-1252", "cp1252":
-            // Windows-1252 differs from ISO-8859-1 in 0x80-0x9F: cp1252 places
-            // curly quotes, em-dash, euro sign, etc. there, where Latin-1 has
-            // C1 control chars. Decode with the correct table.
+            // Not Latin-1: cp1252 has printable characters in 0x80-0x9F.
             return String(data: bytes, encoding: .windowsCP1252)
         default:
-            // Try CFString lookup as a last resort.
             let encoding = CFStringConvertIANACharSetNameToEncoding(cs as CFString)
             if encoding != kCFStringEncodingInvalidId {
                 let nsEnc = CFStringConvertEncodingToNSStringEncoding(encoding)
                 return String(data: bytes, encoding: String.Encoding(rawValue: nsEnc))
             }
-            // Same non-nil-preserving fallback as the utf-8 case: never drop the
-            // whole value on an unknown or undecodable charset.
+            // Never nil, as above.
             return String(decoding: bytes, as: UTF8.self)
         }
     }

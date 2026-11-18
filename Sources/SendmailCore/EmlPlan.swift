@@ -1,6 +1,7 @@
 import Foundation
 
-/// The windows the .eml path works on, found by window diff.
+/// Found by window diff, never by title: a Subject can be empty, duplicated
+/// or rewritten by Mail. The title only verifies the find (`WindowCheck`).
 public enum EmlWindow: String {
     case viewer
     case compose
@@ -18,9 +19,9 @@ public enum WindowSnapshot: String {
     case beforeCompose = "before_compose"
 }
 
-/// One check of the key-window guard that runs before every menu press.
-/// Mail's menu commands act on its key window, so Send on the user's own
-/// draft would send it.
+/// Runs before every menu press. Mail's menu commands act on its key window,
+/// and shift-cmd-D is Send on a compose, so a press with the user's own draft
+/// key would send it.
 public enum GuardCheck: String, CaseIterable {
     /// Menu items are hidden, and a press does nothing, unless Mail is frontmost.
     case frontmost
@@ -30,14 +31,7 @@ public enum GuardCheck: String, CaseIterable {
     case noSheet = "no_sheet"
 }
 
-/// A Mail menu item, found by its keyboard shortcut, which stays the same
-/// when Mail runs in another language, or else by its English title.
-///
-/// The driver looks through the items of every top-level menu for an
-/// enabled one whose `kAXMenuItemCmdChar` is `commandCharacter` and whose
-/// `kAXMenuItemCmdModifiers` is exactly `modifiers`. One such item is
-/// pressed; two or more fail closed; none falls back to `fallbackTitle` in
-/// the menu titled `fallbackMenu`.
+/// Found by shortcut, which Mail does not localize, else by English title.
 public struct MenuItemTarget: Equatable {
     /// `kAXMenuItemCmdModifiers` is a bit set with Command implied: Shift
     /// adds 1, Option 2, Control 4, and 8 means no Command.
@@ -55,13 +49,12 @@ public struct MenuItemTarget: Equatable {
         self.fallbackTitle = fallbackTitle
     }
 
-    /// Message > Send Again on a viewer; live (macOS 27, English Mail) its
-    /// shortcut is cmd-char "D" with modifiers 1.
+    /// Live (macOS 27, English Mail): "D" / 1. Edit > Start Dictation is
+    /// "D" / 24, which only the exact modifiers match rules out.
     public static let sendAgain = MenuItemTarget(commandCharacter: "D", modifiers: shiftModifier, fallbackMenu: "Message", fallbackTitle: "Send Again")
-    /// Message > Send on a compose, expected to carry the same shortcut.
+    /// Same shortcut on a compose; verified live with a German Mail.
     public static let send = MenuItemTarget(commandCharacter: "D", modifiers: shiftModifier, fallbackMenu: "Message", fallbackTitle: "Send")
 
-    /// "shift-cmd-D".
     public var shortcutName: String {
         var parts: [String] = []
         if modifiers & 4 != 0 { parts.append("ctrl") }
@@ -71,50 +64,36 @@ public struct MenuItemTarget: Equatable {
         return (parts + [commandCharacter]).joined(separator: "-")
     }
 
-    /// "Message > Send Again".
     public var fallbackName: String { "\(fallbackMenu) > \(fallbackTitle)" }
 }
 
-/// A check that the window found by the diff shows this message, run with
-/// the guard before every press, so a stray window that took its place in
-/// the diff is refused rather than pressed.
+/// Refuses a stray window that won the diff in place of ours.
 public enum WindowCheck: String, CaseIterable {
-    /// The window's AXTitle equals the message's decoded Subject, both with
-    /// runs of whitespace collapsed to one space and the ends trimmed, and
-    /// compared exactly (case included). Skipped when the Subject is empty,
-    /// since Mail then shows a localized placeholder title.
+    /// Mail titles both the viewer and the compose with the Subject (live,
+    /// macOS 27). Skipped for an empty Subject: Mail then shows a localized
+    /// placeholder title.
     case titleMatchesSubject = "title_matches_subject"
 
-    /// `text` with every run of whitespace (newlines and tabs included)
-    /// collapsed to one space and the ends trimmed.
     public static func normalizedTitle(_ text: String) -> String {
         text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }
 
-/// One step of the .eml path. `EmlPlan.steps` builds the list, the AX
-/// driver executes it, and the dry run prints it, so the printed plan is
-/// what a live run does.
+/// The dry run prints the same steps a live run executes, and the e2e
+/// templates pin them, so keep the plan the only input to `AXEmlDelivery`.
 public enum EmlStep: Equatable {
     case requireAccessibility
-    /// Start Mail without activating it if it is not running, then wait for
-    /// its accessibility interface to answer.
     case launchMail(timeoutMs: Int)
-    /// Record Mail's windows. With `settle`, first wait for the list to stop
-    /// changing, so session-restored windows count as "before".
+    /// `settle` waits for the list to stop changing, so session-restored
+    /// windows count as "before".
     case snapshotWindows(WindowSnapshot, settle: Bool)
-    /// Open the file in Mail through Launch Services, activating Mail.
     case openEml(path: String)
-    /// Wait for exactly one new standard window since the snapshot. Two or
-    /// more at once fail closed.
+    /// Two or more new standard windows at once fail closed.
     case waitForNewWindow(EmlWindow, since: WindowSnapshot, timeoutMs: Int)
-    /// Raise the window, run the guard and `verify` until they pass or time
-    /// out, then press the menu item once. Never retried.
+    /// Pressed once, never retried.
     case pressMenuItem(MenuItemTarget, window: EmlWindow, guardChecks: [GuardCheck], verify: [WindowCheck], guardTimeoutMs: Int)
-    /// Press the menu item up to `maxPresses` times, each after waiting for
-    /// it to be enabled and running the guard and `verify`, until the
-    /// window closes. Whether to press again is decided only by whether the
-    /// window is still open with no sheet, never by what the press returned.
+    /// Whether to press again is decided only by whether the window is still
+    /// open with no sheet, never by what the press returned.
     case pressUntilWindowCloses(
         MenuItemTarget, window: EmlWindow, guardChecks: [GuardCheck], verify: [WindowCheck], guardTimeoutMs: Int,
         maxPresses: Int, readyTimeoutMs: Int, goneTimeoutMs: Int
@@ -148,7 +127,6 @@ public enum EmlPlan {
         return steps
     }
 
-    /// One JSON object per step (`planJSONLine`).
     public static func jsonLines(_ steps: [EmlStep]) -> [String] {
         steps.map { planJSONLine(fields($0)) }
     }
@@ -186,15 +164,13 @@ public enum EmlPlan {
     }
 }
 
-/// One compact JSON object, keys sorted, slashes unescaped, so the e2e
-/// harness can compare dry-run plans line by line with its templates.
+/// Compact, keys sorted, slashes unescaped: the e2e harness compares dry-run
+/// plans line by line with its templates and with `jq -cS` of each line.
 func planJSONLine(_ fields: [String: Any]) -> String {
     let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
     return String(decoding: data, as: UTF8.self)
 }
 
-/// The dry run's .eml delivery: prints the plan, one JSON object per line,
-/// and touches nothing else.
 public struct EmlPlanPrinter: EmlDelivery {
     let output: (String) -> Void
 

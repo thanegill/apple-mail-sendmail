@@ -1,6 +1,5 @@
 import Foundation
 
-/// What the binary prints, and how it exits, when delivery throws.
 public struct FailureReport: Equatable {
     public let message: String
     public let exitCode: ExitCode

@@ -4,7 +4,6 @@ import Foundation
 
 private let mailBundleID = "com.apple.mail"
 
-/// `AXClient` over the real Accessibility API.
 public struct SystemAXClient: AXClient {
     public init() {}
 
@@ -59,8 +58,8 @@ public struct SystemAXClient: AXClient {
     }
 }
 
-/// `MailWorkspace` over NSWorkspace. Waiting for its completion handlers
-/// needs the `Clock` that pumps the main run loop.
+/// Waiting for NSWorkspace's completion handlers needs the `Clock` that
+/// pumps the main run loop.
 public struct SystemMailWorkspace: MailWorkspace {
     let clock: Clock
 

@@ -1,8 +1,8 @@
 import ApplicationServices
 import Foundation
 
-/// An accessibility element. Equal handles name the same UI element (for a
-/// real `AXUIElement`, by `CFEqual`).
+/// Equal handles name the same UI element (for a real `AXUIElement`, by
+/// `CFEqual`); the window diff depends on that identity.
 public struct UIElement: Hashable {
     public let handle: AnyHashable
 
@@ -11,7 +11,6 @@ public struct UIElement: Hashable {
     }
 }
 
-/// The attribute values the .eml path reads.
 public enum AXAttributeValue: Equatable {
     case element(UIElement)
     case elements([UIElement])
@@ -21,8 +20,6 @@ public enum AXAttributeValue: Equatable {
     case unsupported
 }
 
-/// The few Accessibility calls the .eml path makes, so tests can drive a
-/// fake Mail instead of the real one.
 public protocol AXClient {
     /// Mail's application element, with a bounded messaging timeout.
     func application(pid: Int32) -> UIElement
@@ -32,18 +29,14 @@ public protocol AXClient {
     func performAction(_ action: String, on element: UIElement) -> AXError
 }
 
-/// Launch Services calls: finding, starting and opening files in Mail.
 public protocol MailWorkspace {
     func runningMailPID() -> Int32?
-    /// Start Mail without bringing it to the front; returns once Launch
-    /// Services has answered.
+    /// Does not activate Mail. Returns once Launch Services has answered.
     func launchMail(timeout: TimeInterval) throws
-    /// Open `url` with Mail, bringing Mail to the front; returns once Launch
-    /// Services has answered.
+    /// Activates Mail. Returns once Launch Services has answered.
     func open(_ url: URL, timeout: TimeInterval) throws
 }
 
-/// Time for polls and deadlines.
 public protocol Clock {
     /// Monotonic seconds.
     var now: TimeInterval { get }
@@ -51,8 +44,6 @@ public protocol Clock {
 }
 
 extension Clock {
-    /// Calls `body` until it returns non-nil or `timeout` passes; checks at
-    /// least once, and once more at the deadline.
     func poll<T>(timeout: TimeInterval, interval: TimeInterval = 0.1, _ body: () throws -> T?) rethrows -> T? {
         let deadline = now + timeout
         while true {
@@ -64,7 +55,6 @@ extension Clock {
 }
 
 extension MailWorkspace {
-    /// Mail's pid, starting Mail without activating it if it is not running.
     func ensureMailRunning(clock: Clock, timeout: TimeInterval) throws -> Int32 {
         if let pid = runningMailPID() { return pid }
         try launchMail(timeout: timeout)
@@ -75,7 +65,6 @@ extension MailWorkspace {
     }
 }
 
-/// A failure driving Mail, with the message the user sees.
 public struct DeliveryError: Error, CustomStringConvertible, Equatable {
     public let message: String
 

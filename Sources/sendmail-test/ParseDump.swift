@@ -1,10 +1,8 @@
 import Foundation
 import SendmailCore
 
-/// `sendmail-test --parse-dump FILE...` prints one JSON object mapping each
-/// FILE to SendmailCore's parse of it, for the differential check in
-/// tests/conformance/. Lives in the test target so the shipped binary has no
-/// dump mode.
+/// `sendmail-test --parse-dump FILE...`, for tests/conformance/differential.py.
+/// It lives in the test target so the shipped binary has no dump mode.
 enum ParseDump {
     static func run(paths: [String]) -> Int32 {
         var dump: [String: Any] = [:]

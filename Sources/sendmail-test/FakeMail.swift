@@ -2,9 +2,6 @@ import ApplicationServices
 import Foundation
 import SendmailCore
 
-/// A state machine standing in for Mail, its Accessibility tree, Launch
-/// Services and the clock, so `AXEmlDelivery` runs without a real Mail.
-///
 /// Like Mail, a menu press acts on the key (focused) window, and only while
 /// Mail is frontmost: Send Again on a viewer opens a compose; Send Again or
 /// Send on a compose sends it. Send Again is enabled only while a viewer is
@@ -62,7 +59,6 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
         ]),
     ]
 
-    /// `menus` with every shortcut removed.
     static func withoutShortcuts(_ menus: [Menu]) -> [Menu] {
         menus.map { menu in
             Menu(title: menu.title, items: menu.items.map {

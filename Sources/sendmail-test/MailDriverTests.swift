@@ -7,9 +7,6 @@ private func withTempDir(_ body: (TempDir) throws -> Void) throws {
     try body(tmp)
 }
 
-/// Synthesize the emlBytes that main.swift would pass to `MailDriver.deliver`
-/// for tests that don't otherwise care about the bytes. Uses the `ParsedMessage`
-/// to fill in finalized recipients and a minimal HTML body when needed.
 private func syntheticEml(for msg: ParsedMessage) -> Data {
     var headers = "Subject: \(msg.subject)\r\n"
     if !msg.to.isEmpty {
@@ -25,7 +22,6 @@ private func syntheticEml(for msg: ParsedMessage) -> Data {
     }
 }
 
-/// Run `msg` through the plain path and return the recorded Apple Events.
 private func plainEvents(_ msg: ParsedMessage, options: Options = noUIOptions(), emlBytes: Data? = nil) throws -> AppleEventRecorder {
     let recorder = AppleEventRecorder()
     try withTempDir { tmp in
@@ -34,8 +30,6 @@ private func plainEvents(_ msg: ParsedMessage, options: Options = noUIOptions(),
     return recorder
 }
 
-/// Run a plain-text message with the given raw `From:` value through the
-/// real parsers and the plain path.
 private func plainEvents(fromHeader: String) throws -> AppleEventRecorder {
     let input = "From: \(fromHeader)\nTo: u@example.test\nSubject: s\nContent-Type: text/plain\n\nbody\n"
     let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
@@ -50,7 +44,6 @@ private func message(to address: String = "u@h", subject: String = "s", body: St
     return msg
 }
 
-/// Deliver a plain message with `--send`, its events going to `recorder`.
 private func sendThroughPlainPath(_ recorder: AppleEventRecorder) throws {
     var opts = noUIOptions()
     opts.send = true
@@ -60,8 +53,6 @@ private func sendThroughPlainPath(_ recorder: AppleEventRecorder) throws {
     }
 }
 
-/// Runs `msg` through the real .eml and `--no-ui` deliveries against a fake
-/// Mail that is not running, recording what reached it and what was staged.
 private func deliverThroughRealPaths(_ msg: ParsedMessage, options: Options) -> (error: Error?, mail: FakeMail, recorder: AppleEventRecorder, tmpFiles: [String]) {
     let mail = FakeMail()
     mail.mailRunning = false
@@ -503,9 +494,8 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         try expectEqual(lines[3], #"{"address":"t@x","kind":"to","name":"N\n","step":"add_recipient"}"#)
     },
 
-    // The inputs of the old AppleScript.quote tests, with the value Mail
-    // ended up with: what AppleScript decoded from the quoted literal, except
-    // that CR now becomes LF.
+    // Inputs from the removed AppleScript.quote tests, each expecting what Mail
+    // got through that literal, except that CR maps to LF here.
     TestCase(name: "sanitized_matches_the_old_quote_on_its_test_inputs") {
         let cases: [(String, String)] = [
             ("", ""),
@@ -534,8 +524,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "encoded_subject_stays_one_text_parameter") {
-        // What once had to be escaped into an AppleScript literal is now one
-        // text parameter, whatever it contains.
+        // AppleScript syntax in the Subject must reach Mail as one text parameter.
         let payload = "X\u{0600}\" & (count {1, 2, 3}) & (character id {80, 87, 78}) & \"\u{0301}"
         let encoded = "=?UTF-8?B?" + Data(payload.utf8).base64EncodedString() + "?="
         let eml = Data("To: u@h\r\nSubject: \(encoded)\r\n\r\nbody\r\n".utf8)
@@ -792,8 +781,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "plain_plan_printer_sends_no_events_and_launches_nothing") {
-        // The printer has no Apple Event or Launch Services dependency at all;
-        // this checks it still stages the attachment it names.
+        // The dry run still stages the attachment its plan names.
         try withTempDir { tmp in
             var printed: [String] = []
             var msg = message()
@@ -864,12 +852,8 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     },
 
     TestCase(name: "html_path_carries_attachment_through_eml") {
-        // A message with an HTML body AND an attachment routes to the HTML
-        // path, which bypasses the plain path's attachment events -- the
-        // attachment rides inside the raw .eml instead. Verified live
-        // (2026-07-09): note7.txt arrived attached. This guards that the .eml
-        // handed to Mail still carries the attachment part and that the plain
-        // attach step does not run for HTML messages.
+        // The attachment rides inside the .eml (verified live 2026-07-09:
+        // note7.txt arrived attached), not through the plain attach step.
         try withTempDir { tmp in
             let recorder = AppleEventRecorder()
             let html = RecordingEmlDelivery()

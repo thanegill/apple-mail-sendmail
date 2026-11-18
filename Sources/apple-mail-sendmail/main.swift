@@ -59,16 +59,8 @@ do {
 }
 
 if options.readRecipientsFromHeaders {
-    // -t: recipients come from headers; argv positionals are additive, but
-    // deduplicated. We skip any argv address already present among the
-    // header-derived To/Cc/Bcc (case-insensitive on the address) so a caller
-    // that passes an address it also listed in a header does not produce a
-    // duplicate recipient.
-    //
-    // NOTE: real sendmail's -t is SUBTRACTIVE, not additive: argv addresses
-    // are REMOVED from the header recipient list (they name addresses NOT to
-    // deliver to). We deliberately keep the additive-with-dedup behavior; the
-    // subtractive semantics are a larger, separately-decided change.
+    // Deliberately additive, unlike real sendmail, whose -t REMOVES argv
+    // addresses from the header recipients; changing that is a product decision.
     var seen = Set(
         (message.to + message.cc + message.bcc).map { $0.address.lowercased() }
     )
@@ -79,11 +71,8 @@ if options.readRecipientsFromHeaders {
         message.to.append(ParsedAddress(displayName: nil, address: r))
     }
 } else {
-    // No -t: positional args are the envelope recipients, exactly like
-    // sendmail -- argv fully replaces the header-derived To/Cc/Bcc. Header
-    // Cc/Bcc are display-only and are NOT delivered to without -t (real
-    // sendmail ignores them for delivery too); a caller that wants header
-    // recipients honored should use -t.
+    // As in sendmail, without -t header Cc/Bcc are not delivered to when argv
+    // names recipients.
     if !options.recipients.isEmpty {
         message.to = options.recipients.map { ParsedAddress(displayName: nil, address: $0) }
         message.cc = []
@@ -105,9 +94,8 @@ let tmp: TempDir
 do {
     tmp = try TempDir()
 } catch {
-    // A temp-dir failure is transient (disk full, TMPDIR unwritable). Exit
-    // EX_TEMPFAIL (75) so an MTA retries rather than treating it as permanent
-    // (EX_OSERR 71 would be classed as a hard failure and bounced).
+    // Transient (disk full, TMPDIR unwritable): EX_TEMPFAIL makes an MTA
+    // retry, where EX_OSERR would bounce.
     die("failed to create temp dir: \(error)", code: .tempFail)
 }
 
@@ -115,8 +103,6 @@ func printLine(_ line: String) {
     FileHandle.standardOutput.write(Data((line + "\n").utf8))
 }
 
-// The dry run prints what a live run would do and touches nothing: no
-// Apple Events, no Accessibility, no Launch Services.
 let automation: MailAutomation
 if env["SENDMAIL_DRY_RUN"] == "1" {
     automation = MailAutomation(
@@ -139,11 +125,6 @@ if env["SENDMAIL_DRY_RUN"] == "1" {
     )
 }
 
-// Build the .eml bytes that the .eml path will hand to Mail. Keep
-// the original stdin body verbatim (no MIME re-encoding) and apply CLI
-// flag-driven header overrides only: finalize To/Cc/Bcc per positional/-t
-// rules and set From from -f/-F. MIMEParser already gave us the final
-// recipients on `message`; EmlBuilder applies them to `raw`.
 let emlBytes = EmlBuilder.buildEml(
     raw: raw,
     finalRecipients: message,
