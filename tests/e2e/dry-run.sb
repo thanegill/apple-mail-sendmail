@@ -1,0 +1,35 @@
+;; Sandbox for every SENDMAIL_DRY_RUN=1 invocation of the binary under test.
+;; A dry run only parses stdin, writes its temp files and prints a script, so
+;; what could reach Mail, the window server, the terminal or the outside world
+;; is denied, even for a binary that ignores SENDMAIL_DRY_RUN. The harness's
+;; --self-test probes each rule on its own, except lsopen and iokit-open,
+;; which it only checks are present (no safe probe exists for them).
+;;
+;; Not covered: reading files, and writing inside TEMP_DIR (the per-dry-run
+;; temp dir the harness creates and inspects).
+(version 1)
+(allow default)
+(deny appleevent-send)
+;; No Mach service lookups at all: this cuts off WindowServer (synthetic
+;; input, window access), Launch Services, pasteboard and the Accessibility
+;; and Apple Event plumbing. A dry run needs none of them.
+(deny mach-lookup)
+(deny lsopen)
+(deny network*)
+(deny process-fork)
+(deny process-exec)
+(allow process-exec (literal (param "BINARY")))
+(deny signal)
+(deny iokit-open)
+(deny file-write*)
+(allow file-write*
+  (subpath (param "TEMP_DIR"))
+  (literal "/dev/null"))
+;; Deleting is denied even inside TEMP_DIR, so the .eml survives a binary
+;; that cleans up after itself and can be checked. This also blocks rename,
+;; so a binary that writes files atomically fails its dry run.
+(deny file-write-unlink)
+;; No terminal access: opening /dev/tty (or any tty or pty device) would let
+;; ioctl(TIOCSTI) type into the terminal the harness runs in. Dry runs also
+;; run in a new session with no controlling terminal.
+(deny file-read* file-write* file-ioctl (regex #"^/dev/(tty|pty|ptmx)"))

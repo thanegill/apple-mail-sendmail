@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>EmailAccountDescription</key>
+            <string>apple-mail-sendmail e2e A (local Mailpit)</string>
+            <key>EmailAccountName</key>
+            <string>E2E Account A</string>
+            <key>EmailAccountType</key>
+            <string>EmailTypePOP</string>
+            <key>EmailAddress</key>
+            <string>e2e-a@example.test</string>
+            <key>IncomingMailServerAuthentication</key>
+            <string>EmailAuthPassword</string>
+            <key>IncomingMailServerHostName</key>
+            <string>127.0.0.1</string>
+            <key>IncomingMailServerPortNumber</key>
+            <integer>1110</integer>
+            <key>IncomingMailServerUseSSL</key>
+            <false/>
+            <key>IncomingMailServerUsername</key>
+            <string>e2e-a</string>
+            <key>IncomingPassword</key>
+            <string>e2e-local-only</string>
+            <key>OutgoingMailServerAuthentication</key>
+            <string>EmailAuthNone</string>
+            <key>OutgoingMailServerHostName</key>
+            <string>127.0.0.1</string>
+            <key>OutgoingMailServerPortNumber</key>
+            <integer>1025</integer>
+            <key>OutgoingMailServerUseSSL</key>
+            <false/>
+            <key>allowMailDrop</key>
+            <false/>
+            <key>PayloadDisplayName</key>
+            <string>e2e-a@example.test</string>
+            <key>PayloadIdentifier</key>
+            <string>test.example.apple-mail-sendmail.e2e.account-a</string>
+            <key>PayloadType</key>
+            <string>com.apple.mail.managed</string>
+            <key>PayloadUUID</key>
+            <string>B63BBBB7-0C70-47B0-866F-CD71455CAF18</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+        </dict>
+        <dict>
+            <key>EmailAccountDescription</key>
+            <string>apple-mail-sendmail e2e B (local Mailpit)</string>
+            <key>EmailAccountName</key>
+            <string>E2E Account B</string>
+            <key>EmailAccountType</key>
+            <string>EmailTypePOP</string>
+            <key>EmailAddress</key>
+            <string>e2e-b@example.test</string>
+            <key>IncomingMailServerAuthentication</key>
+            <string>EmailAuthPassword</string>
+            <key>IncomingMailServerHostName</key>
+            <string>127.0.0.1</string>
+            <key>IncomingMailServerPortNumber</key>
+            <integer>1111</integer>
+            <key>IncomingMailServerUseSSL</key>
+            <false/>
+            <key>IncomingMailServerUsername</key>
+            <string>e2e-b</string>
+            <key>IncomingPassword</key>
+            <string>e2e-local-only</string>
+            <key>OutgoingMailServerAuthentication</key>
+            <string>EmailAuthNone</string>
+            <key>OutgoingMailServerHostName</key>
+            <string>e2e-b-smtp.test</string>
+            <key>OutgoingMailServerPortNumber</key>
+            <integer>1025</integer>
+            <key>OutgoingMailServerUseSSL</key>
+            <false/>
+            <key>allowMailDrop</key>
+            <false/>
+            <key>PayloadDisplayName</key>
+            <string>e2e-b@example.test</string>
+            <key>PayloadIdentifier</key>
+            <string>test.example.apple-mail-sendmail.e2e.account-b</string>
+            <key>PayloadType</key>
+            <string>com.apple.mail.managed</string>
+            <key>PayloadUUID</key>
+            <string>AE187951-F4F0-43FD-B24B-4CA95710187C</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+        </dict>
+    </array>
+    <key>PayloadDescription</key>
+    <string>Two POP/SMTP Mail accounts that point only at a Mailpit capture server on this machine, for the apple-mail-sendmail live end-to-end tests: e2e-a uses 127.0.0.1 (POP 1110, SMTP 1025); e2e-b uses POP 127.0.0.1:1111 and SMTP e2e-b-smtp.test:1025, a name that /etc/hosts must map to 127.0.0.1 and ::1 only (see the repository README). Install only in a dedicated macOS test user, with Mailpit running.</string>
+    <key>PayloadDisplayName</key>
+    <string>apple-mail-sendmail e2e accounts</string>
+    <key>PayloadIdentifier</key>
+    <string>test.example.apple-mail-sendmail.e2e</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadScope</key>
+    <string>User</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>5BD3B642-6B4C-4868-A830-5545C7AB3AFB</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>
