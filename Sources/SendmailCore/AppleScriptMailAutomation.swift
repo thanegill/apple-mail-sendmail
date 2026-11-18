@@ -8,10 +8,16 @@ public typealias ScriptRunner = (String) throws -> Void
 public struct AppleScriptMailAutomation: MailAutomation {
     /// Where the plain path stages the body file its script reads.
     let staging: TempDir
+    let accessibility: AccessibilityPermission
     let runner: ScriptRunner
 
-    public init(staging: TempDir, runner: @escaping ScriptRunner = { try AppleScript.run($0) }) {
+    public init(
+        staging: TempDir,
+        accessibility: AccessibilityPermission = .system(),
+        runner: @escaping ScriptRunner = { try AppleScript.run($0) }
+    ) {
         self.staging = staging
+        self.accessibility = accessibility
         self.runner = runner
     }
 
@@ -30,36 +36,36 @@ public struct AppleScriptMailAutomation: MailAutomation {
         ))
     }
 
+    /// Checks Accessibility before Mail is touched: the script's System
+    /// Events menu clicks need it.
     public func deliverHTML(emlURL: URL, send: Bool) throws {
+        try accessibility.require()
         try runner(Self.buildEditDraftScript(emlPath: emlURL.path, send: send))
     }
 
     // MARK: - Edit-draft script (HTML path)
 
-    /// Emit AppleScript that:
-    /// 1. Probes Accessibility (reads a UI element of another process, which
-    ///    is Accessibility-gated and fails with -1719 when the controlling
-    ///    process lacks the grant). Re-throws with a clear remediation
-    ///    message so the binary surfaces a useful error.
-    /// 2. Launches Mail and snapshots its existing window ids, so any
+    /// Emit AppleScript that (after `deliverHTML` has checked Accessibility
+    /// in Swift):
+    /// 1. Launches Mail and snapshots its existing window ids, so any
     ///    auto-restored windows are counted as "before".
-    /// 3. `open -a Mail <eml>` via `do shell script` so Launch Services opens
+    /// 2. `open -a Mail <eml>` via `do shell script` so Launch Services opens
     ///    the .eml as a Mail viewer window.
-    /// 4. Polls for the viewer as the one window id that wasn't present
+    /// 3. Polls for the viewer as the one window id that wasn't present
     ///    before the open, ignoring sheet entries -- matching by id, never by
     ///    title, so it works for messages with no Subject, duplicate
     ///    subjects, or titles Mail rewrites.
-    /// 5. Snapshots ids again, raises the viewer by id, and clicks
+    /// 4. Snapshots ids again, raises the viewer by id, and clicks
     ///    Message > Send Again (Cmd-Shift-D) via System Events only once the
     ///    viewer is verified front, main and key -- erroring out otherwise;
     ///    see `appendVerifiedFrontWindowAction`. Mail converts the viewer
     ///    into a new editable compose window.
-    /// 6. Polls for the compose as the one new window id since the click.
-    /// 7. If `send`, waits for `Message > Send` to be enabled, raises the
+    /// 5. Polls for the compose as the one new window id since the click.
+    /// 6. If `send`, waits for `Message > Send` to be enabled, raises the
     ///    compose window and verifies it the same way, clicks Send via System
     ///    Events, and polls for the compose to close -- retrying a bounded
     ///    number of times; see `appendSendWithRetry`.
-    /// 8. Closes the leftover viewer by its exact id (closing by title could
+    /// 7. Closes the leftover viewer by its exact id (closing by title could
     ///    hit the compose window, which carries the same subject).
     ///
     /// Public so tests can compile it against arbitrary `emlPath` values.
@@ -71,22 +77,7 @@ public struct AppleScriptMailAutomation: MailAutomation {
         var lines: [String] = []
         lines.append("use scripting additions")
         lines.append("")
-        // 1. Accessibility probe. Reading UI elements of another process is
-        //    Accessibility-gated and returns -1719 when not granted, before
-        //    we touch Mail at all. (Just enumerating processes via
-        //    `get name of first process` doesn't require Accessibility, so
-        //    we go deeper.)
-        lines.append("try")
-        lines.append("    tell application \"System Events\" to get name of menu bar 1 of process \"Finder\"")
-        lines.append("on error errMsg number errNum")
-        lines.append("    if errNum is -1719 or errNum is 1002 then")
-        lines.append("        error \"Accessibility permission required. Grant apple-mail-sendmail Accessibility in System Settings > Privacy & Security > Accessibility.\" number errNum")
-        lines.append("    else")
-        lines.append("        error errMsg number errNum")
-        lines.append("    end if")
-        lines.append("end try")
-        lines.append("")
-        // 2. Launch Mail and let auto-restored windows settle, then snapshot
+        // 1. Launch Mail and let auto-restored windows settle, then snapshot
         //    their ids. Anything present now is "before"; the eml viewer will
         //    be the only new id after the open. `launch` is a no-op if Mail
         //    is already running.
@@ -94,7 +85,7 @@ public struct AppleScriptMailAutomation: MailAutomation {
         lines.append("delay 0.5")
         lines.append("tell application \"Mail\" to set beforeOpenIDs to id of every window")
         lines.append("")
-        // 3. Open the .eml. Use POSIX file → quoted form to dodge shell injection.
+        // 2. Open the .eml. Use POSIX file → quoted form to dodge shell injection.
         lines.append("do shell script \"open -a Mail \" & quoted form of \(pathLit)")
         lines.append("")
         // SINGLE-NEW-WINDOW ASSUMPTION: each poll below (viewer after `open`,
@@ -108,7 +99,7 @@ public struct AppleScriptMailAutomation: MailAutomation {
         // assuming a quiet window set for the ~seconds the run takes. See
         // ATTEMPTS.md for why title-matching was abandoned.
 
-        // 4. Poll for the viewer: the one new window id since the open.
+        // 3. Poll for the viewer: the one new window id since the open.
         appendNewWindowPoll(
             &lines,
             resultVar: "viewerID",
@@ -117,7 +108,7 @@ public struct AppleScriptMailAutomation: MailAutomation {
             timeoutMessage: "Mail did not open a viewer for the eml within 5s"
         )
         lines.append("")
-        // 5. Snapshot ids again (now including the viewer) so we can detect
+        // 4. Snapshot ids again (now including the viewer) so we can detect
         //    the compose window Send Again creates. Then raise the viewer,
         //    verify it is front, main and key, and only then click
         //    Message > Send Again.
@@ -130,7 +121,7 @@ public struct AppleScriptMailAutomation: MailAutomation {
             action: "click menu item \"Send Again\" of menu \"Message\" of menu bar 1"
         )
         lines.append("")
-        // 6. Poll for the compose: the one new window id since the click.
+        // 5. Poll for the compose: the one new window id since the click.
         appendNewWindowPoll(
             &lines,
             resultVar: "composeID",
@@ -143,7 +134,7 @@ public struct AppleScriptMailAutomation: MailAutomation {
             appendSendWithRetry(&lines)
             lines.append("")
         }
-        // 8. Close the leftover viewer by its exact id. Closing by title could
+        // 7. Close the leftover viewer by its exact id. Closing by title could
         //    hit the compose window, which shares the subject.
         lines.append("tell application \"Mail\"")
         lines.append("    try")

@@ -74,7 +74,8 @@ public enum MailDriver {
     }
 
     /// `deliver` through `AppleScriptMailAutomation` with `runner`, staging
-    /// in `tmp`; returns the script it handed the runner.
+    /// in `tmp`; returns the script it handed the runner. For a recording
+    /// runner: Accessibility is not checked, since the script never runs.
     @discardableResult
     public static func deliver(
         _ msg: ParsedMessage,
@@ -84,7 +85,7 @@ public enum MailDriver {
         runner: @escaping ScriptRunner
     ) throws -> String {
         var script = ""
-        let automation = AppleScriptMailAutomation(staging: tmp) { source in
+        let automation = AppleScriptMailAutomation(staging: tmp, accessibility: .notChecked) { source in
             script = source
             try runner(source)
         }

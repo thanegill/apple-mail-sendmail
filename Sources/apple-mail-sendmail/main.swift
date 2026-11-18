@@ -92,7 +92,7 @@ do {
 
 let automation: MailAutomation
 if env["SENDMAIL_DRY_RUN"] == "1" {
-    automation = AppleScriptMailAutomation(staging: tmp) { script in
+    automation = AppleScriptMailAutomation(staging: tmp, accessibility: .notChecked) { script in
         FileHandle.standardOutput.write(Data(script.utf8))
         FileHandle.standardOutput.write(Data("\n".utf8))
     }
@@ -117,7 +117,15 @@ do {
     if f.code == -1743 {
         die("Mail.app automation denied. Grant permission in System Settings → Privacy & Security → Automation. (\(f.message))", code: .config)
     }
+    // System Events reports a missing Accessibility grant this way if it is
+    // revoked after the up-front check.
+    if f.code == -1719 || f.code == 1002 {
+        let osMajorVersion = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        die("\(AccessibilityNotGranted(osMajorVersion: osMajorVersion)) (\(f.message))", code: .config)
+    }
     die("AppleScript failed (\(f.code)): \(f.message)", code: .osErr)
+} catch let denied as AccessibilityNotGranted {
+    die("\(denied)", code: .config)
 } catch {
     die("delivery failed: \(error)", code: .osErr)
 }
