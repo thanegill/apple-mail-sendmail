@@ -140,7 +140,7 @@ def reference_body_and_attachments(message):
             content = text_content(part)
             if content_type == "text/html" and html is None:
                 html = content
-            if not body_slot_filled and content != "":
+            if not body_slot_filled and content.strip() != "":
                 body_slot_filled = True
                 if content_type != "text/html":
                     body = content

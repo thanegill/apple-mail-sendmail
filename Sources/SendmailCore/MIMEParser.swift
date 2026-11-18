@@ -74,7 +74,9 @@ public enum MIMEParser {
                     msg.htmlBody = text
                 }
 
-                if msg.body.isEmpty {
+                // A whitespace-only part (an empty text/plain alternative)
+                // leaves the slot to a later part.
+                if msg.body.isEmpty && !text.allSatisfy(\.isWhitespace) {
                     msg.body = (mt == "text/html") ? stripHTML(text) : text
                 }
                 continue
@@ -201,10 +203,14 @@ public enum MIMEParser {
                 if s < bytes.count && bytes[s - 1] == 0x0D && bytes[s] == 0x0A { s += 1; break }
                 if bytes[s - 1] == 0x0A { break }
             }
-            let end = (k + 1 < positions.count) ? positions[k + 1] : bytes.count
-            // Trim trailing CRLF before the next delimiter.
-            var e = end
-            while e > s && (bytes[e - 1] == 0x0A || bytes[e - 1] == 0x0D) {
+            let nextDelimiter = (k + 1 < positions.count) ? positions[k + 1] : nil
+            var e = nextDelimiter ?? bytes.count
+            // Only the one line break right before a delimiter belongs to it
+            // (RFC 2046 5.1.1); any earlier blank lines are part content.
+            if nextDelimiter != nil && e > s && bytes[e - 1] == 0x0A {
+                e -= 1
+            }
+            if nextDelimiter != nil && e > s && bytes[e - 1] == 0x0D {
                 e -= 1
             }
             if s < e {

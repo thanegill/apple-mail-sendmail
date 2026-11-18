@@ -581,6 +581,32 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expect(msg.attachments.isEmpty)
     },
 
+    TestCase(name: "only_the_line_break_before_a_delimiter_is_dropped") {
+        for lineBreak in ["\n", "\r\n"] {
+            let input = [
+                "Content-Type: multipart/mixed; boundary=\"B\"",
+                "",
+                "--B",
+                "Content-Type: text/plain; charset=utf-8",
+                "",
+                "Body.",
+                "",
+                "",
+                "--B",
+                "Content-Type: text/plain",
+                "Content-Disposition: attachment; filename=\"notes.txt\"",
+                "",
+                "line one",
+                "",
+                "--B--",
+                "",
+            ].joined(separator: lineBreak)
+            let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+            try expectEqual(msg.body, "Body.\(lineBreak)\(lineBreak)")
+            try expectEqual(msg.attachments.map(\.data), [Data("line one\(lineBreak)".utf8)])
+        }
+    },
+
     TestCase(name: "rfc2231_continuation_gap_stops_joining") {
         try expectEqual(
             try attachmentFilenames(contentDisposition: "attachment; filename*0*=UTF-8''a; filename*2*=c"),

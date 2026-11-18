@@ -1,45 +1,6 @@
 {
   "findings": [
     {
-      "id": "part-trailing-line-endings",
-      "class": "ours-bug",
-      "note": "RFC 2046 5.1.1: only the CRLF immediately before a boundary delimiter belongs to the delimiter. MIMEParser.splitParts trimmed every trailing CR/LF of a part, truncating text attachments and blank lines at the end of a body part.",
-      "cases": [
-        "cpython/msg_02.txt body",
-        "cpython/msg_04.txt attachments",
-        "cpython/msg_05.txt body",
-        "cpython/msg_07.txt body",
-        "cpython/msg_10.txt body",
-        "cpython/msg_10.txt html",
-        "cpython/msg_13.txt body",
-        "cpython/msg_15.txt body",
-        "cpython/msg_15.txt html",
-        "cpython/msg_16.txt body",
-        "cpython/msg_26.txt body",
-        "cpython/msg_34.txt body",
-        "cpython/msg_36.txt body",
-        "cpython/msg_37.txt body",
-        "cpython/msg_39.txt body",
-        "cpython/msg_42.txt body",
-        "cpython/msg_43.txt body",
-        "cpython/msg_44.txt attachments",
-        "cpython/msg_45.txt attachments",
-        "cpython/msg_45.txt body",
-        "local/alternative-nested.eml body",
-        "local/part-trailing-newlines-crlf.eml attachments",
-        "local/part-trailing-newlines-crlf.eml body",
-        "local/part-trailing-newlines.eml attachments",
-        "local/part-trailing-newlines.eml body",
-        "mail-parser/rfc-000.eml body",
-        "mail-parser/rfc-003.eml attachments",
-        "mail-parser/rfc-003.eml body",
-        "mail-parser/rfc-006.eml body",
-        "mail-parser/rfc-006.eml html",
-        "mail-parser/rfc-009.eml body",
-        "mail-parser/rfc-009.eml html"
-      ]
-    },
-    {
       "id": "digest-default-type",
       "class": "ours-bug",
       "note": "RFC 2046 5.1.5: in multipart/digest a part without Content-Type is message/rfc822, not text/plain. MIMEParser read the digested messages as body text.",
@@ -47,7 +8,6 @@
         "cpython/msg_02.txt attachments",
         "cpython/msg_30.txt attachments",
         "cpython/msg_34.txt attachments",
-        "mail-parser/rfc-004.eml body",
         "mail-parser/rfc-004.eml attachments"
       ]
     },
