@@ -12,6 +12,15 @@
 
       perSystem = { config, self', pkgs, system, ... }:
         let
+          versionFile = ./Sources/SendmailCore/Version.swift;
+          versionMatch = builtins.match
+            ''.*public static let string = "([0-9]+[.][0-9]+[.][0-9]+)".*''
+            (builtins.readFile versionFile);
+          version =
+            if versionMatch == null
+            then throw "flake.nix: ${toString versionFile} has no `public static let string = \"X.Y.Z\"` line to read the version from"
+            else builtins.head versionMatch;
+
           # The pinned nixpkgs ships Tart 2.30.6, which predates macOS 27
           # guests (Cirrus Labs' golden-gate images), and `tart exec` before
           # 2.41.1 can drop or truncate large output (openai/tart#1347).
@@ -33,7 +42,7 @@
           makeSendmail = pkgs.lib.makeOverridable ({ withSendmailSymlink ? true }:
             pkgs.swiftPackages.stdenv.mkDerivation {
               pname = "apple-mail-sendmail";
-              version = "0.1.0";
+              inherit version;
               src = pkgs.lib.fileset.toSource {
                 root = ./.;
                 fileset = pkgs.lib.fileset.unions [
