@@ -44,21 +44,21 @@ Three SwiftPM targets, all under `Sources/`:
 - `apple-mail-sendmail` (executable) — thin orchestrator (`main.swift`).
 - `sendmail-test` (executable) — custom test runner. **Not** an XCTest target (see constraints below).
 
-The split exists because the test runner needs to `import SendmailCore`. The thin executable just wires stdin and argv into the core pipeline and chooses a `ScriptRunner`.
+The split exists because the test runner needs to `import SendmailCore`. The thin executable just wires stdin and argv into the core pipeline and chooses a `MailAutomation`.
 
 ### Message pipeline
 
 ```
-stdin bytes -> RFC822Parser -> MIMEParser -> ParsedMessage -> MailDriver -> ScriptRunner
+stdin bytes -> RFC822Parser -> MIMEParser -> ParsedMessage -> MailDriver -> MailAutomation
 ```
 
 - `RFC822Parser.parse(Data)` produces `RawMessage` (ordered headers + raw body bytes; no MIME interpretation).
 - `MIMEParser.parse(RawMessage)` interprets `Content-Type`, walks `multipart/*` parts, decodes `base64` / `quoted-printable` transfer encodings, and decodes RFC 2047 encoded-words in `Subject` and display names. Populates `htmlBody` from any `text/html` part alongside the stripped plain-text `body`.
-- `MailDriver.deliver(...)` chooses between two AppleScript emitters and hands the result to a `ScriptRunner`. The HTML path (`buildEditDraftScript`) is **pass-through**: `main.swift` constructs the .eml bytes via `EmlBuilder.buildEml(raw:finalRecipients:options:)` (raw stdin headers + body, with CLI flag-driven header overrides applied to To/Cc/Bcc/From), `MailDriver.deliver` writes them to a temp `.eml`, and the emitted script (1) probes Accessibility, (2) `do shell script "open -a Mail ..."` to spawn a viewer window, (3) polls for the viewer by window-id diff (never by subject/title -- see the gotcha below), (4) raises the viewer and verifies it is Mail's front, main and key window (see the key-window gotcha below), then invokes Message > Send Again (⇧⌘D) via a System Events menu click — converting the viewer into a brand-new editable compose with full WKWebView fidelity, (5) on `--send`, raises the compose window and verifies it the same way, then clicks `Message > Send` via System Events, (6) closes the leftover viewer. The plain-text path (`buildClassicScript`) runs for messages without HTML and uses `make new outgoing message` + `set content to (read POSIX file ... as «class utf8»)`.
+- `MailDriver.deliver(...)` chooses the path, stages files in the temp dir, and hands the message to a `MailAutomation` (`deliverHTML` or `deliverPlain`). Its one implementation, `AppleScriptMailAutomation`, emits AppleScript and hands it to a `ScriptRunner`. The HTML path (`buildEditDraftScript`) is **pass-through**: `main.swift` constructs the .eml bytes via `EmlBuilder.buildEml(raw:finalRecipients:options:)` (raw stdin headers + body, with CLI flag-driven header overrides applied to To/Cc/Bcc/From), `MailDriver.deliver` writes them to a temp `.eml`, and the emitted script (1) probes Accessibility, (2) `do shell script "open -a Mail ..."` to spawn a viewer window, (3) polls for the viewer by window-id diff (never by subject/title -- see the gotcha below), (4) raises the viewer and verifies it is Mail's front, main and key window (see the key-window gotcha below), then invokes Message > Send Again (⇧⌘D) via a System Events menu click — converting the viewer into a brand-new editable compose with full WKWebView fidelity, (5) on `--send`, raises the compose window and verifies it the same way, then clicks `Message > Send` via System Events, (6) closes the leftover viewer. The plain-text path (`buildClassicScript`) runs for messages without HTML and uses `make new outgoing message` + `set content to (read POSIX file ... as «class utf8»)`.
 
-### The ScriptRunner injection seam
+### The MailAutomation and ScriptRunner injection seams
 
-`MailDriver.deliver` takes `runner: ScriptRunner? = nil`. Default is `AppleScript.run` (NSAppleScript execution). Tests inject a `Recorder` closure that captures the script source into an array. **Anything new that drives Mail.app should go through this seam** — never call `NSAppleScript` directly from new code, or the tests can't exercise it without actually launching Mail.app.
+`MailDriver.deliver(_:emlBytes:options:tmp:automation:)` takes a `MailAutomation` (`Sources/SendmailCore/MailAutomation.swift`). `main.swift` builds `AppleScriptMailAutomation(staging: tmp)`, whose `ScriptRunner` defaults to `AppleScript.run` (NSAppleScript execution); the dry run passes a runner that prints the script. Tests use the `deliver(_:emlBytes:options:tmp:runner:)` overload, which wraps a recording runner in `AppleScriptMailAutomation` and returns the script. **Anything new that drives Mail.app should go behind `MailAutomation`** — never call `NSAppleScript` directly from new code, or the tests can't exercise it without actually launching Mail.app.
 
 ### Tests don't need WebKit or pandoc anymore
 
