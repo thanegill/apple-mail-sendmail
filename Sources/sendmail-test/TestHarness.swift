@@ -90,6 +90,10 @@ func expectThrows(
     throw TestFailure(message: "expected error, got success", file: file, line: line)
 }
 
+/// "Suite.case" of the test currently running, for helpers that record
+/// artifacts and need to say which test produced them.
+private(set) var currentTestName = ""
+
 func runSuites(_ suites: [TestSuite]) -> Int32 {
     var passed = 0
     var failed = 0
@@ -101,6 +105,7 @@ func runSuites(_ suites: [TestSuite]) -> Int32 {
     for suite in suites {
         for tc in suite.cases {
             let fullName = "\(suite.name).\(tc.name)"
+            currentTestName = fullName
             do {
                 try tc.run()
                 passed += 1

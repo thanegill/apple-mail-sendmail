@@ -89,7 +89,9 @@ public enum MailDriver {
     /// 7. If `send`, clicks `Message > Send` via System Events.
     /// 8. Closes the leftover viewer by its exact id (closing by title could
     ///    hit the compose window, which carries the same subject).
-    static func buildEditDraftScript(
+    ///
+    /// Public so tests can compile it against arbitrary `emlPath` values.
+    public static func buildEditDraftScript(
         emlPath: String,
         send: Bool
     ) -> String {
