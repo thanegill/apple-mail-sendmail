@@ -3,7 +3,10 @@ import SendmailCore
 
 private final class Recorder {
     var scripts: [String] = []
-    func run(_ source: String) throws { scripts.append(source) }
+    func run(_ source: String) throws {
+        scripts.append(source)
+        capturedMailDriverScripts.append(CapturedScript(testName: currentTestName, source: source))
+    }
 }
 
 private func withTempDir(_ body: (TempDir) throws -> Void) throws {
