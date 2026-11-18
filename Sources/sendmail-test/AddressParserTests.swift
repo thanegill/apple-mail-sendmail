@@ -183,6 +183,17 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
         try expectEqual(from.map(\.displayName), ["Pete"])
     },
 
+    // RFC 5322 Appendix A.6.1 and A.6.3: an obs-route and whitespace or
+    // comments around the dots of an obsolete addr-spec.
+    TestCase(name: "rfc5322_a6_obsolete_addr_spec") {
+        let to = AddressParser.parse("Mary Smith <@node.test:mary@example.net>, , jdoe@test  . example")
+        try expectEqual(to.map(\.address), ["mary@example.net", "jdoe@test.example"])
+        try expectEqual(to.map(\.displayName), ["Mary Smith", nil])
+        try expectEqual(AddressParser.parse("John Doe <jdoe@machine(comment).  example>").map(\.address), ["jdoe@machine.example"])
+        try expectEqual(AddressParser.parse("<@a.test,@b.test:user@c.test>").map(\.address), ["user@c.test"])
+        try expectEqual(AddressParser.parse(#"<"john  doe" @ example . test>"#).map(\.address), [#""john  doe"@example.test"#])
+    },
+
     TestCase(name: "double_quote_inside_comment_is_plain_text") {
         let r = AddressParser.parse(#"Bob (says "hi) <b@y.test>, c@z.test"#)
         try expectEqual(r.map(\.address), ["b@y.test", "c@z.test"])

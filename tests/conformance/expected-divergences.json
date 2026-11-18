@@ -1,15 +1,6 @@
 {
   "findings": [
     {
-      "id": "obsolete-addr-spec",
-      "class": "ours-bug",
-      "note": "RFC 5322 4.4: an obs-route before the addr-spec is ignored, and CFWS may surround the dots and the @ of an obs-local-part / obs-domain (A.6.1, A.6.3). AddressParser kept the route and the whitespace in the address.",
-      "cases": [
-        "rfc/rfc5322-a6.1.eml to",
-        "rfc/rfc5322-a6.1.eml rebuilt-eml.to"
-      ]
-    },
-    {
       "id": "obsolete-field-name-wsp",
       "class": "python-quirk",
       "note": "RFC 5322 4.5 (obs-optional etc.): obsolete syntax allows WSP between a field name and its colon (A.6.3 'From  :'). Python ends the header section at the first such line and reads the rest as the body; SendmailCore parses the fields.",

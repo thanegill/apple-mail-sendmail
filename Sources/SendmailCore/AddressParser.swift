@@ -179,7 +179,7 @@ public enum AddressParser {
         if s.isEmpty { return nil }
 
         if let lt = s.lastIndex(of: "<"), let gt = s.lastIndex(of: ">"), lt < gt {
-            let addr = String(s[s.index(after: lt)..<gt]).trimmingCharacters(in: .whitespaces)
+            let addr = normalizeObsoleteAddrSpec(String(s[s.index(after: lt)..<gt]))
             if !addr.isEmpty {
                 let phrase = String(s[..<lt]).trimmingCharacters(in: .whitespaces)
                 let decoded = EncodedWord.decode(unquotePhrase(phrase))
@@ -195,7 +195,52 @@ public enum AddressParser {
             if stripped.isEmpty { return nil }
             return ParsedAddress(displayName: nil, address: stripped)
         }
-        return ParsedAddress(displayName: nil, address: s)
+        return ParsedAddress(displayName: nil, address: normalizeObsoleteAddrSpec(s))
+    }
+
+    /// Rewrite the obsolete addr-spec forms of RFC 5322 4.4 to the current
+    /// syntax: drop an obs-route (`@node.test:` before the address) and the
+    /// whitespace (comments are already gone) around the dots and the `@` of
+    /// an obs-local-part or obs-domain, so `jdoe@test  . example` becomes
+    /// `jdoe@test.example`. Quoted local-parts and domain literals are kept.
+    private static func normalizeObsoleteAddrSpec(_ spec: String) -> String {
+        var remaining = Substring(spec.trimmingCharacters(in: .whitespaces))
+        if remaining.first == "@", let routeEnd = remaining.firstIndex(of: ":") {
+            remaining = remaining[remaining.index(after: routeEnd)...]
+        }
+        var out = ""
+        var pendingWhitespace = ""
+        var inQuotes = false
+        var inDomainLiteral = false
+        var quotedPairPending = false
+        for ch in remaining {
+            if inQuotes || inDomainLiteral {
+                out.append(ch)
+                if quotedPairPending {
+                    quotedPairPending = false
+                } else if ch == "\\" {
+                    quotedPairPending = true
+                } else if inQuotes && ch == "\"" {
+                    inQuotes = false
+                } else if inDomainLiteral && ch == "]" {
+                    inDomainLiteral = false
+                }
+                continue
+            }
+            if ch == " " || ch == "\t" {
+                pendingWhitespace.append(ch)
+                continue
+            }
+            let touchesSeparator = ch == "." || ch == "@" || out.last == "." || out.last == "@"
+            if !touchesSeparator {
+                out += pendingWhitespace
+            }
+            pendingWhitespace = ""
+            if ch == "\"" { inQuotes = true }
+            if ch == "[" { inDomainLiteral = true }
+            out.append(ch)
+        }
+        return out
     }
 
     /// Decode an RFC 5322 display-name phrase: drop the delimiters of every
