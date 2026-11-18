@@ -194,6 +194,13 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
         try expectEqual(AddressParser.parse(#"<"john  doe" @ example . test>"#).map(\.address), [#""john  doe"@example.test"#])
     },
 
+    // RFC 5322 3.2.2: a run of FWS or CFWS between the words of a phrase is
+    // one space; spaces inside a quoted-string are kept.
+    TestCase(name: "display_name_whitespace_runs_read_as_one_space") {
+        let r = AddressParser.parse("Mary \t  Smith <m@x.test>, John (middle) Doe <j@x.test>, \"Quoted   Spaces\" <q@x.test>")
+        try expectEqual(r.map(\.displayName), ["Mary Smith", "John Doe", "Quoted   Spaces"])
+    },
+
     TestCase(name: "double_quote_inside_comment_is_plain_text") {
         let r = AddressParser.parse(#"Bob (says "hi) <b@y.test>, c@z.test"#)
         try expectEqual(r.map(\.address), ["b@y.test", "c@z.test"])

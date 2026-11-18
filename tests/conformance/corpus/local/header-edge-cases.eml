@@ -1,0 +1,8 @@
+From: Mary   Smith <mary@example.test>
+To: John (middle) Doe <john@example.test>, "Quoted   Spaces" <q@example.test>,
+ =?UTF-8?Q?Ren=C3=A9?= "Q." Lastname <rene@example.test>
+Cc: =?UTF-8?Q?split_=C3?= =?UTF-8?Q?=A9_char?= <split@example.test>
+Subject: prefix=?UTF-8?Q?glued?= and =?UTF-8?Q?split_=C3?= =?UTF-8?Q?=A9?=
+Content-Type: text/plain; charset=utf-8
+
+body

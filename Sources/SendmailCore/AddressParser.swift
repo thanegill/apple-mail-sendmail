@@ -246,12 +246,21 @@ public enum AddressParser {
     /// Decode an RFC 5322 display-name phrase: drop the delimiters of every
     /// quoted-string segment and unescape the quoted-pairs inside them, so
     /// `"Doe, John" Jr` becomes `Doe, John Jr` and `"Smith \"Bob\""` becomes
-    /// `Smith "Bob"`. Unquoted atoms pass through unchanged.
+    /// `Smith "Bob"`. A run of whitespace between unquoted words (left by
+    /// folding or a removed comment) reads as one space (RFC 5322 3.2.2);
+    /// whitespace inside a quoted-string is kept as written.
     private static func unquotePhrase(_ phrase: String) -> String {
         var out = ""
         var inQuotes = false
         var quotedPairPending = false
+        var previousWasUnquotedWhitespace = false
         for ch in phrase {
+            let isUnquotedWhitespace = !inQuotes && !quotedPairPending && (ch == " " || ch == "\t")
+            defer { previousWasUnquotedWhitespace = isUnquotedWhitespace }
+            if isUnquotedWhitespace {
+                if !previousWasUnquotedWhitespace { out.append(" ") }
+                continue
+            }
             if quotedPairPending {
                 out.append(ch)
                 quotedPairPending = false

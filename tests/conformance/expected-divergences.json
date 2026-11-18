@@ -85,6 +85,23 @@
         "cpython/msg_15.txt body",
         "rfc/rfc2045-sec6.7-quoted-printable.eml body"
       ]
+    },
+    {
+      "id": "encoded-word-splits-character",
+      "class": "python-quirk",
+      "note": "RFC 2047 5 requires each encoded-word to hold whole characters, so splitting UTF-8 'é' across two words is invalid. Python joins the bytes of adjacent same-charset words before decoding; SendmailCore decodes each word on its own and shows U+FFFD for the halves.",
+      "cases": [
+        "local/header-edge-cases.eml cc",
+        "local/header-edge-cases.eml subject"
+      ]
+    },
+    {
+      "id": "display-name-whitespace-not-quoted",
+      "class": "ours-bug",
+      "note": "formatMailbox wrote a display name with a run of spaces unquoted, and RFC 5322 3.2.2 reads that run as one space, so 'Quoted   Spaces' did not survive the .eml round trip.",
+      "cases": [
+        "local/header-edge-cases.eml rebuilt-eml.to"
+      ]
     }
   ]
 }
