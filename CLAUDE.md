@@ -11,7 +11,7 @@ nix build               # builds binary + runs all unit tests
 nix flake check         # same, plus evaluates other flake outputs
 ```
 
-CI (`.github/workflows/ci.yml`) runs `nix flake check -L` on `macos-latest` for every PR and every push to `master`, with Nix installed by `DeterminateSystems/nix-installer-action` and `sandbox = false`, the default macOS Nix setting the suite is run under locally. Actions are pinned to full commit SHAs with the version in a comment; lint workflow edits with `nix run nixpkgs#actionlint -- .github/workflows/*.yml`.
+CI (`.github/workflows/ci.yml`) runs `nix flake check -L` on `macos-latest` for every PR and every push to `master`, with Nix installed by `DeterminateSystems/nix-installer-action` and `sandbox = false`, the default macOS Nix setting the suite is run under locally. Actions are pinned to full commit SHAs with the version in a comment, which Dependabot (`.github/dependabot.yml`, weekly `github-actions` updates labelled `cleanup`) keeps current; lint workflow edits with `nix run nixpkgs#actionlint -- .github/workflows/*.yml`, which also catches YAML errors in them (it does not read `dependabot.yml`; `nix run nixpkgs#check-jsonschema -- --builtin-schema vendor.dependabot .github/dependabot.yml` validates that).
 
 For iterative work, enter the dev shell and use Swift directly:
 
