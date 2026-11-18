@@ -60,21 +60,20 @@ inputs.apple-mail-sendmail.packages.${system}.default.override {
 
 ## Permissions
 
-Mail.app uses macOS automation. The first time the binary runs, you'll
-be prompted to grant the calling terminal (or whichever process invokes
-it) automation access in **System Settings -> Privacy & Security ->
-Automation**. If automation is denied, the binary exits with status 78
-(`EX_CONFIG`) and prints a hint pointing at the settings panel.
+The two kinds of message need different grants, each for the calling
+terminal (or whichever process invokes the binary):
 
-**Messages with an HTML body require an additional Accessibility grant**
-for the calling process in **System Settings -> Privacy & Security ->
-Accessibility** (on macOS 27 and later, **Privacy & Security -> Device
-Control and Data Access**). Without it the binary exits with status 78
-(`EX_CONFIG`) before touching Mail, and names that pane. The HTML path opens the message in Mail, invokes
-`Message > Send Again` (⇧⌘D) via a System Events menu click to convert
-the viewer into an editable compose, and (with `--send`) clicks
-`Message > Send` — both of which need Accessibility. Plain-text-only messages take the classic
-AppleScript path and do not need Accessibility.
+- **Plain-text messages** drive Mail through AppleScript, so they need
+  **Automation** access to Mail. The first time, macOS prompts for it
+  in **System Settings -> Privacy & Security -> Automation**. If it is
+  denied, the binary exits with status 78 (`EX_CONFIG`) and prints a
+  hint pointing at that panel.
+- **Messages with an HTML body** drive Mail's windows and menus
+  through the Accessibility API and send no Apple Events, so they need
+  only **Accessibility**: **System Settings -> Privacy & Security ->
+  Accessibility**, or on macOS 27 and later **Privacy & Security ->
+  Device Control and Data Access**. Without it the binary exits with
+  status 78 (`EX_CONFIG`) before touching Mail, and names that pane.
 
 ## Usage
 
@@ -176,18 +175,19 @@ hands the message to Mail by:
 1. Writing the rfc822 bytes (with any `-t` / `-f` / positional
    overrides applied to the headers; body bytes verbatim) to a
    temporary `.eml`.
-2. `open -a Mail file.eml` so Mail opens it as a viewer window —
-   rendered by WKWebView, the same engine Mail uses for received
-   mail.
-3. Invoking `Message > Send Again` (⇧⌘D) via a System Events menu
-   click, once the viewer is verified as Mail's front, main and key
+2. Opening it with Mail through Launch Services, so Mail shows it in
+   a viewer window — rendered by WKWebView, the same engine Mail uses
+   for received mail.
+3. Pressing `Message > Send Again` (⇧⌘D) through the Accessibility
+   API, once the viewer is verified as Mail's frontmost, main and key
    window. Mail converts the viewer into a brand-new editable
    compose carrying the .eml's `To` / `Subject` / `From` and the
-   rendered HTML. The click targets Mail's process, so unlike a
+   rendered HTML. The press targets Mail's own menu item, so unlike a
    keystroke it cannot land in another app; Mail must still be
-   frontmost, because in the background the click does nothing.
+   frontmost, because in the background the item is hidden.
 4. With `--send`, verifying the compose window the same way, then
-   clicking `Message > Send` via System Events.
+   pressing `Message > Send`, at most three times and only while the
+   compose is still open.
 5. Closing the leftover viewer window.
 
 This preserves **everything** the source HTML expresses — tables,
@@ -215,15 +215,16 @@ Tradeoffs:
 - **One Mail window briefly flashes** during each invocation.
   Cron-style use is fine but the binary cannot run "completely
   silently" the way the classic plain-text path can.
-- **Mail must be running** (or quickly launchable) — `open -a Mail`
-  starts it if not already running, then needs the window to
-  appear before the Send Again click. The script polls up to 5
-  seconds; longer cold-starts produce a clean timeout error.
+- **Mail must be running** (or quickly launchable) — the binary
+  starts it if not already running, then needs the viewer window to
+  appear before the Send Again press. It waits up to 5 seconds;
+  longer cold-starts produce a clean timeout error.
 
 ### Dry run
 
-Set `SENDMAIL_DRY_RUN=1` to print the AppleScript that would be executed
-and skip the call to Mail.app. Useful for debugging.
+Set `SENDMAIL_DRY_RUN=1` to print what the binary would do and skip
+every call to Mail.app: the HTML path's steps, one JSON object per line,
+or the plain path's AppleScript. Useful for debugging.
 
 ```sh
 SENDMAIL_DRY_RUN=1 apple-mail-sendmail -t < msg.eml
@@ -261,13 +262,13 @@ Following `sysexits.h`:
 |   64 | Usage error (unknown flag, malformed argv)                    |
 |   65 | Data error (unparseable message)                              |
 |   67 | No recipients resolved                                        |
-|   71 | AppleScript execution failed                                  |
+|   71 | Driving Mail failed (AppleScript or the HTML path's steps)    |
 |   75 | Temporary failure: could not create the temp file (EX_TEMPFAIL) |
-|   78 | Automation permission denied                                  |
+|   78 | Automation or Accessibility permission denied                 |
 
 ## Alternatives considered
 
-Before settling on the `.eml` + Cmd-Shift-D approach above, many other
+Before settling on the `.eml` + Send Again approach above, many other
 paths were tried and ruled out: MailKit / `MEExtension`, opening an
 `.eml` as a draft, `import mail` + `redirect`, NSSharingService,
 `mailto:` URLs, an `NSAttributedString` / RTF-read dictionary path,
@@ -280,7 +281,7 @@ is in [ATTEMPTS.md](ATTEMPTS.md).
 
 The project is a SwiftPM package with three targets:
 
-- `SendmailCore` — library with all parsing and AppleScript logic
+- `SendmailCore` — library with all parsing and Mail automation logic
 - `apple-mail-sendmail` — thin executable that orchestrates them
 - `sendmail-test` — standalone test runner using a custom assertion
   harness (no XCTest, because the Nix Swift toolchain on macOS does
@@ -295,8 +296,8 @@ swift build
 
 ### Run tests
 
-The tests use a recording AppleScript runner, so they never drive
-Mail.app.
+The tests record the plain path's AppleScript and run the HTML path
+against a fake Mail, so they never drive Mail.app.
 
 ```sh
 nix develop
@@ -312,7 +313,7 @@ and every push to `master`.
 
 ### End-to-end tests
 
-The unit tests only check the generated AppleScript. A separate
+The unit tests never touch the real Mail. A separate
 harness, `nix run .#e2e`, runs the real binary against Mail.app in a
 dedicated test user or VM and checks what Mail sends to a local Mailpit
 capture server; `nix run .#e2e-vm` runs it in a disposable Tart VM. Its

@@ -36,17 +36,30 @@ public struct PlainCompose {
     }
 }
 
-/// How the binary drives Mail.app. `MailDriver` decides which path a message
-/// takes and stages its files; an implementation only talks to Mail.
-///
-/// Anything new that drives Mail goes behind this protocol, so tests can
-/// substitute a recorder and never launch Mail.
-public protocol MailAutomation {
-    /// Create an outgoing message from `compose`: a visible draft, or sent
-    /// at once when `compose.send` is true.
+/// Creates an outgoing message in Mail from a `PlainCompose`: a visible
+/// draft, or sent at once when `compose.send` is true.
+public protocol PlainDelivery {
     func deliverPlain(_ compose: PlainCompose) throws
+}
 
-    /// Open the `.eml` at `emlURL` in Mail and turn it into a new compose
-    /// with Message > Send Again; with `send`, also send that compose.
+/// Opens the `.eml` at `emlURL` in Mail and turns it into a new compose
+/// with Message > Send Again; with `send`, also sends that compose.
+public protocol HTMLDelivery {
     func deliverHTML(emlURL: URL, send: Bool) throws
+}
+
+/// How the binary drives Mail.app, one implementation per path. `MailDriver`
+/// decides which path a message takes and stages its files; the deliveries
+/// only talk to Mail.
+///
+/// Anything new that drives Mail goes behind these protocols, so tests can
+/// substitute a recorder and never launch Mail.
+public struct MailAutomation {
+    public var plain: PlainDelivery
+    public var html: HTMLDelivery
+
+    public init(plain: PlainDelivery, html: HTMLDelivery) {
+        self.plain = plain
+        self.html = html
+    }
 }

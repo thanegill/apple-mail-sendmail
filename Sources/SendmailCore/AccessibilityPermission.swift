@@ -20,10 +20,6 @@ public struct AccessibilityPermission {
         }
     }
 
-    /// For a run that reaches no app at all (the dry run, a recording
-    /// runner), so there is nothing to grant.
-    public static let notChecked = AccessibilityPermission(osMajorVersion: 0) { true }
-
     public func require() throws {
         guard isGranted() else { throw AccessibilityNotGranted(osMajorVersion: osMajorVersion) }
     }

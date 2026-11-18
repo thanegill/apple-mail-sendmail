@@ -148,7 +148,6 @@ let appleScriptCompileTests = TestSuite(name: "AppleScriptCompile", cases: [
     TestCase(name: "every_script_captured_from_maildriver_suite_compiles") {
         try requireAppleScriptCompiler()
         let missingCaptureHint = "the MailDriver suite must run before this one"
-        try expect(capturedMailDriverScripts.contains { $0.source.contains("click menu item \"Send Again\"") }, "no edit-draft script captured; \(missingCaptureHint)")
         try expect(capturedMailDriverScripts.contains { $0.source.contains("make new outgoing message") }, "no classic script captured; \(missingCaptureHint)")
         var failures: [String] = []
         for captured in capturedMailDriverScripts {
@@ -180,22 +179,6 @@ let appleScriptCompileTests = TestSuite(name: "AppleScriptCompile", cases: [
                     try expect(script.contains("make new outgoing message"), "expected the classic emitter")
                     try expectCompiles(script, origin: "classic send=\(send) attachments=\(withAttachments) subject=\(label)")
                 }
-            }
-        }
-    },
-
-    TestCase(name: "edit_draft_script_compiles_for_send_and_draft_with_odd_eml_paths") {
-        // The edit-draft script depends only on the .eml path and the send
-        // flag, so those are the inputs to vary.
-        try requireAppleScriptCompiler()
-        let emlPaths = [
-            "/tmp/plain/compose.eml",
-            "/tmp/odd \"dir\" \\ caf\u{e9} \u{65e5}\u{672c}/compose \"x\".eml",
-        ]
-        for send in [false, true] {
-            for emlPath in emlPaths {
-                let script = AppleScriptMailAutomation.buildEditDraftScript(emlPath: emlPath, send: send)
-                try expectCompiles(script, origin: "edit-draft send=\(send) emlPath=\(emlPath)")
             }
         }
     },
