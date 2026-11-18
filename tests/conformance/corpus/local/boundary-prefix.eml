@@ -1,0 +1,24 @@
+From: sender@example.test
+To: rcpt@example.test
+Subject: nested boundary that extends the outer one
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="part"
+
+--part
+Content-Type: multipart/alternative; boundary="part-inner"
+
+--part-inner
+Content-Type: text/plain; charset=utf-8
+
+plain inner
+--part-inner
+Content-Type: text/html; charset=utf-8
+
+<p>html inner</p>
+--part-inner--
+--part
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="after.bin"
+
+x
+--part--

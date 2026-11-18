@@ -1,0 +1,50 @@
+From: "Work Bot" <work@example.test>, other@example.test
+To: a@x.com, "Bob B" <b@y>
+Cc: c@z
+Bcc: d@w
+Subject: with attachment
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUND"
+
+--BOUND
+Content-Type: text/plain; charset=utf-8
+
+Body part text.
+--BOUND
+Content-Type: application/octet-stream; name="data.bin"
+Content-Disposition: attachment; filename="data.bin"
+Content-Transfer-Encoding: base64
+
+SGVsbG8K
+--BOUND
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="Report-Q3.PDF"
+Content-Transfer-Encoding: base64
+
+SGVsbG8K
+--BOUND
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="=?UTF-8?B?w6l0w6kucGRm?="
+Content-Transfer-Encoding: base64
+
+SGVsbG8K
+--BOUND
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="ete.pdf"; filename*=UTF-8''%C3%A9t%C3%A9.pdf
+
+x
+--BOUND
+Content-Type: text/plain; name*=iso-8859-1'fr'R%E9sum%E9.txt
+
+x
+--BOUND
+Content-Type: application/pdf
+Content-Disposition: attachment; filename*1*=%C3%A9-Long; filename*0*=UTF-8''%C3%A9t; filename*2=" Name.pdf"
+
+x
+--BOUND
+Content-Type: text/csv
+Content-Disposition: ATTACHMENT; Filename="Notes.CSV"
+
+a,b
+--BOUND--

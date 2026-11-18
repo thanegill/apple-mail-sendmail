@@ -1,0 +1,6 @@
+From: sender@example.test
+To: rcpt@example.test
+Subject: html only
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Tom &amp; Jerry say &lt;hi&gt; it&#8217;s</p></body></html>

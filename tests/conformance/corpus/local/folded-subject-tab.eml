@@ -1,0 +1,7 @@
+From: sender@example.test
+To: rcpt@example.test
+Subject: line one
+	continuation after a tab
+Content-Type: text/plain; charset=utf-8
+
+body

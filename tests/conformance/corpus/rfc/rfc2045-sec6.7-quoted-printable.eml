@@ -1,0 +1,12 @@
+From: sender@example.test
+To: rcpt@example.test
+Subject: RFC 2045 quoted-printable rules
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+transport padding   
+soft break with padding= 	
+kept=20
+tab=09
+caf=C3=A9 end=

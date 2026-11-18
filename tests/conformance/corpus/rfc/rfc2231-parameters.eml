@@ -1,0 +1,31 @@
+From: sender@example.test
+To: rcpt@example.test
+Subject: RFC 2231 parameter value forms
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="2231"
+
+--2231
+Content-Type: text/plain; charset=us-ascii
+
+Body.
+--2231
+Content-Type: application/x-stuff;
+ name*=us-ascii'en-us'This%20is%20%2A%2A%2Afun%2A%2A%2A
+
+x
+--2231
+Content-Type: application/x-stuff
+Content-Disposition: attachment;
+ filename*0*=us-ascii'en'This%20is%20even%20more%20;
+ filename*1*=%2A%2A%2Afun%2A%2A%2A%20;
+ filename*2="isn't it!"
+
+x
+--2231
+Content-Type: application/x-stuff
+Content-Disposition: attachment;
+ filename*0="ftp://";
+ filename*1="cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar"
+
+x
+--2231--
