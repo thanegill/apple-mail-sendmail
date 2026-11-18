@@ -30,6 +30,19 @@ private func syntheticEml(for msg: ParsedMessage) -> Data {
     }
 }
 
+/// Substring search over unicode scalars, so a needle that starts or ends
+/// inside a grapheme cluster of the haystack still matches exactly.
+private func scalarsContain(_ haystack: String, _ needle: String) -> Bool {
+    let hayScalars = Array(haystack.unicodeScalars)
+    let needleScalars = Array(needle.unicodeScalars)
+    guard !needleScalars.isEmpty, needleScalars.count <= hayScalars.count else { return needleScalars.isEmpty }
+    for start in 0...(hayScalars.count - needleScalars.count)
+    where hayScalars[start..<(start + needleScalars.count)].elementsEqual(needleScalars) {
+        return true
+    }
+    return false
+}
+
 let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     TestCase(name: "draft_mode_emits_visible_true_and_no_send") {
         try withTempDir { tmp in
@@ -160,6 +173,64 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             try expect(!script.contains("\u{2028}"), "raw U+2028 must not appear in the emitted literal")
             try expect(!script.contains("\u{2029}"), "raw U+2029 must not appear in the emitted literal")
             try expect(script.contains("subject:\"before\\nafter\\nend\""))
+        }
+    },
+
+    TestCase(name: "quote_escapes_crlf_grapheme_cluster") {
+        // Swift fuses "\r\n" into one Character, which matches neither the
+        // "\r" nor the "\n" case of a Character-level switch.
+        let quoted = AppleScript.quote("a\r\nb")
+        try expectEqual(quoted, "\"a\\r\\nb\"")
+        try expect(!quoted.unicodeScalars.contains("\r"), "raw CR must not appear in the literal")
+        try expect(!quoted.unicodeScalars.contains("\n"), "raw LF must not appear in the literal")
+    },
+
+    TestCase(name: "quote_maps_control_with_combining_mark_to_space") {
+        // The combining mark must survive while the control before it is
+        // still escaped or mapped to a space.
+        let quoted = AppleScript.quote("a\u{01}\u{0301}b\r\u{0301}c")
+        try expectEqual(quoted, "\"a \u{0301}b\\r\u{0301}c\"")
+        try expect(!quoted.unicodeScalars.contains { $0.value < 0x20 }, "no raw C0 control may appear in the literal")
+    },
+
+    TestCase(name: "quote_existing_escapes_unchanged") {
+        try expectEqual(AppleScript.quote(""), "\"\"")
+        try expectEqual(AppleScript.quote("plain ASCII 123"), "\"plain ASCII 123\"")
+        try expectEqual(AppleScript.quote("q\"b\\"), "\"q\\\"b\\\\\"")
+        try expectEqual(AppleScript.quote("n\nr\rt\t"), "\"n\\nr\\rt\\t\"")
+        try expectEqual(AppleScript.quote("ls\u{2028}ps\u{2029}"), "\"ls\\nps\\n\"")
+        try expectEqual(AppleScript.quote("nul\u{00}esc\u{1B}us\u{1F}"), "\"nul esc us \"")
+        try expectEqual(AppleScript.quote("del\u{7F}"), "\"del\u{7F}\"")
+        try expectEqual(AppleScript.quote("caf\u{E9} e\u{0301} \u{1F600} \u{1F1FA}\u{1F1F8}"), "\"caf\u{E9} e\u{0301} \u{1F600} \u{1F1FA}\u{1F1F8}\"")
+    },
+
+    // A `"` or `\` that shares a grapheme cluster with a neighbour (GB9,
+    // GB9a, GB9b) is not a bare "\"" Character, so a Character-level switch
+    // passed it through unescaped and it could end the literal.
+    TestCase(name: "quote_escapes_quote_followed_by_combining_mark") {
+        try expectEqual(AppleScript.quote("\"\u{0301}"), "\"\\\"\u{0301}\"")
+    },
+
+    TestCase(name: "quote_escapes_quote_preceded_by_prepend") {
+        try expectEqual(AppleScript.quote("\u{0600}\""), "\"\u{0600}\\\"\"")
+    },
+
+    TestCase(name: "quote_escapes_backslash_followed_by_combining_mark") {
+        try expectEqual(AppleScript.quote("\\\u{0301}"), "\"\\\\\u{0301}\"")
+    },
+
+    TestCase(name: "encoded_subject_cannot_inject_applescript") {
+        let payload = "X\u{0600}\" & (count {1, 2, 3}) & (character id {80, 87, 78}) & \"\u{0301}"
+        let encoded = "=?UTF-8?B?" + Data(payload.utf8).base64EncodedString() + "?="
+        let eml = Data("To: u@h\r\nSubject: \(encoded)\r\n\r\nbody\r\n".utf8)
+        let msg = MIMEParser.parse(try RFC822Parser.parse(eml))
+        try expectEqual(msg.subject, payload)
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            let script = try MailDriver.deliver(msg, emlBytes: eml, options: Options(), tmp: tmp, runner: recorder.run)
+            let escapedLiteral = "subject:\"X\u{0600}\\\" & (count {1, 2, 3}) & (character id {80, 87, 78}) & \\\"\u{0301}\""
+            try expect(scalarsContain(script, escapedLiteral), "subject must be emitted as one escaped literal")
+            try expect(!scalarsContain(script, "\u{0600}\" & (count"), "unescaped quote would end the literal and run the injected expression")
         }
     },
 
