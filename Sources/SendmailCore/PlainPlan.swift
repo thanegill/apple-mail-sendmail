@@ -162,8 +162,22 @@ public struct AppleEventPlainDelivery: PlainDelivery {
             case .send:
                 let event = Build.event("emsg", "send")
                 event.setParam(try requireMessage(), forKeyword: keyDirectObject)
-                _ = try events.send(event)
+                if Self.replyIsFalse(try events.send(event)) {
+                    throw DeliveryError(Self.sendReturnedFalse)
+                }
             }
         }
+    }
+
+    static let sendReturnedFalse = "Mail.app did not send the message: its send command returned false. Check the sending account and its outgoing mail server in Mail."
+
+    /// True only for a boolean `false` result. A reply with no result, or a
+    /// result of another type, says nothing about the send, and failing on it
+    /// would make an MTA retry a message Mail may already have sent.
+    static func replyIsFalse(_ reply: NSAppleEventDescriptor) -> Bool {
+        guard let result = reply.paramDescriptor(forKeyword: keyDirectObject),
+              [DescType(typeTrue), DescType(typeFalse), DescType(typeBoolean)].contains(result.descriptorType)
+        else { return false }
+        return !result.booleanValue
     }
 }

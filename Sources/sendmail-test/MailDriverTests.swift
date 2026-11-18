@@ -50,6 +50,16 @@ private func message(to address: String = "u@h", subject: String = "s", body: St
     return msg
 }
 
+/// Deliver a plain message with `--send`, its events going to `recorder`.
+private func sendThroughPlainPath(_ recorder: AppleEventRecorder) throws {
+    var opts = Options()
+    opts.send = true
+    try withTempDir { tmp in
+        let msg = message()
+        try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: recorder)
+    }
+}
+
 private let messageContent = AEValue.specifier(want: "prop", from: recordedMessageSpecifier, form: "prop", seld: .type("ctnt"))
 
 let mailDriverTests = TestSuite(name: "MailDriver", cases: [
@@ -331,6 +341,45 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
         try expectEqual((thrown as? AppleEventError)?.code, -10000)
         try expect(!recorder.names.contains("emsg/send"))
+    },
+
+    TestCase(name: "send_answered_false_fails_with_exit_oserr") {
+        let recorder = AppleEventRecorder()
+        recorder.sendResult = NSAppleEventDescriptor(boolean: false)
+        var thrown: Error?
+        do {
+            try sendThroughPlainPath(recorder)
+        } catch {
+            thrown = error
+        }
+        try expectEqual(recorder.names.last, "emsg/send")
+        guard let thrown else { throw TestFailure(message: "a false send reply must fail", file: #file, line: #line) }
+        let report = FailureReport(thrown)
+        try expectEqual(report.exitCode, .osErr)
+        try expect(report.message.contains("did not send the message"), report.message)
+        try expect(report.message.contains("returned false"), report.message)
+    },
+
+    TestCase(name: "send_answered_true_succeeds") {
+        let recorder = AppleEventRecorder()
+        recorder.sendResult = NSAppleEventDescriptor(boolean: true)
+        try sendThroughPlainPath(recorder)
+        try expectEqual(recorder.names.last, "emsg/send")
+    },
+
+    TestCase(name: "send_reply_without_a_boolean_result_keeps_succeeding") {
+        let results: [NSAppleEventDescriptor?] = [
+            nil,
+            NSAppleEventDescriptor(int32: 0),
+            NSAppleEventDescriptor(string: "false"),
+            NSAppleEventDescriptor.null(),
+        ]
+        for result in results {
+            let recorder = AppleEventRecorder()
+            recorder.sendResult = result
+            try sendThroughPlainPath(recorder)
+            try expectEqual(recorder.names.last, "emsg/send")
+        }
     },
 
     TestCase(name: "make_message_reply_without_a_message_is_an_error_before_anything_else") {

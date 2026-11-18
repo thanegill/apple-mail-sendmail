@@ -126,6 +126,8 @@ final class AppleEventRecorder: AppleEventSending {
     /// Runs before each event is answered.
     var onSend: ((RecordedEvent) throws -> Void)?
     var replyWithoutMessage = false
+    /// The direct object of Mail's reply to `send`; nil leaves it out.
+    var sendResult: NSAppleEventDescriptor?
 
     func send(_ event: NSAppleEventDescriptor) throws -> NSAppleEventDescriptor {
         var params: [String: AEValue] = [:]
@@ -152,6 +154,9 @@ final class AppleEventRecorder: AppleEventSending {
         )
         if recorded.name == "core/crel", params["kocl"] == .type("bcke"), !replyWithoutMessage {
             reply.setParam(Self.messageSpecifier(), forKeyword: keyDirectObject)
+        }
+        if recorded.name == "emsg/send", let sendResult {
+            reply.setParam(sendResult, forKeyword: keyDirectObject)
         }
         return reply
     }
