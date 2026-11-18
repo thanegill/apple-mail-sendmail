@@ -50,7 +50,7 @@ Guidance for working on the live end-to-end harness in this directory and its Ta
 
 ## Scenarios
 
-- New scenarios: add a `define_<name>` function and list it in `SCENARIOS`. Recipients must be `@example.test` and the sender an e2e account, or the guards refuse that scenario.
+- New scenarios: add a `define_<name>` function that sets a one-line `DESCRIPTION` (what `--list` prints) and list it in `SCENARIOS`. Recipients must be `@example.test` and the sender an e2e account, or the guards refuse that scenario.
 - Plain-path attachment names on the wire are the binary's temp names (`att-01-<name>`), and the assertion matches names exactly.
 - The self-test derives its broken variants from the scenario's expectations, so a new scenario is covered by `--self-test` automatically.
 
@@ -68,6 +68,7 @@ Guidance for working on the live end-to-end harness in this directory and its Ta
 - Every boot passes `tart run --no-audio` (in `start_vm`'s `run_args`), so no VM plays sound on the host; keep it when adding display modes.
 - Every step that can take long runs through `run_interruptibly` (a background job plus `wait`), because bash runs an INT/TERM trap only after a foreground child exits; a supervisor's TERM-then-KILL would otherwise leak a running clone. Keep new long steps on that path, and test signal handling with a stub `tart` on `PATH`, never a real VM. `run_interruptibly` passes its stdin on explicitly (`<&0`): a non-interactive bash gives background jobs `/dev/null`, which once made `install_authorized_key` write an empty key line.
 - `vm.sh` runs under `pipefail`, so never pipe a command whose status matters into an early-exiting reader (`| grep -q`, `| head`, an awk or sed that quits): a match makes the producer die of SIGPIPE and the pipeline fail with 141. Capture the output first, then parse it from a here-string, and check the producer's own status. Do not hide a producer behind `| reader || true` either. Remote commands whose status is a yes/no answer go through `guest_test` (0 yes, 1 no, anything else stops setup), and those whose exit code overlaps failures (`lsof`, `pgrep` via `tart exec`) report it in-band.
+- An approval pass counts only if the harness exits 0 and its summary has a `RESULT: success` line and a `<scenario>   PASS` row for each of `APPROVAL_SCENARIOS` (`approval_pass_passed`). The summary has two columns, SCENARIO and RESULT; `self_test_summary` in `e2e.sh` checks it with the same patterns, so change the summary format, those patterns and that self-test together.
 - `--setup-golden` only touches a VM it created: it writes `golden-<name>.marker` in the state directory before cloning and refuses an existing VM without a matching marker.
 - Anything that drives Mail must go through `tart exec`, never SSH: the guest agent runs in the GUI session, and the golden image's Automation and Accessibility grants belong to it as the responsible process. SSH is for `nix copy`, file transfer and logs only.
 - The guest has `/nix` (official installer, pinned by URL and hash in `../../flake.nix`) with `trusted-users` including `admin`, and `nix copy` passes `--no-check-sigs`: host-built paths are unsigned, and the guest refuses them without both. `--binary` must resolve into `/nix/store`.

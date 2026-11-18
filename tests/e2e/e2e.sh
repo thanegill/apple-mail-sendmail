@@ -82,7 +82,7 @@ Modes (default: live run, which drives Mail.app and sends mail):
                   parsers.
   --serve         Run the Mailpit capture server in the foreground (for
                   setting up or inspecting the Mail accounts). Ctrl-C stops it.
-  --list          List scenarios and the open PRs they depend on.
+  --list          List the scenarios and what each one checks.
 
   --check-only and --self-test never drive Mail. They run the binary only
   with SENDMAIL_DRY_RUN=1 inside sandbox-exec (tests/e2e/dry-run.sb), which denies
@@ -102,7 +102,7 @@ Options:
   --timeout SECONDS       How long to wait for a message to arrive (default ${delivery_timeout})
   --keep                  Keep the work directory (fixtures, logs, Mailpit DB).
   --allow-refused         Let a live run succeed when scenarios were refused
-                          by a guard (as PR-dependent ones are on master);
+                          by a guard (e.g. against an older binary);
                           by default anything but PASS fails the run.
   -h, --help              Show this help.
 EOF
@@ -465,7 +465,6 @@ reset_expectations() {
   BODY_MARKER="e2e-body ${RUN_ID} ${NAME}"
   FIXTURE="$workdir/fixtures/${NAME}.eml"
   DESCRIPTION=""
-  DEPENDS_ON="-"
   DELIVERY=send
   EXPECT_PATH=plain
   SEND_ARGS=(-t)
@@ -576,7 +575,6 @@ EOF
 
 define_plain_attachment_send() {
   DESCRIPTION="plain text + attachment, --send: attachment arrives intact"
-  DEPENDS_ON="PR #36 check 2"
   SEND_ARGS=(-t -f "$ACCOUNT_A")
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_TO=(to-plain-att@example.test)
@@ -611,7 +609,6 @@ Subject: ${SUBJECT}"
 
 define_bcc_only_plain() {
   DESCRIPTION="To: undisclosed-recipients:; + Bcc, plain: Bcc delivered, no Bcc header"
-  DEPENDS_ON="PR #40"
   SEND_ARGS=(-t -f "$ACCOUNT_A")
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_BCC=(hidden-plain@example.test)
@@ -628,7 +625,6 @@ EOF
 
 define_bcc_only_html() {
   DESCRIPTION="To: undisclosed-recipients:; + Bcc, HTML: Bcc delivered, no Bcc header"
-  DEPENDS_ON="PR #40"
   EXPECT_PATH=html
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_BCC=(hidden-html@example.test)
@@ -642,7 +638,6 @@ Subject: ${SUBJECT}"
 
 define_display_names_plain() {
   DESCRIPTION="comma and non-ASCII display names in To, Cc and From (-F), plain"
-  DEPENDS_ON="PR #39"
   SEND_ARGS=(-t -f "$ACCOUNT_A" -F "Bäcker, Anna")
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_FROM_NAME="Bäcker, Anna"
@@ -660,7 +655,6 @@ EOF
 
 define_display_names_html() {
   DESCRIPTION="comma and non-ASCII display names in To, Cc and From (header), HTML"
-  DEPENDS_ON="PR #39"
   EXPECT_PATH=html
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_FROM_NAME="Bäcker, Anna"
@@ -675,7 +669,6 @@ Subject: ${SUBJECT}"
 
 define_from_header_account_plain() {
   DESCRIPTION="plain, no -f: header From selects the second account"
-  DEPENDS_ON="PR #38"
   EXPECT_FROM_ADDR=$ACCOUNT_B
   EXPECT_TO=(to-account-b@example.test)
   cat >"$FIXTURE" <<EOF
@@ -689,7 +682,6 @@ EOF
 
 define_attachment_filename_plain() {
   DESCRIPTION="plain + RFC 2231 mixed-case attachment filename keeps its name"
-  DEPENDS_ON="PR #37"
   SEND_ARGS=(-t -f "$ACCOUNT_A")
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_TO=(to-filename@example.test)
@@ -701,7 +693,6 @@ Subject: ${SUBJECT}" "attachment; filename*=UTF-8''Report%2DQ3.BIN"
 
 define_draft_later_plain_attachment() {
   DESCRIPTION="plain + attachment as a draft, sent by hand after --draft-wait"
-  DEPENDS_ON="PR #36 check 1"
   DELIVERY=draft-later
   SEND_ARGS=(-t -f "$ACCOUNT_A")
   EXPECT_FROM_ADDR=$ACCOUNT_A
@@ -714,7 +705,6 @@ Subject: ${SUBJECT}" 'attachment; filename="e2e-data.bin"'
 
 define_draft_later_html_attachment() {
   DESCRIPTION="HTML + attachment as a draft, sent by hand after --draft-wait"
-  DEPENDS_ON="PR #36 checks 3-4"
   DELIVERY=draft-later
   EXPECT_PATH=html
   EXPECT_FROM_ADDR=$ACCOUNT_A
@@ -1892,10 +1882,10 @@ check_delivery() {
 
 cmd_list() {
   local name
-  printf '%-30s %-20s %s\n' SCENARIO DEPENDS-ON DESCRIPTION
+  printf '%-30s %s\n' SCENARIO DESCRIPTION
   for name in "${SCENARIOS[@]}"; do
     define_scenario "$name"
-    printf '%-30s %-20s %s\n' "$name" "$DEPENDS_ON" "$DESCRIPTION"
+    printf '%-30s %s\n' "$name" "$DESCRIPTION"
   done
 }
 
@@ -1927,10 +1917,9 @@ record() {
 }
 
 # Results: PASS; FAIL; REFUSED (a guard refused the scenario before Mail was
-# touched, expected on master for PR-dependent ones); ABORTED (a pre-scenario
-# check stopped the run); SKIP (could not run, e.g. no e2e-b account). The
-# run succeeds only if every selected scenario passed, or with
-# --allow-refused, passed or was REFUSED.
+# touched); ABORTED (a pre-scenario check stopped the run); SKIP (could not
+# run, e.g. no e2e-b account). The run succeeds only if every selected
+# scenario passed, or with --allow-refused, passed or was REFUSED.
 run_succeeded() {
   local name status
   for name in "${selected[@]}"; do
@@ -1945,12 +1934,11 @@ run_succeeded() {
 print_summary() {
   local name reason status
   local -A totals=()
-  printf '\n%-30s %-8s %s\n' SCENARIO RESULT DEPENDS-ON
+  printf '\n%-30s %s\n' SCENARIO RESULT
   for name in "${selected[@]}"; do
-    define_scenario "$name"
     status=${RESULT[$name]:-NOT-RUN}
     totals[$status]=$((${totals[$status]:-0} + 1))
-    printf '%-30s %-8s %s\n' "$name" "$status" "$DEPENDS_ON"
+    printf '%-30s %s\n' "$name" "$status"
     if [[ -n ${RESULT_REASONS[$name]:-} ]]; then
       while IFS= read -r reason; do
         printf '      - %s\n' "$reason"
@@ -3185,6 +3173,33 @@ self_test_summary() {
   summary_case "one skipped (no e2e-b)" failure true plain-send=PASS from-header-account-plain=SKIP
   summary_case "one failed" failure true plain-send=FAIL html-send=PASS
   summary_case "one never recorded" failure true plain-send=PASS html-send=
+
+  # vm.sh's approval_pass_passed reads the summary with these patterns.
+  local summary_text outcome=unreadable
+  summary_text=$(
+    allow_refused=false
+    selected=(plain-send html-send)
+    RESULT=([plain-send]=PASS [html-send]=PASS)
+    print_summary
+  )
+  if grep -q '^RESULT: success' <<<"$summary_text" &&
+    grep -Eq '^plain-send[[:space:]]+PASS([[:space:]]|$)' <<<"$summary_text" &&
+    grep -Eq '^html-send[[:space:]]+PASS([[:space:]]|$)' <<<"$summary_text"; then
+    outcome=readable
+  fi
+  self_test_expect readable "all passed: rows and RESULT line as vm.sh reads them" "$outcome"
+  outcome=unreadable
+  summary_text=$(
+    allow_refused=false
+    selected=(plain-send html-send)
+    RESULT=([plain-send]=PASS [html-send]=FAIL)
+    print_summary
+  ) || true
+  if grep -Eq '^html-send[[:space:]]+FAIL$' <<<"$summary_text" &&
+    ! grep -Eq '^html-send[[:space:]]+PASS([[:space:]]|$)' <<<"$summary_text"; then
+    outcome=readable
+  fi
+  self_test_expect readable "one failed: its row is not read as a PASS" "$outcome"
 }
 
 # Exercises run_supervised directly, with a `sleep` standing in for the
