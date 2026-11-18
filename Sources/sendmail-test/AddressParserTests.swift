@@ -145,6 +145,36 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
         try expectEqual(r.map(\.address), ["a@x.test", "b@y.test"])
     },
 
+    // RFC 5322 Appendix A.1.2: quoted, unquoted, bare and angle-only mailboxes.
+    TestCase(name: "rfc5322_a1_2_mailbox_forms") {
+        let to = AddressParser.parse("Mary Smith <mary@x.test>, jdoe@example.org, Who? <one@y.test>")
+        try expectEqual(to.map(\.address), ["mary@x.test", "jdoe@example.org", "one@y.test"])
+        try expectEqual(to.map(\.displayName), ["Mary Smith", nil, "Who?"])
+        let cc = AddressParser.parse(#"<boss@nil.test>, "Giant; \"Big\" Box" <sysservices@example.net>"#)
+        try expectEqual(cc.map(\.address), ["boss@nil.test", "sysservices@example.net"])
+        try expectEqual(cc.map(\.displayName), [nil, #"Giant; "Big" Box"#])
+        try expectEqual(AddressParser.parse(#""Joe Q. Public" <john.q.public@example.com>"#)[0].displayName, "Joe Q. Public")
+    },
+
+    // RFC 5322 Appendix A.1.3: a group and an empty group.
+    TestCase(name: "rfc5322_a1_3_groups") {
+        let to = AddressParser.parse("A Group:Ed Jones <c@a.test>,joe@where.test,John <jdoe@one.test>;")
+        try expectEqual(to.map(\.address), ["c@a.test", "joe@where.test", "jdoe@one.test"])
+        try expectEqual(to.map(\.displayName), ["Ed Jones", nil, "John"])
+        try expect(AddressParser.parse("Undisclosed recipients:;").isEmpty)
+    },
+
+    // RFC 5322 Appendix A.5: comments and folding whitespace around a group.
+    TestCase(name: "rfc5322_a5_group_with_comments_and_fws") {
+        let to = AddressParser.parse(
+            "A Group(Some people)     :Chris Jones <c@(Chris's host.)public.example>,"
+                + "         joe@example.org,  John <jdoe@one.test> (my dear friend); (the end of the group)"
+        )
+        try expectEqual(to.map(\.address), ["c@public.example", "joe@example.org", "jdoe@one.test"])
+        try expectEqual(to.map(\.displayName), ["Chris Jones", nil, "John"])
+        try expect(AddressParser.parse("(Empty list)(start)Hidden recipients  :(nobody(that I know))  ;").isEmpty)
+    },
+
     TestCase(name: "mailbox_after_group_semicolon_without_comma") {
         let r = AddressParser.parse("Team: a@x.test; b@y.test")
         try expectEqual(r.map(\.address), ["a@x.test", "b@y.test"])

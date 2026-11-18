@@ -522,6 +522,31 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         )
     },
 
+    // RFC 2231 sections 3, 4 and 4.1, with the examples' `title` and `URL`
+    // parameters renamed to `filename`.
+    TestCase(name: "rfc2231_section_examples") {
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: #"attachment; filename*0="ftp://"; filename*1="cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar""#),
+            ["ftp://cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar"]
+        )
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: "attachment; filename*=us-ascii'en-us'This%20is%20%2A%2A%2Afun%2A%2A%2A"),
+            ["This is ***fun***"]
+        )
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: #"attachment; filename*0*=us-ascii'en'This%20is%20even%20more%20; filename*1*=%2A%2A%2Afun%2A%2A%2A%20; filename*2="isn't it!""#),
+            ["This is even more ***fun*** isn't it!"]
+        )
+    },
+
+    // RFC 2045 section 5.1: `charset=us-ascii (Plain text)` carries a comment
+    // after the value.
+    TestCase(name: "rfc2045_charset_followed_by_comment") {
+        let input = "Content-Type: text/plain; charset=iso-8859-1 (Latin text)\nContent-Transfer-Encoding: quoted-printable\n\ncaf=E9"
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "caf\u{E9}")
+    },
+
     TestCase(name: "rfc2231_continuation_gap_stops_joining") {
         try expectEqual(
             try attachmentFilenames(contentDisposition: "attachment; filename*0*=UTF-8''a; filename*2*=c"),
