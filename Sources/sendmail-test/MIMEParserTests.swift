@@ -74,6 +74,18 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectEqual(msg.body, "a=ZZb")
     },
 
+    // RFC 2045 section 6.7: trailing whitespace on an encoded line is transport
+    // padding and must be deleted (rule 3), so `= ` then a line break is still
+    // a soft line break (rule 5). Encoded whitespace (=20, =09) is kept.
+    TestCase(name: "rfc2045_quoted_printable_transport_padding") {
+        for lineBreak in ["\n", "\r\n"] {
+            let body = ["padded   ", "soft= \t", "break", "kept=20", "tab=09", "end="].joined(separator: lineBreak)
+            let input = "Content-Type: text/plain; charset=utf-8\(lineBreak)Content-Transfer-Encoding: quoted-printable\(lineBreak)\(lineBreak)\(body)"
+            let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+            try expectEqual(msg.body, ["padded", "softbreak", "kept ", "tab\t", "end"].joined(separator: lineBreak))
+        }
+    },
+
     TestCase(name: "base64_body") {
         let input = """
         Subject: B64
@@ -520,6 +532,145 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
             try attachmentFilenames(contentDisposition: #"attachment; filename*0="=?UTF-8?B?w6l0w6kucGRm?=""#),
             ["\u{E9}t\u{E9}.pdf"]
         )
+    },
+
+    // RFC 2231 sections 3, 4 and 4.1, with the examples' `title` and `URL`
+    // parameters renamed to `filename`.
+    TestCase(name: "rfc2231_section_examples") {
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: #"attachment; filename*0="ftp://"; filename*1="cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar""#),
+            ["ftp://cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar"]
+        )
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: "attachment; filename*=us-ascii'en-us'This%20is%20%2A%2A%2Afun%2A%2A%2A"),
+            ["This is ***fun***"]
+        )
+        try expectEqual(
+            try attachmentFilenames(contentDisposition: #"attachment; filename*0*=us-ascii'en'This%20is%20even%20more%20; filename*1*=%2A%2A%2Afun%2A%2A%2A%20; filename*2="isn't it!""#),
+            ["This is even more ***fun*** isn't it!"]
+        )
+    },
+
+    // RFC 2045 section 5.1: `charset=us-ascii (Plain text)` carries a comment
+    // after the value.
+    TestCase(name: "rfc2045_charset_followed_by_comment") {
+        let input = "Content-Type: text/plain; charset=iso-8859-1 (Latin text)\nContent-Transfer-Encoding: quoted-printable\n\ncaf=E9"
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "caf\u{E9}")
+    },
+
+    // RFC 2046 section 5.1.1's sample message: a preamble, a body part with no
+    // header fields (implicitly typed US-ASCII text), and an epilogue.
+    TestCase(name: "rfc2046_sec5_1_1_sample_with_headerless_part") {
+        let input = """
+        From: Nathaniel Borenstein <nsb@bellcore.com>
+        To: Ned Freed <ned@innosoft.com>
+        Date: Sun, 21 Mar 1993 23:56:48 -0800 (PST)
+        Subject: Sample message
+        MIME-Version: 1.0
+        Content-type: multipart/mixed; boundary="simple boundary"
+
+        This is the preamble.  It is to be ignored, though it
+        is a handy place for composition agents to include an
+        explanatory note to non-MIME conformant readers.
+
+        --simple boundary
+
+        This is implicitly typed plain US-ASCII text.
+        It does NOT end with a linebreak.
+        --simple boundary
+        Content-type: text/plain; charset=us-ascii
+
+        This is explicitly typed plain US-ASCII text.
+        It DOES end with a linebreak.
+
+        --simple boundary--
+
+        This is the epilogue.  It is also to be ignored.
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "This is implicitly typed plain US-ASCII text.\nIt does NOT end with a linebreak.")
+        try expect(msg.attachments.isEmpty)
+    },
+
+    TestCase(name: "only_the_line_break_before_a_delimiter_is_dropped") {
+        for lineBreak in ["\n", "\r\n"] {
+            let input = [
+                "Content-Type: multipart/mixed; boundary=\"B\"",
+                "",
+                "--B",
+                "Content-Type: text/plain; charset=utf-8",
+                "",
+                "Body.",
+                "",
+                "",
+                "--B",
+                "Content-Type: text/plain",
+                "Content-Disposition: attachment; filename=\"notes.txt\"",
+                "",
+                "line one",
+                "",
+                "--B--",
+                "",
+            ].joined(separator: lineBreak)
+            let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+            try expectEqual(msg.body, "Body.\(lineBreak)\(lineBreak)")
+            try expectEqual(msg.attachments.map(\.data), [Data("line one\(lineBreak)".utf8)])
+        }
+    },
+
+    // RFC 2046 section 5.1.5: in multipart/digest a part without Content-Type
+    // is message/rfc822, so the digested messages are not read as body text.
+    TestCase(name: "rfc2046_digest_parts_default_to_message_rfc822") {
+        let input = """
+        Subject: Internet Digest, volume 42
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="---- main boundary ----"
+
+        ------ main boundary ----
+
+        ...Introductory text or table of contents...
+
+        ------ main boundary ----
+        Content-Type: multipart/digest; boundary="---- next message ----"
+
+        ------ next message ----
+
+        From: someone-else
+        Subject: my opinion
+
+        ...body goes here ...
+
+        ------ next message ----
+        Content-Type: text/plain
+
+        typed explicitly
+        ------ next message ------
+
+        ------ main boundary ------
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "...Introductory text or table of contents...\n")
+        try expectEqual(msg.attachments.map(\.contentType), ["message/rfc822"])
+        try expect(String(decoding: msg.attachments[0].data, as: UTF8.self).hasPrefix("From: someone-else\n"))
+    },
+
+    // RFC 2231 applies to every parameter, not just filenames: boundary*= and
+    // charset*= (as CPython's test_email msg_33 sends them).
+    TestCase(name: "rfc2231_extended_boundary_and_charset") {
+        let input = """
+        Content-Type: multipart/signed; micalg*=ansi-x3.4-1968''pgp-md5;
+        \tboundary*="ansi-x3.4-1968''EeQfGwPcQSOJBaQU"
+
+        --EeQfGwPcQSOJBaQU
+        Content-Type: text/plain; charset*=us-ascii''iso-8859-1
+        Content-Transfer-Encoding: quoted-printable
+
+        caf=E9
+        --EeQfGwPcQSOJBaQU--
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "caf\u{E9}")
     },
 
     TestCase(name: "rfc2231_continuation_gap_stops_joining") {

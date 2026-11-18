@@ -1,0 +1,99 @@
+{
+  "findings": [
+    {
+      "id": "obsolete-field-name-wsp",
+      "class": "python-quirk",
+      "note": "RFC 5322 4.5 (obs-optional etc.): obsolete syntax allows WSP between a field name and its colon (A.6.3 'From  :'). Python ends the header section at the first such line and reads the rest as the body; SendmailCore parses the fields.",
+      "cases": [
+        "rfc/rfc5322-a6.3.eml subject",
+        "rfc/rfc5322-a6.3.eml from",
+        "rfc/rfc5322-a6.3.eml to",
+        "rfc/rfc5322-a6.3.eml body"
+      ]
+    },
+    {
+      "id": "invalid-base64",
+      "class": "python-quirk",
+      "note": "RFC 2045 6.8 / RFC 2047 4.1 require padded base64. Python repairs unpadded or junk input (adds padding, drops bad characters); SendmailCore leaves an undecodable encoded-word literal (RFC 2047 6.3 allows this) and passes an undecodable body through raw.",
+      "cases": [
+        "cpython/msg_39.txt attachments",
+        "local/base64-unpadded.eml subject",
+        "local/base64-unpadded.eml body",
+        "mail-parser/rfc-000.eml attachments"
+      ]
+    },
+    {
+      "id": "missing-header-body-separator",
+      "class": "python-quirk",
+      "note": "RFC 5322 2.1 requires an empty line between the header section and the body. Python treats the first line that is not a header field as the start of the body; SendmailCore keeps reading header fields to the first empty line and drops lines without a colon. Input is invalid either way.",
+      "cases": [
+        "cpython/msg_19.txt body",
+        "cpython/msg_35.txt body",
+        "cpython/msg_47.txt body",
+        "cpython/msg_47.txt html"
+      ]
+    },
+    {
+      "id": "groups-without-comma",
+      "class": "python-quirk",
+      "note": "RFC 5322 3.4 separates addresses (groups included) with commas, so 'A:a@x;B:b@y;' is invalid. SendmailCore recovers every member; Python returns an empty '<>' mailbox for whatever follows the first group.",
+      "cases": [
+        "local/address-edge-cases.eml bcc",
+        "mail-parser/issue-98-adjacent-groups.eml to",
+        "mail-parser/issue-98-group-first.eml to"
+      ]
+    },
+    {
+      "id": "unquoted-colon-in-local-part",
+      "class": "python-quirk",
+      "note": "':' is a special and must be quoted in a local-part, so 'Carol <b:c@y.test>' is invalid. SendmailCore keeps the angle-addr verbatim (AddressParser.colon_inside_angle_brackets_is_not_a_group); Python splits it into 'b' and '<>'.",
+      "cases": [
+        "local/address-edge-cases.eml to",
+        "local/address-edge-cases.eml rebuilt-eml.to"
+      ]
+    },
+    {
+      "id": "mailbox-without-addr-spec",
+      "class": "python-quirk",
+      "note": "'From: MAILER DAEMON' has no addr-spec and is invalid. SendmailCore takes the text as the address; Python takes it as a display name with an empty address. Neither is right; nothing to fix.",
+      "cases": [
+        "cpython/msg_43.txt from"
+      ]
+    },
+    {
+      "id": "extended-filename-precedence",
+      "class": "python-quirk",
+      "note": "With both filename= and filename*= present, SendmailCore prefers the RFC 2231 extended value, as RFC 6266 4.3 recommends for the same parameter pair; Python returns the first one (the ASCII fallback 'ete.pdf').",
+      "cases": [
+        "local/multipart-attachment-crlf.eml attachments",
+        "local/multipart-attachment.eml attachments"
+      ]
+    },
+    {
+      "id": "utf8-default-charset",
+      "class": "intentional",
+      "note": "RFC 2045 5.2 defaults a missing charset to us-ascii; Python decodes 8-bit bytes in such a body to U+FFFD. SendmailCore defaults to utf-8 (a superset of us-ascii) so scripts piping UTF-8 text without MIME headers keep their text.",
+      "cases": [
+        "local/no-mime-headers-utf8.eml body"
+      ]
+    },
+    {
+      "id": "qp-transport-padding",
+      "class": "python-quirk",
+      "note": "RFC 2045 6.7 rule 3: trailing whitespace on a quoted-printable line is transport padding the decoder must delete, and '=' followed by that padding is still a soft line break (rule 5). Python's decoder keeps the padding and the '='; SendmailCore deletes them.",
+      "cases": [
+        "cpython/msg_15.txt body",
+        "rfc/rfc2045-sec6.7-quoted-printable.eml body"
+      ]
+    },
+    {
+      "id": "encoded-word-splits-character",
+      "class": "python-quirk",
+      "note": "RFC 2047 5 requires each encoded-word to hold whole characters, so splitting UTF-8 'é' across two words is invalid. Python joins the bytes of adjacent same-charset words before decoding; SendmailCore decodes each word on its own and shows U+FFFD for the halves.",
+      "cases": [
+        "local/header-edge-cases.eml cc",
+        "local/header-edge-cases.eml subject"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+From: "Smith \"Bob\"" <bob@x.test>
+To: "Last, First" <a@x.test>, b@y.test (Bob the Builder), "a:b" <x@y.test>,
+ Team: "Last, First" <t1@x.test>, Bob <t2@y.test>;, Empty:;,
+ Bob <user@[IPv6:2001:db8::1]>, Carol <b:c@y.test>
+Cc: undisclosed-recipients:;
+Bcc: A:a@x.test;B:b@y.test;
+Subject: address edge cases
+Content-Type: text/plain
+
+body

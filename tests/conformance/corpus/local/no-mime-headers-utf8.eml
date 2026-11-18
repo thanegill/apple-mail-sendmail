@@ -1,0 +1,5 @@
+From: sender@example.test
+To: rcpt@example.test
+Subject: script output without MIME headers
+
+Grüße from a cron job.

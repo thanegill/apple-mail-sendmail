@@ -1,0 +1,8 @@
+From: sender@example.test
+To: rcpt@example.test
+Subject: RFC 2045 charset parameter followed by a comment
+MIME-Version: 1.0
+Content-type: text/plain; charset=iso-8859-1 (Latin text)
+Content-Transfer-Encoding: quoted-printable
+
+caf=E9

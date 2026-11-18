@@ -36,6 +36,29 @@
             meta = previousAttrs.meta // { license = pkgs.lib.licenses.fsl11Asl20; };
           });
 
+          # Third-party messages for tests/conformance/differential.py, fetched
+          # instead of vendored. CPython's test_email messages come from the
+          # source of the same Python the check compares against, so they move
+          # with nixpkgs; mail-parser's are pinned by `rev` and `hash`.
+          mailParserSrc = pkgs.fetchFromGitHub {
+            owner = "stalwartlabs";
+            repo = "mail-parser";
+            rev = "8e149db324542e1023026fe50959a25864efff48";
+            sparseCheckout = [ "resources/eml" ];
+            hash = "sha256-F9L+XztcupNhe5DAzehgHEf5V6VDhEAcSjgBqmmRcNY=";
+          };
+          conformanceCorpus = pkgs.runCommand "apple-mail-sendmail-conformance-corpus" { } ''
+            mkdir -p "$out/cpython" "$out/mail-parser"
+            tar -xJf ${pkgs.python3.src} -C "$out/cpython" --strip-components=5 \
+              --wildcards '*/Lib/test/test_email/data/msg_*.txt'
+            for message in ${mailParserSrc}/resources/eml/rfc/*.eml; do
+              cp "$message" "$out/mail-parser/rfc-$(basename "$message")"
+            done
+            for message in ${mailParserSrc}/resources/eml/issues/98-*.eml; do
+              cp "$message" "$out/mail-parser/issue-$(basename "$message")"
+            done
+          '';
+
           # `withSendmailSymlink` controls whether $out/bin/sendmail is created
           # as a symlink to apple-mail-sendmail (drop-in compatibility). Default
           # true; pass false to install only the canonical binary name.
@@ -48,6 +71,7 @@
                 fileset = pkgs.lib.fileset.unions [
                   ./Package.swift
                   ./Sources
+                  ./tests/conformance
                 ];
               };
               nativeBuildInputs = [ pkgs.swift pkgs.swiftpm ];
@@ -62,11 +86,17 @@
                 '';
 
               # Tests use a recording AppleScript runner so they never drive Mail.app.
+              # The differential check compares SendmailCore's MIME parse of
+              # tests/conformance/corpus and the fetched corpus with CPython's
+              # email package.
               doCheck = true;
+              nativeCheckInputs = [ pkgs.python3 ];
               checkPhase = ''
                 runHook preCheck
                 swift build -c release --product sendmail-test
                 "$(swiftpmBinPath)/sendmail-test"
+                python3 -I tests/conformance/differential.py --dump "$(swiftpmBinPath)/sendmail-test" \
+                  --corpus tests/conformance/corpus --corpus ${conformanceCorpus}
                 runHook postCheck
               '';
 
@@ -182,6 +212,7 @@
           packages.e2e = e2eHarness;
           packages.e2e-vm = e2eVm;
           packages.release = releaseScript;
+          packages.conformance-corpus = conformanceCorpus;
 
           # Building these shellchecks them; they never run here.
           checks.e2e-shellcheck = e2eHarness;
@@ -219,6 +250,7 @@
             packages = [
               pkgs.swift
               pkgs.swiftpm
+              pkgs.python3
               tart
             ];
           };

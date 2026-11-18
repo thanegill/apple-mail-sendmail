@@ -15,7 +15,7 @@ public enum MIMEParser {
         let mt = mainType.lowercased()
 
         if mt.hasPrefix("multipart/") {
-            walkMultipart(body: raw.body, params: params, into: &msg, depth: 0)
+            walkMultipart(body: raw.body, type: mt, params: params, into: &msg, depth: 0)
             if msg.body.isEmpty {
                 // No text part found in the multipart -- leave body empty rather than dumping raw bytes.
                 msg.body = ""
@@ -23,7 +23,7 @@ public enum MIMEParser {
         } else {
             let cte = (raw.value(for: "Content-Transfer-Encoding") ?? "").lowercased()
             let decoded = decodeTransfer(raw.body, encoding: cte)
-            let charset = params["charset"] ?? "utf-8"
+            let charset = parameterValue(params, named: "charset") ?? "utf-8"
             let text = EncodedWord.decodeBytes(decoded, charset: charset) ?? ""
             if mt == "text/html" {
                 msg.htmlBody = text
@@ -35,13 +35,21 @@ public enum MIMEParser {
         return msg
     }
 
-    private static func walkMultipart(body: Data, params: [String: String], into msg: inout ParsedMessage, depth: Int) {
-        guard let boundary = params["boundary"], !boundary.isEmpty else { return }
+    private static func walkMultipart(
+        body: Data,
+        type multipartType: String,
+        params: [String: String],
+        into msg: inout ParsedMessage,
+        depth: Int
+    ) {
+        guard let boundary = parameterValue(params, named: "boundary"), !boundary.isEmpty else { return }
         if depth > 4 { return }
+        // RFC 2046 5.1.5: a digest's parts default to message/rfc822.
+        let defaultPartType = multipartType == "multipart/digest" ? "message/rfc822" : "text/plain"
 
         for part in splitParts(body, boundary: boundary) {
             guard let sub = try? RFC822Parser.parse(part) else { continue }
-            let ctRaw = sub.value(for: "Content-Type") ?? "text/plain"
+            let ctRaw = sub.value(for: "Content-Type") ?? defaultPartType
             let (mainType, subParams) = RFC822Parser.parseStructured(ctRaw)
             let mt = mainType.lowercased()
             // Lowercase only the disposition type: the filename parameter value
@@ -50,22 +58,22 @@ public enum MIMEParser {
             let dispMain = dispType.lowercased()
 
             if mt.hasPrefix("multipart/") {
-                walkMultipart(body: sub.body, params: subParams, into: &msg, depth: depth + 1)
+                walkMultipart(body: sub.body, type: mt, params: subParams, into: &msg, depth: depth + 1)
                 continue
             }
 
             let cte = (sub.value(for: "Content-Transfer-Encoding") ?? "").lowercased()
             let decoded = decodeTransfer(sub.body, encoding: cte)
 
-            let partName = parameterValue(dispParams, named: "filename")
-                ?? parameterValue(subParams, named: "name")
+            let partName = parameterValue(dispParams, named: "filename", plainDecoding: EncodedWord.decode)
+                ?? parameterValue(subParams, named: "name", plainDecoding: EncodedWord.decode)
             let isAttachment = dispMain == "attachment"
                 || partName != nil
                 || (mt.hasPrefix("text/") == false && mt != "")
 
             // Treat text/* without an explicit attachment disposition as a body candidate.
             if !isAttachment && mt.hasPrefix("text/") {
-                let charset = subParams["charset"] ?? "utf-8"
+                let charset = parameterValue(subParams, named: "charset") ?? "utf-8"
                 let text = EncodedWord.decodeBytes(decoded, charset: charset) ?? ""
 
                 // Capture raw HTML for the rich-HTML render path independent of
@@ -74,7 +82,9 @@ public enum MIMEParser {
                     msg.htmlBody = text
                 }
 
-                if msg.body.isEmpty {
+                // A whitespace-only part (an empty text/plain alternative)
+                // leaves the slot to a later part.
+                if msg.body.isEmpty && !text.allSatisfy(\.isWhitespace) {
                     msg.body = (mt == "text/html") ? stripHTML(text) : text
                 }
                 continue
@@ -95,13 +105,19 @@ public enum MIMEParser {
         }
     }
 
-    /// Resolve a filename-style parameter to display text. An RFC 2231
+    /// Resolve a MIME parameter, which RFC 2231 lets any parameter encode. An
     /// extended form (`name*=charset'lang'%XX..` or continuations `name*0*=`,
     /// `name*1=`, ...) wins over the plain `name=` that senders include as a
-    /// legacy fallback; the plain form is RFC 2047-decoded.
-    private static func parameterValue(_ params: [String: String], named name: String) -> String? {
+    /// legacy fallback. `plainDecoding` applies to the plain form and to
+    /// all-literal continuations: filenames pass RFC 2047 decoding there,
+    /// since senders put encoded-words in them; a boundary must stay verbatim.
+    private static func parameterValue(
+        _ params: [String: String],
+        named name: String,
+        plainDecoding: (String) -> String = { $0 }
+    ) -> String? {
         if let extended = params["\(name)*"] {
-            return decodeExtendedValue([(text: extended, isEncoded: true)])
+            return decodeExtendedValue([(text: extended, isEncoded: true)], plainDecoding: plainDecoding)
         }
 
         var segments: [(text: String, isEncoded: Bool)] = []
@@ -116,19 +132,22 @@ public enum MIMEParser {
             }
         }
         if !segments.isEmpty {
-            return decodeExtendedValue(segments)
+            return decodeExtendedValue(segments, plainDecoding: plainDecoding)
         }
 
-        return params[name].map { EncodedWord.decode($0) }
+        return params[name].map(plainDecoding)
     }
 
     /// Join RFC 2231 segments into one string. Only the first segment may
     /// carry the `charset'language'` prefix, and only when it is encoded.
-    /// All-literal continuations get the same RFC 2047 decoding as a plain
+    /// All-literal continuations get the same `plainDecoding` as a plain
     /// parameter, since some senders split an encoded-word across them.
-    private static func decodeExtendedValue(_ segments: [(text: String, isEncoded: Bool)]) -> String {
+    private static func decodeExtendedValue(
+        _ segments: [(text: String, isEncoded: Bool)],
+        plainDecoding: (String) -> String
+    ) -> String {
         guard segments.contains(where: \.isEncoded) else {
-            return EncodedWord.decode(segments.map(\.text).joined())
+            return plainDecoding(segments.map(\.text).joined())
         }
         var charset = "utf-8"
         var bytes = Data()
@@ -201,10 +220,14 @@ public enum MIMEParser {
                 if s < bytes.count && bytes[s - 1] == 0x0D && bytes[s] == 0x0A { s += 1; break }
                 if bytes[s - 1] == 0x0A { break }
             }
-            let end = (k + 1 < positions.count) ? positions[k + 1] : bytes.count
-            // Trim trailing CRLF before the next delimiter.
-            var e = end
-            while e > s && (bytes[e - 1] == 0x0A || bytes[e - 1] == 0x0D) {
+            let nextDelimiter = (k + 1 < positions.count) ? positions[k + 1] : nil
+            var e = nextDelimiter ?? bytes.count
+            // Only the one line break right before a delimiter belongs to it
+            // (RFC 2046 5.1.1); any earlier blank lines are part content.
+            if nextDelimiter != nil && e > s && bytes[e - 1] == 0x0A {
+                e -= 1
+            }
+            if nextDelimiter != nil && e > s && bytes[e - 1] == 0x0D {
                 e -= 1
             }
             if s < e {
@@ -239,33 +262,44 @@ public enum MIMEParser {
         }
     }
 
+    /// Decode quoted-printable line by line (RFC 2045 6.7). Whitespace at the
+    /// end of an encoded line is transport padding and is deleted (rule 3), so
+    /// a line ending in `=` after that is a soft line break (rule 5) even when
+    /// padding followed the `=`. Hard line breaks keep their CRLF or LF form.
     private static func decodeQuotedPrintable(_ data: Data) -> Data {
         var out = Data()
-        let bytes = [UInt8](data)
-        var i = 0
-        while i < bytes.count {
-            let b = bytes[i]
-            if b == 0x3D { // '='
-                if i + 1 < bytes.count && bytes[i + 1] == 0x0A {
-                    i += 2; continue // soft break "=\n"
-                }
-                if i + 2 < bytes.count && bytes[i + 1] == 0x0D && bytes[i + 2] == 0x0A {
-                    i += 3; continue // soft break "=\r\n"
-                }
-                if i + 2 < bytes.count {
-                    let hi = bytes[i + 1].hexNibble
-                    let lo = bytes[i + 2].hexNibble
-                    if let hi = hi, let lo = lo {
-                        out.append(UInt8(hi * 16 + lo))
-                        i += 3
-                        continue
-                    }
-                }
+        let lines = [UInt8](data).split(separator: 0x0A, omittingEmptySubsequences: false)
+        for (lineIndex, rawLine) in lines.enumerated() {
+            var line = rawLine[...]
+            let endsWithCR = line.last == 0x0D
+            if endsWithCR { line = line.dropLast() }
+            while let last = line.last, last == 0x20 || last == 0x09 {
+                line = line.dropLast()
             }
-            out.append(b)
-            i += 1
+            let isSoftBreak = line.last == 0x3D
+            if isSoftBreak { line = line.dropLast() }
+            appendQuotedPrintableEscapes(line, to: &out)
+            let isFinalLine = lineIndex == lines.count - 1
+            if !isSoftBreak && !isFinalLine {
+                if endsWithCR { out.append(0x0D) }
+                out.append(0x0A)
+            }
         }
         return out
+    }
+
+    private static func appendQuotedPrintableEscapes(_ line: ArraySlice<UInt8>, to out: inout Data) {
+        var i = line.startIndex
+        while i < line.endIndex {
+            if line[i] == 0x3D, i + 2 < line.endIndex,
+               let hi = line[i + 1].hexNibble, let lo = line[i + 2].hexNibble {
+                out.append(UInt8(hi * 16 + lo))
+                i += 3
+                continue
+            }
+            out.append(line[i])
+            i += 1
+        }
     }
 
     // Compile the stripHTML patterns once at type init rather than on every

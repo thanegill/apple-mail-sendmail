@@ -30,7 +30,9 @@ enum MailboxFormatTarget {
 ///
 /// A display name containing anything outside RFC 5322 `atext` and space
 /// (e.g. the comma in `Doe, John`) is written as a quoted-string; unquoted,
-/// a re-parser would split it into several mailboxes.
+/// a re-parser would split it into several mailboxes. So is one with a run
+/// of spaces or a leading or trailing space, which a re-parser would
+/// otherwise read as single spaces (RFC 5322 3.2.2) or drop.
 func formatMailbox(name: String?, address: String, for target: MailboxFormatTarget) -> String {
     guard let name, !name.isEmpty else { return address }
     return "\(formatDisplayName(name, for: target)) <\(address)>"
@@ -40,7 +42,10 @@ private func formatDisplayName(_ name: String, for target: MailboxFormatTarget) 
     if target == .rfc822Header && !name.unicodeScalars.allSatisfy(\.isASCII) {
         return EncodedWord.encode(name)
     }
-    guard name.unicodeScalars.contains(where: displayNameScalarNeedsQuoting) else { return name }
+    let spacesSurviveUnquoted = !name.hasPrefix(" ") && !name.hasSuffix(" ") && !name.contains("  ")
+    guard !spacesSurviveUnquoted || name.unicodeScalars.contains(where: displayNameScalarNeedsQuoting) else {
+        return name
+    }
     let escaped = name
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
@@ -145,10 +150,24 @@ public enum AddressParser {
         var paren = 0
         for ch in trimmed {
             if !inQuotes {
+                if paren > 0 {
+                    // Inside a comment only nesting and quoted-pairs such as
+                    // `\)` matter (RFC 5322 3.2.2); a `"` there is plain text.
+                    if quotedPairPending {
+                        quotedPairPending = false
+                    } else if ch == "\\" {
+                        quotedPairPending = true
+                    } else if ch == "(" {
+                        paren += 1
+                    } else if ch == ")" {
+                        paren -= 1
+                    }
+                    continue
+                }
                 if ch == "\"" { inQuotes = true; noComments.append(ch); continue }
                 if ch == "(" { paren += 1; continue }
-                if ch == ")" { paren = max(0, paren - 1); continue }
-                if paren == 0 { noComments.append(ch) }
+                if ch == ")" { continue }
+                noComments.append(ch)
                 continue
             }
             if quotedPairPending {
@@ -165,7 +184,7 @@ public enum AddressParser {
         if s.isEmpty { return nil }
 
         if let lt = s.lastIndex(of: "<"), let gt = s.lastIndex(of: ">"), lt < gt {
-            let addr = String(s[s.index(after: lt)..<gt]).trimmingCharacters(in: .whitespaces)
+            let addr = normalizeObsoleteAddrSpec(String(s[s.index(after: lt)..<gt]))
             if !addr.isEmpty {
                 let phrase = String(s[..<lt]).trimmingCharacters(in: .whitespaces)
                 let decoded = EncodedWord.decode(unquotePhrase(phrase))
@@ -181,18 +200,72 @@ public enum AddressParser {
             if stripped.isEmpty { return nil }
             return ParsedAddress(displayName: nil, address: stripped)
         }
-        return ParsedAddress(displayName: nil, address: s)
+        return ParsedAddress(displayName: nil, address: normalizeObsoleteAddrSpec(s))
+    }
+
+    /// Rewrite the obsolete addr-spec forms of RFC 5322 4.4 to the current
+    /// syntax: drop an obs-route (`@node.test:` before the address) and the
+    /// whitespace (comments are already gone) around the dots and the `@` of
+    /// an obs-local-part or obs-domain, so `jdoe@test  . example` becomes
+    /// `jdoe@test.example`. Quoted local-parts and domain literals are kept.
+    private static func normalizeObsoleteAddrSpec(_ spec: String) -> String {
+        var remaining = Substring(spec.trimmingCharacters(in: .whitespaces))
+        if remaining.first == "@", let routeEnd = remaining.firstIndex(of: ":") {
+            remaining = remaining[remaining.index(after: routeEnd)...]
+        }
+        var out = ""
+        var pendingWhitespace = ""
+        var inQuotes = false
+        var inDomainLiteral = false
+        var quotedPairPending = false
+        for ch in remaining {
+            if inQuotes || inDomainLiteral {
+                out.append(ch)
+                if quotedPairPending {
+                    quotedPairPending = false
+                } else if ch == "\\" {
+                    quotedPairPending = true
+                } else if inQuotes && ch == "\"" {
+                    inQuotes = false
+                } else if inDomainLiteral && ch == "]" {
+                    inDomainLiteral = false
+                }
+                continue
+            }
+            if ch == " " || ch == "\t" {
+                pendingWhitespace.append(ch)
+                continue
+            }
+            let touchesSeparator = ch == "." || ch == "@" || out.last == "." || out.last == "@"
+            if !touchesSeparator {
+                out += pendingWhitespace
+            }
+            pendingWhitespace = ""
+            if ch == "\"" { inQuotes = true }
+            if ch == "[" { inDomainLiteral = true }
+            out.append(ch)
+        }
+        return out
     }
 
     /// Decode an RFC 5322 display-name phrase: drop the delimiters of every
     /// quoted-string segment and unescape the quoted-pairs inside them, so
     /// `"Doe, John" Jr` becomes `Doe, John Jr` and `"Smith \"Bob\""` becomes
-    /// `Smith "Bob"`. Unquoted atoms pass through unchanged.
+    /// `Smith "Bob"`. A run of whitespace between unquoted words (left by
+    /// folding or a removed comment) reads as one space (RFC 5322 3.2.2);
+    /// whitespace inside a quoted-string is kept as written.
     private static func unquotePhrase(_ phrase: String) -> String {
         var out = ""
         var inQuotes = false
         var quotedPairPending = false
+        var previousWasUnquotedWhitespace = false
         for ch in phrase {
+            let isUnquotedWhitespace = !inQuotes && !quotedPairPending && (ch == " " || ch == "\t")
+            defer { previousWasUnquotedWhitespace = isUnquotedWhitespace }
+            if isUnquotedWhitespace {
+                if !previousWasUnquotedWhitespace { out.append(" ") }
+                continue
+            }
             if quotedPairPending {
                 out.append(ch)
                 quotedPairPending = false

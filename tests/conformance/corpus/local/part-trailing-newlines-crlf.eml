@@ -1,0 +1,22 @@
+From: sender@example.test
+To: rcpt@example.test
+Subject: part content ending in blank lines
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B"
+
+--B
+Content-Type: text/plain; charset=utf-8
+
+First paragraph.
+
+Second paragraph, followed by two blank lines.
+
+
+--B
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="notes.txt"
+
+line one
+line two
+
+--B--

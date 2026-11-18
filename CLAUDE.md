@@ -89,6 +89,59 @@ Errors (`FailureReport`): -1743 keeps the Automation wording ("Mail.app automati
 
 Text goes to Mail as a text descriptor: there is no literal to escape, so a quote, backslash, line separator or control character in a subject, name or body cannot change the event. `PlainPlan.steps` still normalizes every text value it hands Mail (subject, content, sender, recipient names and addresses) with `MailText.sanitized`, so the dry-run plan shows exactly what Mail gets: CR and CRLF become LF, U+2028 and U+2029 become LF, and every other C0 control except tab and LF becomes a space; DEL, C1 controls and combining marks are kept. It works per Unicode scalar, as the old `AppleScript.quote` did, so a control fused with a combining mark into one `Character` is still mapped. This restores what the AppleScript plain path gave Mail through `AppleScript.quote` (removed in 9fea116), with two deliberate differences: `quote` kept CR (it wrote it as the `\r` escape, which AppleScript decodes back to CR), and the body never went through `quote` (the script read it verbatim from a temp file), so CR and controls in the body used to reach Mail unchanged.
 
+### MIME conformance check
+
+`tests/conformance/differential.py` parses every message in the corpus (see
+below) with both SendmailCore (via `sendmail-test
+--parse-dump FILE...`, a test-target-only entry, so the shipped binary has no
+dump mode) and CPython's `email` package (`policy.default`), and compares the
+decoded Subject, From, To/Cc/Bcc mailboxes, text/plain and text/html bodies,
+and attachment filenames and decoded bytes. It also re-parses the `.eml`
+`EmlBuilder` writes, checking that Python reads back the same recipients and
+that no header line exceeds RFC 5322's 998 octets. Python
+picks body and attachment parts by SendmailCore's own rules, so only the MIME
+decoding is compared, not the part-selection policy.
+
+Every divergence must be listed in `tests/conformance/expected-divergences.json`
+under a finding classed `ours-bug`, `python-quirk` (the spec is on our side) or
+`intentional`. An unlisted divergence or a listed one that no longer occurs
+fails the run; `--emit-unexpected` prints new cases ready to paste into a
+finding, and `--show-all` prints the expected ones with both values. A fix for
+an `ours-bug` finding removes its cases (and the finding) in the same commit.
+
+The package's `checkPhase` runs it after the unit tests, so `nix build` fails
+on an unclassified divergence, including one caused by a nixpkgs bump changing
+Python. To run it directly:
+
+```sh
+nix develop --command swift build --product sendmail-test
+nix develop --command python3 -I tests/conformance/differential.py --dump .build/debug/sendmail-test \
+  --corpus tests/conformance/corpus --corpus "$(nix build --no-link --print-out-paths .#conformance-corpus)"
+```
+
+Each `--corpus` is a root; messages are named by their path below it (e.g.
+`cpython/msg_33.txt`), and the expectations file uses those names. Leaving out
+the fetched corpus makes its expected cases report as stale.
+
+The repo's corpus, `tests/conformance/corpus/`, holds `rfc/` (the RFC
+2045/2046/2047/2231/5322/6532 worked examples) and `local/` (the repo's own edge
+cases). Its files keep their exact bytes (CRLF variants, trailing whitespace in
+the quoted-printable vector; `.gitattributes` marks them `-text`), so edit them
+with a byte-preserving tool.
+
+The third-party messages are fetched, not committed. `.#conformance-corpus`
+(`conformanceCorpus` in `flake.nix`) builds a directory with:
+
+- `cpython/`: CPython's `Lib/test/test_email/data/msg_*.txt`, extracted from
+  `pkgs.python3.src`, the source of the very Python the check runs (PSF License).
+  These move with the nixpkgs pin, so a `flake.lock` bump that changes them shows
+  up as stale or unexpected cases to reclassify.
+- `mail-parser/`: Stalwart mail-parser's `resources/eml/rfc/*.eml` (as
+  `rfc-*.eml`) and `resources/eml/issues/98-*.eml` (as `issue-98-*.eml`), from
+  `mailParserSrc`, a `fetchFromGitHub` pinned by `rev` and `hash` (Apache-2.0 OR
+  MIT). To bump it, change `rev`, set `hash = pkgs.lib.fakeHash`, build
+  `.#conformance-corpus` to get the real hash, then reclassify any new cases.
+
 ## Project-specific constraints (read before changing)
 
 ### Tests do not use XCTest

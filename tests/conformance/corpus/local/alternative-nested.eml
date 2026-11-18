@@ -1,0 +1,28 @@
+From: =?UTF-8?B?QsO8cm8gQm90?= <work@example.test>
+To: =?UTF-8?B?SmFuZQ==?= <jane@x.test>
+Subject: =?UTF-8?B?aGVsbG8g8J+Riw==?= =?UTF-8?Q?caf=c3=a9?= suffix
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="OUTER"
+
+--OUTER
+Content-Type: multipart/alternative; boundary="INNER"
+
+--INNER
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+caf=C3=A9 is good
+
+--INNER
+Content-Type: text/html; charset=utf-8
+
+<html><head><style>p { color: red; }</style></head><body><p>hello</p></body></html>
+--INNER--
+--OUTER
+Content-Type: image/png
+Content-Disposition: inline
+Content-ID: <img1>
+Content-Transfer-Encoding: base64
+
+SGVsbG8K
+--OUTER--

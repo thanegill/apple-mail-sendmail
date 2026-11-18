@@ -1,0 +1,7 @@
+From: sender@example.test
+To: rcpt@example.test
+Subject: =?windows-1252?Q?=93hi=94?= =?cp1252?Q?=80?=
+Content-Type: text/plain; charset=windows-1252
+Content-Transfer-Encoding: quoted-printable
+
+=93quoted=94 =80

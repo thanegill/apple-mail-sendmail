@@ -64,6 +64,47 @@ let encodedWordTests = TestSuite(name: "EncodedWord", cases: [
         )
     },
 
+    // RFC 2047 section 8: the header examples.
+    TestCase(name: "rfc2047_sec8_header_examples") {
+        try expectEqual(EncodedWord.decode("=?US-ASCII?Q?Keith_Moore?="), "Keith Moore")
+        try expectEqual(EncodedWord.decode("=?ISO-8859-1?Q?Keld_J=F8rn_Simonsen?="), "Keld J\u{F8}rn Simonsen")
+        try expectEqual(EncodedWord.decode("=?ISO-8859-1?Q?Andr=E9?= Pirard"), "Andr\u{E9} Pirard")
+        try expectEqual(
+            EncodedWord.decode("=?ISO-8859-1?B?SWYgeW91IGNhbiByZWFkIHRoaXMgeW8=?= =?ISO-8859-2?B?dSB1bmRlcnN0YW5kIHRoZSBleGFtcGxlLg==?="),
+            "If you can read this you understand the example."
+        )
+        try expectEqual(EncodedWord.decode("=?ISO-8859-1?Q?Olle_J=E4rnefors?="), "Olle J\u{E4}rnefors")
+        try expectEqual(EncodedWord.decode("=?ISO-8859-1?Q?Patrik_F=E4ltstr=F6m?="), "Patrik F\u{E4}ltstr\u{F6}m")
+        // ISO-8859-8 Hebrew, in the logical order the octets carry.
+        try expectEqual(
+            EncodedWord.decode("=?iso-8859-8?b?7eXs+SDv4SDp7Oj08A==?="),
+            "\u{05DD}\u{05D5}\u{05DC}\u{05E9} \u{05DF}\u{05D1} \u{05D9}\u{05DC}\u{05D8}\u{05E4}\u{05E0}"
+        )
+    },
+
+    // RFC 2047 section 8: the "encoded form -> displayed as" table.
+    TestCase(name: "rfc2047_sec8_display_table") {
+        let table: [(String, String)] = [
+            ("(=?ISO-8859-1?Q?a?=)", "(a)"),
+            ("(=?ISO-8859-1?Q?a?= b)", "(a b)"),
+            ("(=?ISO-8859-1?Q?a?= =?ISO-8859-1?Q?b?=)", "(ab)"),
+            ("(=?ISO-8859-1?Q?a?=  =?ISO-8859-1?Q?b?=)", "(ab)"),
+            ("(=?ISO-8859-1?Q?a?=\r\n    =?ISO-8859-1?Q?b?=)", "(ab)"),
+            ("(=?ISO-8859-1?Q?a_b?=)", "(a b)"),
+            ("(=?ISO-8859-1?Q?a?= =?ISO-8859-2?Q?_b?=)", "(a b)"),
+        ]
+        for (encoded, displayed) in table {
+            let unfolded = encoded.replacingOccurrences(of: "\r\n", with: "")
+            try expect(EncodedWord.decode(unfolded) == displayed, "\(encoded) decoded to \(EncodedWord.decode(unfolded)), want \(displayed)")
+        }
+    },
+
+    // RFC 2231 section 5: an encoded-word charset may carry a "*language" suffix.
+    TestCase(name: "rfc2231_sec5_charset_language_suffix") {
+        try expectEqual(EncodedWord.decode("=?US-ASCII*EN?Q?Keith_Moore?="), "Keith Moore")
+        try expectEqual(EncodedWord.decode("=?ISO-8859-1*fr?Q?caf=E9?="), "caf\u{E9}")
+    },
+
     // Issue #15: a single invalid UTF-8 byte must not blank the whole value.
     // Strict decode returns nil (coalesced to "" by callers); the lossy fallback
     // substitutes U+FFFD and preserves the surrounding text.
