@@ -10,6 +10,7 @@ let result = runSuites([
     mimeTests,
     mailDriverTests,
     accessibilityTests,
+    axHTMLDeliveryTests,
     appleScriptCompileTests,
 ])
 exit(result)
