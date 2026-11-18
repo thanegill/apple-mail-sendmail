@@ -300,7 +300,8 @@ Tests also run automatically as part of `nix build .#default`
 The unit tests only check the generated AppleScript. A separate
 harness, `nix run .#e2e`, runs the real binary against Mail.app in a
 dedicated test user or VM and checks what Mail sends to a local Mailpit
-capture server. Its setup, safety rules and scenarios are in
+capture server; `nix run .#e2e-vm` runs it in a disposable Tart VM. Its
+setup, safety rules and scenarios are in
 [`tests/e2e/README.md`](tests/e2e/README.md).
 
 ## Layout

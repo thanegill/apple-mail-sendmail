@@ -18,7 +18,8 @@ attachment's exact name, size and SHA-256.
 
 A live run sends real messages from Mail. Run it only in a dedicated
 macOS user or VM that has nothing but the two test accounts (see
-[One-time setup](#one-time-setup)).
+[One-time setup](#one-time-setup)), or let `nix run .#e2e-vm` run it in a
+disposable Tart VM (see [Running it in a Tart VM](#running-it-in-a-tart-vm)).
 
 ## Running it
 
@@ -338,3 +339,174 @@ done
 A binary that keeps its temp files leaves one `sendmail-*` directory per
 mode in its temp dir. A change to the plain-text script needs
 `analyze_plain_script` in [`e2e.sh`](e2e.sh) updated instead.
+
+## Running it in a Tart VM
+
+A live run types Cmd-Shift-D into whatever Mail window is frontmost, so
+running it on your own desktop is risky. `nix run .#e2e-vm`
+([`vm.sh`](vm.sh)) runs the same harness inside a throwaway macOS VM
+instead, using [Tart](https://tart.run) (in the dev shell; Apple Silicon
+only). From the repository root:
+
+```sh
+nix run .#e2e-vm -- --setup-golden          # once, guided (see below)
+nix run .#e2e-vm                            # every scenario, in a fresh clone
+nix run .#e2e-vm -- html-send bcc-only-html # harness arguments pass through
+nix run .#e2e-vm -- --check-only            # also boots a clone
+nix run .#e2e-vm -- -- --help               # the harness's help; no VM
+nix run .#e2e-vm -- --list                  # its scenario list; no VM
+```
+
+Wrapper options (`--golden`, `--results`, `--boot-timeout`,
+`--mail-settle`, `--vnc` for setup, `--help`) come first; the first other
+argument, or everything after `--`, goes to the harness. Which commands
+boot a VM:
+
+- `-h`, `--help` or `--list` for the harness run it on the host, where it
+  only prints. No VM boots.
+- `--serve` is refused; run `nix run .#e2e -- --serve` on the host.
+- Anything else is first checked on the host by the harness's own
+  parser, which rejects unknown options and scenario names and malformed
+  values; only if that passes does a clone boot. That includes
+  `--check-only` and `--self-test`, which then run inside the VM.
+
+Each run:
+
+1. clones the golden VM (`sendmail-e2e-golden`, or `--golden NAME`) to
+   `sendmail-e2e-golden-run-<time>-<pid>` (an APFS clone, so it takes
+   seconds and little disk) and boots it headless, with `tart run
+   --no-audio` so no VM plays sound on the host;
+2. waits for the Tart guest agent, which answers once the auto-login
+   session is up, then for SSH;
+3. waits (up to 60 seconds) until the guest's nix-daemon answers, then
+   copies the harness's Nix closure (about 200 MB, most of it already in
+   the golden image) into the guest with `nix copy` over SSH, retrying up
+   to three times if the daemon disconnects (it can still be starting
+   after boot);
+4. launches Mail with `tart exec` and runs the harness there with your
+   arguments plus `--keep`, streaming its output;
+5. copies the harness's work directory, the guest's TCC log for the run
+   and the guest agent's log into
+   `~/.local/state/apple-mail-sendmail-e2e-vm/results/<clone>/`
+   (`--results DIR` to change);
+6. stops and deletes the clone, also on failure, Ctrl-C or SIGTERM
+   (results are still collected if the guest is up). Only SIGKILL can
+   leave a clone behind; the next run lists any such clone and whether
+   it is still running (`tart stop NAME`, then `tart delete NAME`).
+
+The exit status is the harness's. `--binary PATH` works as with
+`nix run .#e2e`, as long as `PATH` resolves into `/nix/store`; its closure
+is copied in too.
+
+**How it reaches the guest.** The harness and binary reference
+`/nix/store` paths (the Swift runtime, Mailpit, bash and the rest), so
+the golden image has Nix installed (the official installer, pinned in
+[`../../flake.nix`](../../flake.nix)) and trusts the `admin` user, and each run
+copies the closure in with `nix copy --no-check-sigs` (host-built paths
+are unsigned, and the guest refuses them otherwise). Everything that
+drives Mail runs through `tart exec`, whose guest agent is a LaunchAgent
+in the logged-in GUI session; SSH is used only for `nix copy`, file
+transfer and logs. SSH uses a key generated in
+`~/.local/state/apple-mail-sendmail-e2e-vm/` and the golden image's host
+key, pinned during setup over the agent's channel. Every clone boots from
+a copy of the golden disk, so the pin covers the whole image lineage.
+
+**Permissions.** macOS charges an Apple Event or keystroke to the
+*responsible* process, and for everything `tart exec` starts that is
+`tart-guest-agent`: the Automation prompts name it, and the guest's TCC
+log records `responsible=tart-guest-agent`. The golden image's grants to
+the agent (Automation for Mail and System Events, given during setup;
+Accessibility, which the Cirrus Labs image grants in advance) therefore
+cover the harness, `osascript` and the binary however often the
+ad-hoc-signed binary is rebuilt, and every clone keeps them. Only
+`osascript` can raise an Automation prompt: when the binary asks, macOS
+denies the event (error -1743) without a prompt, because the agent lacks
+the hardened-runtime Apple Events entitlement. Every run saves the
+guest's TCC log (`tcc.log`) and prints the `AUTHREQ` lines that name the
+agent, `osascript`, the binary, or the Automation and Accessibility
+services.
+
+### Preparing the golden VM
+
+`nix run .#e2e-vm -- --setup-golden` (add `--base-image REF` for another
+image than `ghcr.io/cirruslabs/macos-golden-gate-base:latest`) pulls the
+base image the first time (about 32 GB to download, about 50 GB on disk),
+boots it with a window, and then automatically:
+
+- installs an SSH key for `admin` and pins the guest's SSH host key;
+- turns on auto-login for `admin` if it is off, and turns off sleep;
+- installs Nix with `trusted-users = root admin` and copies the
+  harness's closure in;
+- adds whichever of the `127.0.0.1 e2e-b-smtp.test` and
+  `::1 e2e-b-smtp.test` lines the guest's `/etc/hosts` lacks (so neither
+  the IPv4 nor the IPv6 lookup goes to real DNS), flushes the DNS cache
+  and checks that the name resolves to exactly 127.0.0.1 and ::1: macOS
+  27 keeps a single profile-managed SMTP account per host, so `e2e-b`
+  sends through that name (see [One-time setup](#one-time-setup), step
+  1). Existing lines count if the harness would accept them (any
+  whitespace, trailing comments). The name is read from the harness's
+  single definition (`SMTP_B_ALIAS` in [`e2e.sh`](e2e.sh)), and setup
+  stops before touching any VM if it cannot read it. It also stops if
+  `/etc/hosts` maps the name any other way, if anything answers on
+  `[::1]:1025`, or if a system proxy is on, all of which the harness's
+  preflight would refuse later;
+- before the profile is installed, checks the guest's account database
+  read-only for e2e mail accounts left from an earlier install, both the
+  POP accounts and their SMTP servers (removing a profile with
+  `profiles remove` leaves them behind, and installing it again then
+  fails with "already exists"), and stops, asking you to delete them in
+  **Mail -> Settings -> Accounts** (select, then the minus button);
+- starts the harness's Mailpit (`--serve`, which also starts the POP3
+  forwarder) in the guest, because macOS checks each account's POP login
+  when the profile is installed: e2e-a on `127.0.0.1:1110`, e2e-b through
+  the forwarder on `127.0.0.1:1111` ("Unable to verify account name or
+  password" otherwise);
+- copies [`e2e-accounts.mobileconfig`](e2e-accounts.mobileconfig) to the
+  guest's Desktop and opens it, which queues it in System Settings.
+
+It then prints the manual steps and waits: install the profile, open
+Mail, dismiss its first-run sheets and relaunch it once (the sheets
+leave an invisible window behind that the harness's window check
+refuses), set both accounts to never remove messages from the server,
+turn off every rule, check the SMTP server list, and select an empty
+mailbox. It then stops that Mailpit and asks for Automation access with
+`osascript` through `tart exec`, once for Mail and once for System
+Events; click Allow on each prompt, which must name `tart-guest-agent`.
+Next it runs the harness's `plain-send` and `html-send` scenarios through
+`tart exec`, as often as you like. A pass counts only if the harness
+exits 0, its summary ends in `RESULT: success`, and both scenarios' rows
+say PASS. Last, you quit Mail (the script checks that it has) and the VM
+shuts down.
+
+With `--vnc`, setup boots the VM with Virtualization.framework's VNC
+server instead of a window; the `vnc://` URL and its password are in
+the setup's `tart-run.log`. A VNC client, or a tool such as vncdotool,
+can then do every manual step, including the profile approval and the
+Allow buttons, because its input reaches the guest as hardware input.
+
+Setup writes `golden-<name>.marker` in the state directory before it
+clones. Rerunning `--setup-golden` resumes only a VM with a matching
+marker, where each automatic step checks whether it is already done; it
+refuses to touch any other VM of that name.
+
+If an approval pass fails with mail stuck in Mail's Outbox, the harness
+leaves its Mailpit and POP3 forwarder running in the guest so Mail can
+still deliver, and the next pass could not bind their ports (1025, 1110,
+1111, 8025). Before each pass the script checks for that, shows the
+process, asks you to empty the Outbox in the VM, and offers to stop it.
+
+If setup is interrupted while Nix is installing, the next
+`--setup-golden` stops with a message rather than run the installer
+over its leftovers, which it refuses. Start over (the base image usually
+stays in Tart's cache, so nothing is downloaded again), from the
+repository root:
+
+```sh
+tart delete sendmail-e2e-golden
+rm ~/.local/state/apple-mail-sendmail-e2e-vm/golden-sendmail-e2e-golden.marker
+nix run .#e2e-vm -- --setup-golden
+```
+
+or uninstall Nix inside the VM following the macOS steps in the
+[Nix manual](https://nix.dev/manual/nix/stable/installation/uninstall.html)
+and rerun `--setup-golden`.

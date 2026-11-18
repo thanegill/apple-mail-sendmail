@@ -32,7 +32,7 @@ SENDMAIL_DRY_RUN=1 ./result/bin/apple-mail-sendmail -t < msg.eml
 `SENDMAIL_DRY_RUN=1` makes the binary print the generated AppleScript to
 stdout instead of executing it. Useful when iterating on `MailDriver`.
 
-The live end-to-end harness (`nix run .#e2e`, which drives Mail.app and must not be run without the user's go-ahead) has its own guidance in `tests/e2e/CLAUDE.md`.
+The live end-to-end harness (`nix run .#e2e`, which drives Mail.app and must not be run without the user's go-ahead) and its Tart VM wrapper (`nix run .#e2e-vm`) have their own guidance in `tests/e2e/CLAUDE.md`.
 
 ## Architecture
 
@@ -154,9 +154,12 @@ The .eml + Cmd-Shift-D path renders bodies in Mail's WKWebView, which honors any
 - `packages.default` — installs `apple-mail-sendmail` plus a `sendmail` symlink.
 - `packages.without-sendmail-symlink` — canonical binary only.
 - `packages.e2e` (also `apps.e2e`, and `checks.e2e-shellcheck` so `nix flake check` shellchecks it) — the live end-to-end harness. Building it only shellchecks `tests/e2e/e2e.sh`; it never runs in `checkPhase`.
+- `packages.e2e-vm` (also `apps.e2e-vm`, and `checks.e2e-vm-shellcheck`) — `tests/e2e/vm.sh`, which runs the harness in a Tart VM. Building it only shellchecks the script.
 
 Consumers from other flakes can also call `self.packages.${system}.default.override { withSendmailSymlink = false; }`.
 
 `meta.mainProgram = "apple-mail-sendmail"`, so `nix run` always invokes the canonical name even though both names are on `PATH` in the `default` package.
 
 Tests run in the package's `checkPhase`, not as a separate test derivation; `checks.default` is the package itself, so both `nix build .#default` and `nix flake check` fail when tests fail.
+
+The dev shell includes [Tart](https://tart.run) for the VM-based e2e runs. Nixpkgs marks Tart unfree (FSL-1.1), so `perSystem` sets `_module.args.pkgs` to a nixpkgs import whose `allowUnfreePredicate` admits only `tart`; do not replace that with a blanket `allowUnfree`. The `tart` binding in `flake.nix` overrides the pinned nixpkgs package to 2.42.0 (2.41.1 fixed `tart exec` dropping large output, openai/tart#1347) with `doInstallCheck = false`: on macOS 27, running `tart.app` inside the build tags the bundle with `com.apple.macl`, and Nix then fails to register the output ("clearing flags of path ...: Operation not permitted"), leaving an invalid store path that macOS's app-bundle protection also stops `nix store gc` from deleting unless the Nix daemon has Full Disk Access. Never run a store `.app` during a build. Drop the override once `flake.lock` pins a nixpkgs with Tart 2.41.1 or newer.
