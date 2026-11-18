@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Live end-to-end harness for apple-mail-sendmail. See the "Live end-to-end
-# tests" section of README.md. Packaged as `nix run .#e2e`.
-#
 # Every guard fails closed: input that is missing, unparseable or unexpected
 # is a refusal, never a pass.
 set -euo pipefail
@@ -18,11 +15,11 @@ API="http://${MAILPIT_HOST}:${HTTP_PORT}/api/v1"
 readonly CURL=(curl -q --noproxy '*')
 readonly ACCOUNT_A=e2e-a@example.test
 readonly ACCOUNT_B=e2e-b@example.test
-# e2e-b's outgoing server. macOS 27 allows only one profile-managed SMTP
-# account per host ("Only a single "SMTP" account is allowed to be saved"),
-# so B reaches Mailpit's SMTP through this /etc/hosts alias for 127.0.0.1.
-# This is the single definition: e2e-accounts.mobileconfig must use the same
-# name (--self-test checks it), and other tooling should read it from here.
+# macOS 27 allows only one profile-managed SMTP account per host ("Only a
+# single "SMTP" account is allowed to be saved"), so e2e-b reaches Mailpit
+# through this /etc/hosts alias for 127.0.0.1. The single definition:
+# e2e-accounts.mobileconfig must match (--self-test checks), and vm.sh's
+# read_smtp_b_alias parses this exact one-line `readonly` shape.
 readonly SMTP_B_ALIAS=e2e-b-smtp.test
 HOSTS_FILE=/etc/hosts
 readonly POP3_PASSWORD=e2e-local-only
@@ -181,7 +178,6 @@ DRY_RUN_TEMP_DIRS=()
 
 cleanup() {
   local status=$?
-  # A second Ctrl-C during the drain below stops Mailpit at once.
   trap 'log "e2e: interrupted again; stopping Mailpit now, so a message still in Mail'"'"'s Outbox may be stranded"; stop_mailpit; exit 130' INT TERM
   local leave_mailpit_running=false
   if [[ $mail_touched == true ]]; then
@@ -224,8 +220,8 @@ make_workdir() {
   ATTACH_B64_FIRST_LINE=$(head -n 1 "$workdir/attachment.b64")
 }
 
-# The binary under test is copied into the work dir once and hashed; dry runs
-# and live runs both use that copy, and live runs re-check the hash.
+# Dry and live runs use only the copy prepare_binary makes, and each live
+# scenario re-checks its hash.
 BINARY_SHA256=""
 
 prepare_binary() {
@@ -281,7 +277,6 @@ check_pop3_banner() {
   fi
 }
 
-# check_pop3_login USER PASSWORD [PORT]
 check_pop3_login() {
   local port=${3:-$POP3_PORT}
   if ! "${CURL[@]}" -fsS --max-time 5 -u "$1:$2" "pop3://${MAILPIT_HOST}:${port}/" >/dev/null 2>&1; then
@@ -290,12 +285,10 @@ check_pop3_login() {
   fi
 }
 
-# Mailpit honours MP_* environment variables that relay, forward, call a
-# webhook or consult SpamAssassin. The main defence is starting every Mailpit
-# under `env -i`. This is a second check, refusing on anything it cannot
-# read: relaying and SpamAssassin must be off in /api/v1/webui, and the
-# startup log must not announce relaying or forwarding (forwarding is not in
-# the API). Webhooks show in neither, so only the scrub covers them.
+# Second line of defence behind starting every Mailpit under `env -i`, since
+# MP_* variables can make it relay, forward, call a webhook or use
+# SpamAssassin. Forwarding is not in the API, so it is read from the log;
+# webhooks show in neither, so only the `env -i` scrub covers them.
 check_mailpit_not_relaying() {
   local log_file=$1 webui
   if ! webui=$("${CURL[@]}" -fsS --max-time 5 "$API/webui"); then
@@ -360,10 +353,8 @@ run_supervised() {
   ' -- "$parent_pid" "$@"
 }
 
-# Mailpit serves one POP3 port, but macOS refuses a second POP account on the
-# same host and port ("This account already exists"), so e2e-b fetches
-# through a localhost-only TCP forwarder from POP3_B_PORT to POP3_PORT,
-# supervised like Mailpit.
+# macOS refuses a second POP account on the same host and port ("This account
+# already exists"), so e2e-b fetches through this forwarder.
 start_pop3_forwarder() {
   run_supervised "$$" env -i PATH="$PATH" \
     socat "TCP-LISTEN:${POP3_B_PORT},bind=${MAILPIT_HOST},reuseaddr,fork" "TCP:${MAILPIT_HOST}:${POP3_PORT}" \
@@ -1045,13 +1036,8 @@ has_nul_byte() {
   [[ $(wc -c <"$1") != "$(tr -d '\000' <"$1" | wc -c)" ]]
 }
 
-# Prefix that runs a command in a new session, so it has no controlling
-# terminal.
 readonly NO_TERMINAL=(perl -e 'use POSIX (); POSIX::setsid() or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' --)
 
-# Runs the binary in the sandbox, in a new session with stdin from the
-# fixture and stdout/stderr to files, then checks what it printed: the .eml
-# path's step plan, or the --no-ui Apple Event path's.
 dry_run_scenario() {
   local args=() script_file="$workdir/logs/${NAME}.dry-run.out" status=0 snapshot_file
   DRY_RUN_SENDER=""
@@ -1076,18 +1062,13 @@ dry_run_scenario() {
   return "$analysis"
 }
 
-# A path the script names must be a file inside a binary temp dir that this
-# dry run created.
 is_dry_run_file() {
   local path=$1
   [[ $path != *..* && -f $path ]] && is_binary_temp_dir "$(dirname "$path")" "$DRY_RUN_TMP"
 }
 
-# The .eml path, which every message but a --no-ui one takes, prints its step
-# plan, one JSON object per line. The plan is fixed apart from the .eml path,
-# so it must equal the template for its mode (tests/e2e/templates) once that
-# path is replaced. The path may not contain a quote or backslash, so it
-# cannot end its JSON string early.
+# The .eml path may not contain a quote or backslash, so it cannot end its
+# JSON string early.
 readonly OPEN_EML_STEP_RE='^\{"activates":true,"path":"(/[^"\\]*\.eml)","step":"open_eml"\}$'
 
 analyze_eml_plan() {
@@ -1123,12 +1104,10 @@ analyze_eml_plan() {
   DRY_RUN_SENDER=$HEADER_FROM_ADDRESS
 }
 
-# The --no-ui Apple Event path prints its PlainPlan, one JSON object per
-# line, in this order: launch_mail, make_message, set_content, add_recipient per recipient,
-# add_attachment per attachment, then send only for --send. Each line must be
-# exactly jq's compact, key-sorted form of itself, so a duplicated key (jq
-# keeps the last) or stray whitespace cannot make jq and the binary read a
-# line differently, and must have exactly its step's keys and value types.
+# Each --no-ui PlainPlan line must be exactly jq's compact, key-sorted form
+# of itself, so a duplicated key (jq keeps the last) or stray whitespace
+# cannot make jq and the binary read a line differently, and must have
+# exactly its step's keys and value types.
 # The strings checked here leave jq base64-encoded, so no separator or
 # control character inside them can shift a field.
 readonly PLAIN_STEP_JQ='
@@ -1289,8 +1268,7 @@ mail_is_running() {
   grep -qxF -- "$MAIL_APP_PROCESS" <<<"$processes"
 }
 
-# Reads the report from preflight.applescript on stdin: account, smtp and
-# rule records, fields separated by ASCII 31, record type first.
+# Reads preflight.applescript's report (format in its header) on stdin.
 validate_accounts() {
   PREFLIGHT_REASONS=()
   ACCOUNT_B_READY=false
@@ -1399,10 +1377,7 @@ MAIL_OUTBOX_COUNT=""
 MAIL_SELECTED_COUNT=""
 MAIL_EXTRA_WINDOWS=()
 
-# Reads the report from mail-windows.applescript on stdin: outgoing messages,
-# Outbox messages, messages selected in main viewers, then one line per
-# window that is not a main viewer. Anything but 0, 0, 0 and no windows is a
-# refusal, as is any value that is not a number.
+# Reads mail-windows.applescript's report (format in its header) on stdin.
 validate_mail_windows() {
   PREFLIGHT_REASONS=()
   MAIL_EXTRA_WINDOWS=()
@@ -1413,13 +1388,11 @@ validate_mail_windows() {
   IFS= read -r MAIL_OUTGOING_COUNT || true
   IFS= read -r MAIL_OUTBOX_COUNT || true
   IFS= read -r MAIL_SELECTED_COUNT || true
-  # The outgoing-message count is recorded but not checked: Mail keeps every
-  # --no-ui message it has sent in `outgoing messages` until it is
-  # relaunched, so a nonzero count does not mean a compose is open. A real
-  # compose window is a non-viewer window and is refused below; an invisible
-  # outgoing message has no window for a keystroke to reach and cannot be
-  # sent without an AppleScript `send`, which only the checked binary issues.
-  # The line must still be present, so a truncated report is refused.
+  # Not checked: Mail keeps every --no-ui message it has sent in
+  # `outgoing messages` until it is relaunched. An open compose is caught
+  # below as a non-viewer window; an invisible one has no window for a press
+  # to reach and needs a `send` only the checked binary issues. The line must
+  # still be present, so a truncated report is refused.
   if [[ -z $MAIL_OUTGOING_COUNT ]]; then
     PREFLIGHT_REASONS+=("Mail state report is empty")
   fi
@@ -1510,8 +1483,6 @@ final_mail_report() {
   printf '  - %s\n' "${PREFLIGHT_REASONS[@]}" >&2
 }
 
-# Reads accounts, SMTP servers and rules (read-only) and validates them, along
-# with the system proxy settings and, when e2e-b's alias is in use, the alias.
 check_accounts() {
   local report_file="$workdir/logs/preflight.txt"
   PREFLIGHT_REASONS=()
@@ -1567,22 +1538,6 @@ check_proxies() {
   return 1
 }
 
-# e2e-b's SMTP host is an /etc/hosts alias. Mail sends to whatever it
-# resolves to, so it is accepted only while it resolves to this machine and
-# nothing else:
-#   - /etc/hosts holds exactly two lines for it, "127.0.0.1 <alias>" and
-#     "::1 <alias>". With only the IPv4 line, macOS answers A locally but
-#     sends the AAAA query to DNS, so an outside AAAA answer would reach
-#     Mail (and Happy Eyeballs prefers IPv6).
-#   - The system resolver, the authoritative gate since it is what Mail
-#     uses, answers exactly 127.0.0.1 and ::1.
-#   - Nothing listens on [::1]:1025 (Mailpit binds 127.0.0.1 only), so a
-#     connection over IPv6 is refused and Mail falls back to 127.0.0.1.
-#   - dig, an extra check of /etc/resolv.conf's servers only (not
-#     /etc/resolver/*, scoped or VPN DNS, DoH or Private Relay), gets no
-#     answer. Only exit 0 with no records, or exit 9 (no server reachable),
-#     counts as no answer; any other exit refuses.
-# Appends to PREFLIGHT_REASONS and fails on anything unexpected.
 resolve_host_system() {
   run_bounded 10 /usr/bin/dscacheutil -q host -a name "$1"
 }
@@ -1591,7 +1546,6 @@ resolve_alias_system() {
   resolve_host_system "$SMTP_B_ALIAS"
 }
 
-# dig_name NAME TYPE: prints dig's +short output and returns dig's status.
 dig_name() {
   run_bounded 10 dig +short +time=2 +tries=1 "$1" "$2"
 }
@@ -1613,13 +1567,25 @@ probe_ipv6_loopback() {
   ' -- "$1" || printf 'unknown:probe failed\n'
 }
 
-# Sets RESOLVED_IPV4 and RESOLVED_IPV6 (sorted, unique, one per line) from
-# dscacheutil output.
 parse_resolver_addresses() {
   RESOLVED_IPV4=$(sed -n 's/^ip_address:[[:space:]]*//p' <<<"$1" | LC_ALL=C sort -u)
   RESOLVED_IPV6=$(sed -n 's/^ipv6_address:[[:space:]]*//p' <<<"$1" | LC_ALL=C sort -u)
 }
 
+# Mail sends to whatever the alias resolves to, so it is accepted only while
+# it resolves to this machine and nothing else:
+#   - /etc/hosts holds exactly "127.0.0.1 <alias>" and "::1 <alias>". With
+#     only the IPv4 line, macOS answers A locally but sends the AAAA query to
+#     DNS, so an outside AAAA answer would reach Mail (Happy Eyeballs prefers
+#     IPv6).
+#   - The system resolver, the authoritative gate since it is what Mail
+#     uses, answers exactly 127.0.0.1 and ::1.
+#   - Nothing listens on [::1]:1025 (Mailpit binds 127.0.0.1 only), so an
+#     IPv6 connection is refused and Mail falls back to 127.0.0.1.
+#   - dig, an extra check of /etc/resolv.conf's servers only (not
+#     /etc/resolver/*, scoped or VPN DNS, DoH or Private Relay), gets no
+#     answer: exit 0 with no records, or exit 9 (no server reachable).
+# vm.sh's ensure_hosts_lines and its setup checks duplicate these rules.
 check_smtp_alias() {
   local hosts_lines resolver_output line address names
   local alias_reasons=()
@@ -2129,10 +2095,8 @@ cmd_live() {
 
 
 # ---------------------------------------------------------------------------
-# Self-test: drives the assertions with messages injected straight into
-# Mailpit over SMTP (no Mail.app), once as Mail should send them and once per
-# deliberate defect, and checks the guards, the dry-run checks, the sandbox
-# and the preflight parsers.
+# Self-test. Never drives Mail: messages go straight into Mailpit over SMTP,
+# once as Mail should send them and once per deliberate defect.
 
 SELF_TEST_MISMATCHES=0
 SELF_TEST_CASES=0
@@ -2253,7 +2217,6 @@ other_account() {
   if [[ ${1,,} == "$ACCOUNT_A" ]]; then printf '%s\n' "$ACCOUNT_B"; else printf '%s\n' "$ACCOUNT_A"; fi
 }
 
-# Applies one named defect to the wire file and the envelope, then injects.
 inject_variant() {
   local variant=$1 wire="$workdir/fixtures/${NAME}.${1}.wire.eml" mail_from=$EXPECT_FROM_ADDR copies=1
   local recipients=() rcpt
@@ -2657,9 +2620,6 @@ self_test_dry_run() {
     "adds recipient"
 }
 
-# Crafted scripts, built from the real templates and the --no-ui PlainPlan
-# shape, prove each branch of the script analysis, including the bypasses a
-# reviewer found against the earlier blocklist.
 self_test_script_analysis() {
   printf 'dry-run script analysis (crafted scripts)\n'
   local crafted_root="$workdir/dry-run-tmp/crafted" temp_dir eml attachment
@@ -3104,8 +3064,6 @@ self_test_mailpit() {
     --smtp-disable-rdns --disable-version-check >"$workdir/logs/forward-sink.log" 2>&1 &
   forward_sink_pid=$!
 
-  # The caller's environment for the rest of this test: everything that
-  # could make a Mailpit forward, relay, call out or use SpamAssassin.
   local hostile_environment=(
     MP_SMTP_FORWARD_TO=forward-probe@example.test
     MP_SMTP_FORWARD_HOST="$MAILPIT_HOST"
@@ -3177,7 +3135,6 @@ self_test_mailpit() {
   wait "$relay_pid" 2>/dev/null || true
   "${CURL[@]}" -fsS --max-time 5 -X DELETE "http://${MAILPIT_HOST}:${relay_sink_http}/api/v1/messages" >/dev/null || true
 
-  # Control: a Mailpit given only MP_ENABLE_SPAMASSASSIN must fail the check.
   local spam_log="$workdir/logs/spamassassin-control.log" spam_pid
   env -i PATH="$PATH" HOME="$HOME" MP_ENABLE_SPAMASSASSIN="${MAILPIT_HOST}:1" \
     mailpit --database "$workdir/spam-control.db" \
@@ -3246,7 +3203,6 @@ self_test_mailpit() {
 }
 
 
-# e2e-b's POP3 port is a socat forwarder started and stopped with Mailpit.
 # shellcheck disable=SC2030,SC2031 # port overrides are meant to stay in their subshells
 self_test_forwarder() {
   printf 'POP3 forwarder for e2e-b\n'
@@ -3309,8 +3265,6 @@ self_test_forwarder() {
   fi
 }
 
-# The exit status: success only if every selected scenario passed (or, with
-# --allow-refused, passed or was refused by a guard).
 self_test_summary() {
   printf 'run summary and exit status\n'
   summary_case() {
@@ -3382,8 +3336,6 @@ self_test_summary() {
   self_test_expect readable "plain-send-no-ui's PASS is not read as plain-send's" "$outcome"
 }
 
-# Exercises run_supervised directly, with a `sleep` standing in for the
-# harness as the watched parent, and a Mailpit on spare ports as the child.
 # shellcheck disable=SC2030,SC2031 # port overrides are meant to stay in their subshells
 self_test_watchdog() {
   printf 'Mailpit watchdog\n'
@@ -3470,10 +3422,8 @@ self_test_watchdog() {
   kill_orphans
 }
 
-# A preflight that refuses (here: every Mail read times out) must fail fast
-# and stop Mailpit: no Outbox drain, no stuck-message warning, no detached
-# Mailpit. Runs the real start_mailpit, run_preflight and cleanup in a
-# subshell with its own work dir, spare ports and stubbed Mail reads.
+# A preflight that refuses must fail fast and stop Mailpit: no Outbox drain,
+# no stuck-message warning, no detached Mailpit.
 # shellcheck disable=SC2030,SC2031,SC2329 # subshell-local overrides and stubs
 self_test_preflight_refusal() {
   printf 'preflight refusal (Mail reads stubbed)\n'
@@ -3724,8 +3674,6 @@ self_test_preflight() {
   run_windows_case "a compose window is open" refused $'0\n0\n0\n4242\tHello\n'
 }
 
-# Display names: exact, apart from Mail's quotes-inside-the-encoded-word
-# quirk for names with a special and a non-ASCII character.
 # shellcheck disable=SC2031 # the subshell in self_test_preflight_refusal has its own workdir
 self_test_display_names() {
   printf 'display-name matching\n'
@@ -3764,11 +3712,10 @@ self_test_display_names() {
   quirk_wire_case "From: =?utf-8?B?\"Backer, Anna\"?= (wrong name)" FAIL '"Backer, Anna"'
 }
 
-# Reproduces the pipefail/SIGPIPE class: a producer that prints the match on
-# its first line and then a lot more. The old `producer | grep -q` shape
-# reports some of those matches as failures (status 141); mail_is_running,
-# which captures first, must find all of them, and must still treat a
-# failing producer as "not running".
+# A producer that prints the match first and then a lot more: `producer |
+# grep -q` would report some of those matches as failures (status 141).
+# mail_is_running must find all of them and treat a failing producer as
+# "not running".
 # shellcheck disable=SC2329 # process_list stubs are invoked by mail_is_running
 self_test_pipefail() {
   printf 'pipefail and early-exit readers\n'
@@ -3796,10 +3743,9 @@ self_test_pipefail() {
   eval "$saved_process_list"
 }
 
-# The e2e-b SMTP alias and the proxy check, with the resolver, DNS, the
-# [::1] probe, scutil and /etc/hosts stubbed (the real /etc/hosts is never
-# read or written here), then read-only positive controls with the real
-# tools.
+# Stubs the resolver, DNS, the [::1] probe, scutil and /etc/hosts, then runs
+# read-only positive controls with the real tools. Never write the real
+# /etc/hosts from here.
 # shellcheck disable=SC2329,SC2031 # stubs are invoked by the checks; other self-tests' subshell overrides do not reach here
 self_test_smtp_alias() {
   printf 'e2e-b SMTP alias (%s; resolver, DNS, [::1] probe and hosts file stubbed)\n' "$SMTP_B_ALIAS"

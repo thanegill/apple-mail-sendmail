@@ -24,6 +24,7 @@
           # The pinned nixpkgs ships Tart 2.37.0, which predates macOS 27
           # guests (Cirrus Labs' golden-gate images), and `tart exec` before
           # 2.41.1 can drop or truncate large output (openai/tart#1347).
+          # Drop this once nixpkgs has 2.41.1 or newer.
           tart = pkgs.tart.overrideAttrs (finalAttrs: previousAttrs: {
             version = "2.42.0";
             src = pkgs.fetchurl {
@@ -31,15 +32,17 @@
               hash = "sha256-qV3aIUtfZ2KYQw1mWoF0mS5rMA3SDGUzhbYEga6Bnd8=";
             };
             # Running tart.app during the build makes macOS 27 tag the bundle
-            # (com.apple.macl), and Nix then fails to register the output.
+            # (com.apple.macl), and Nix then fails to register the output,
+            # leaving a store path gc cannot delete. Never run a store .app
+            # during a build.
             doInstallCheck = false;
             meta = previousAttrs.meta // { license = pkgs.lib.licenses.fsl11Asl20; };
           });
 
-          # Third-party messages for tests/conformance/differential.py, fetched
-          # instead of vendored. CPython's test_email messages come from the
-          # source of the same Python the check compares against, so they move
-          # with nixpkgs; mail-parser's are pinned by `rev` and `hash`.
+          # Third-party conformance messages, fetched instead of vendored.
+          # CPython's come from the source of the same Python the check compares
+          # against, so they move with nixpkgs; to bump mail-parser's, change
+          # `rev` and `hash` together.
           mailParserSrc = pkgs.fetchFromGitHub {
             owner = "stalwartlabs";
             repo = "mail-parser";
@@ -59,9 +62,6 @@
             done
           '';
 
-          # `withSendmailSymlink` controls whether $out/bin/sendmail is created
-          # as a symlink to apple-mail-sendmail (drop-in compatibility). Default
-          # true; pass false to install only the canonical binary name.
           makeSendmail = pkgs.lib.makeOverridable ({ withSendmailSymlink ? true }:
             pkgs.swiftPackages.stdenv.mkDerivation {
               pname = "apple-mail-sendmail";
@@ -85,10 +85,6 @@
                 runHook postInstall
                 '';
 
-              # Tests use a recording AppleScript runner so they never drive Mail.app.
-              # The differential check compares SendmailCore's MIME parse of
-              # tests/conformance/corpus and the fetched corpus with CPython's
-              # email package.
               doCheck = true;
               nativeCheckInputs = [ pkgs.python3 ];
               checkPhase = ''
@@ -120,9 +116,7 @@
               };
             });
 
-          # The harness's own files, without its docs or the VM wrapper, so
-          # editing tests/e2e/README.md, tests/e2e/CLAUDE.md or
-          # tests/e2e/vm.sh does not change the harness's store path.
+          # Excluded so editing them does not change the harness's store path.
           e2eResources = pkgs.lib.fileset.toSource {
             root = ./tests/e2e;
             fileset = pkgs.lib.fileset.difference ./tests/e2e (pkgs.lib.fileset.unions [
@@ -132,8 +126,7 @@
             ]);
           };
 
-          # Live end-to-end harness. Building it only shellchecks the script;
-          # running it drives Mail.app, so it is never part of checkPhase.
+          # Running it drives Mail.app, so it must never be part of checkPhase.
           e2eHarness = pkgs.writeShellApplication {
             name = "apple-mail-sendmail-e2e";
             runtimeInputs = [
@@ -157,8 +150,6 @@
             meta.description = "Live end-to-end tests for apple-mail-sendmail against a local Mailpit";
           };
 
-          # Runs e2eHarness inside a throwaway Tart clone of a prepared macOS
-          # VM. Building it only shellchecks the script.
           e2eVm = pkgs.writeShellApplication {
             name = "apple-mail-sendmail-e2e-vm";
             runtimeInputs = [
@@ -200,8 +191,8 @@
             meta.description = "Open an apple-mail-sendmail release PR, or tag and publish a merged one";
           };
         in {
-          # Tart is source-available (FSL-1.1), so nixpkgs marks it unfree.
-          # Allow that one package rather than setting allowUnfree.
+          # Tart (FSL-1.1) is unfree in nixpkgs. Allow only it; never set a
+          # blanket allowUnfree.
           _module.args.pkgs = import inputs.nixpkgs {
             inherit system;
             config.allowUnfreePredicate = pkg: inputs.nixpkgs.lib.getName pkg == "tart";
@@ -214,7 +205,7 @@
           packages.release = releaseScript;
           packages.conformance-corpus = conformanceCorpus;
 
-          # Building these shellchecks them; they never run here.
+          # Building these only shellchecks them; they never run here.
           checks.e2e-shellcheck = e2eHarness;
           checks.e2e-vm-shellcheck = e2eVm;
           checks.release-shellcheck = releaseScript;
