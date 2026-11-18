@@ -50,6 +50,16 @@ private func message(to address: String = "u@h", subject: String = "s", body: St
     return msg
 }
 
+/// Deliver a plain message with `--send`, its events going to `recorder`.
+private func sendThroughPlainPath(_ recorder: AppleEventRecorder) throws {
+    var opts = Options()
+    opts.send = true
+    try withTempDir { tmp in
+        let msg = message()
+        try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: recorder)
+    }
+}
+
 private let messageContent = AEValue.specifier(want: "prop", from: recordedMessageSpecifier, form: "prop", seld: .type("ctnt"))
 
 let mailDriverTests = TestSuite(name: "MailDriver", cases: [
@@ -258,10 +268,72 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
-    TestCase(name: "subject_is_passed_verbatim") {
-        for subject in ["He said \"hi\" \\", "before\u{2028}after\u{2029}end", "a\r\nb", "caf\u{E9} \u{1F600}"] {
+    TestCase(name: "subject_quotes_backslashes_and_non_ascii_pass_through") {
+        for subject in ["He said \"hi\" \\", "caf\u{E9} e\u{0301} \u{1F600}", "tab\there", "del\u{7F}"] {
             let recorder = try plainEvents(message(subject: subject))
             try expectEqual(recorder.messageProperties["subj"], .text(subject))
+        }
+    },
+
+    TestCase(name: "line_breaks_and_controls_are_normalized_in_every_text_event") {
+        var opts = Options()
+        opts.send = true
+        opts.fromAddress = "ops\u{1B}@example.test"
+        var msg = message(subject: "before\u{2028}after\u{2029}end\r\nx\ry", body: "one\r\ntwo\rthree\u{0C}four\u{2028}five")
+        msg.to = [ParsedAddress(displayName: "Al\r\nice\u{0}", address: "a\u{7}@x")]
+        msg.cc = [ParsedAddress(displayName: "B\u{2029}ob", address: "b@y")]
+        msg.bcc = [ParsedAddress(displayName: nil, address: "c\r@z")]
+        let recorder = try plainEvents(msg, options: opts)
+        try expectEqual(recorder.messageProperties["subj"], .text("before\nafter\nend\nx\ny"))
+        try expectEqual(recorder.messageProperties["sndr"], .text("ops @example.test"))
+        try expectEqual(recorder.events.first { $0.name == "core/setd" }?.params["data"], .text("one\ntwo\nthree four\nfive"))
+        try expectEqual(recorder.creations(of: "trcp").map { $0.params["prdt"] }, [.record(["radd": .text("a @x"), "pnam": .text("Al\nice ")])])
+        try expectEqual(recorder.creations(of: "crcp").map { $0.params["prdt"] }, [.record(["radd": .text("b@y"), "pnam": .text("B\nob")])])
+        try expectEqual(recorder.creations(of: "brcp").map { $0.params["prdt"] }, [.record(["radd": .text("c\n@z")])])
+        for text in recorder.allTexts {
+            try expect(!text.unicodeScalars.contains { ($0.value < 0x20 && $0 != "\n" && $0 != "\t") || $0 == "\u{2028}" || $0 == "\u{2029}" }, "unnormalized text reached Mail: \(text.debugDescription)")
+        }
+    },
+
+    TestCase(name: "dry_run_plan_shows_the_normalized_text") {
+        let compose = PlainCompose(
+            subject: "a\r\nb", sender: "S\u{1}", body: "x\ry",
+            to: [ParsedAddress(displayName: "N\u{2028}", address: "t@x")], cc: [], bcc: [],
+            attachmentURLs: [], send: false
+        )
+        let lines = PlainPlan.jsonLines(PlainPlan.steps(compose))
+        try expectEqual(lines[1], #"{"sender":"S ","step":"make_message","subject":"a\nb","visible":true}"#)
+        try expectEqual(lines[2], #"{"step":"set_content","text":"x\ny"}"#)
+        try expectEqual(lines[3], #"{"address":"t@x","kind":"to","name":"N\n","step":"add_recipient"}"#)
+    },
+
+    // The inputs of the old AppleScript.quote tests, with the value Mail
+    // ended up with: what AppleScript decoded from the quoted literal, except
+    // that CR now becomes LF.
+    TestCase(name: "sanitized_matches_the_old_quote_on_its_test_inputs") {
+        let cases: [(String, String)] = [
+            ("", ""),
+            ("plain ASCII 123", "plain ASCII 123"),
+            ("q\"b\\", "q\"b\\"),
+            ("n\nr\rt\t", "n\nr\nt\t"),
+            ("a\r\nb", "a\nb"),
+            ("a\r\r\nb\n\rc", "a\n\nb\n\nc"),
+            ("ls\u{2028}ps\u{2029}", "ls\nps\n"),
+            ("nul\u{00}esc\u{1B}us\u{1F}", "nul esc us "),
+            ("del\u{7F}", "del\u{7F}"),
+            ("next-line\u{85}c1", "next-line\u{85}c1"),
+            ("caf\u{E9} e\u{0301} \u{1F600} \u{1F1FA}\u{1F1F8}", "caf\u{E9} e\u{0301} \u{1F600} \u{1F1FA}\u{1F1F8}"),
+            ("a\u{01}\u{0301}b\r\u{0301}c", "a \u{0301}b\n\u{0301}c"),
+            ("\"\u{0301}", "\"\u{0301}"),
+            ("\u{0600}\"", "\u{0600}\""),
+            ("\\\u{0301}", "\\\u{0301}"),
+            ("a\u{0}b\u{7}c\td\u{1b}e", "a b c\td e"),
+            (EncodedWord.decode("=?UTF-8?Q?line1=0D=0Aline2=0Dline3=0Aend?="), "line1\nline2\nline3\nend"),
+            ("X\u{0600}\" & (count {1, 2, 3}) & (character id {80, 87, 78}) & \"\u{0301}", "X\u{0600}\" & (count {1, 2, 3}) & (character id {80, 87, 78}) & \"\u{0301}"),
+        ]
+        for (input, expected) in cases {
+            let actual = MailText.sanitized(input)
+            try expect(actual.unicodeScalars.elementsEqual(expected.unicodeScalars), "\(input.debugDescription): expected \(expected.debugDescription), got \(actual.debugDescription)")
         }
     },
 
@@ -333,6 +405,45 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         try expect(!recorder.names.contains("emsg/send"))
     },
 
+    TestCase(name: "send_answered_false_fails_with_exit_oserr") {
+        let recorder = AppleEventRecorder()
+        recorder.sendResult = NSAppleEventDescriptor(boolean: false)
+        var thrown: Error?
+        do {
+            try sendThroughPlainPath(recorder)
+        } catch {
+            thrown = error
+        }
+        try expectEqual(recorder.names.last, "emsg/send")
+        guard let thrown else { throw TestFailure(message: "a false send reply must fail", file: #file, line: #line) }
+        let report = FailureReport(thrown)
+        try expectEqual(report.exitCode, .osErr)
+        try expect(report.message.contains("did not send the message"), report.message)
+        try expect(report.message.contains("returned false"), report.message)
+    },
+
+    TestCase(name: "send_answered_true_succeeds") {
+        let recorder = AppleEventRecorder()
+        recorder.sendResult = NSAppleEventDescriptor(boolean: true)
+        try sendThroughPlainPath(recorder)
+        try expectEqual(recorder.names.last, "emsg/send")
+    },
+
+    TestCase(name: "send_reply_without_a_boolean_result_keeps_succeeding") {
+        let results: [NSAppleEventDescriptor?] = [
+            nil,
+            NSAppleEventDescriptor(int32: 0),
+            NSAppleEventDescriptor(string: "false"),
+            NSAppleEventDescriptor.null(),
+        ]
+        for result in results {
+            let recorder = AppleEventRecorder()
+            recorder.sendResult = result
+            try sendThroughPlainPath(recorder)
+            try expectEqual(recorder.names.last, "emsg/send")
+        }
+    },
+
     TestCase(name: "make_message_reply_without_a_message_is_an_error_before_anything_else") {
         let recorder = AppleEventRecorder()
         recorder.replyWithoutMessage = true
@@ -347,6 +458,96 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
         try expectEqual(thrown as? DeliveryError, DeliveryError("Mail did not return the new outgoing message"))
         try expectEqual(recorder.events.count, 1)
+    },
+
+    // MARK: - Waiting for a just-launched Mail to answer
+
+    TestCase(name: "make_message_is_retried_until_a_just_launched_mail_answers") {
+        for code in [-600, -609] {
+            let mail = FakeMail()
+            mail.mailRunning = false
+            let recorder = AppleEventRecorder()
+            var makeAttempts = 0
+            recorder.onSend = { event in
+                guard event.params["kocl"] == .type("bcke") else { return }
+                makeAttempts += 1
+                if makeAttempts <= 3 { throw AppleEventError(code: code, message: "not answering yet") }
+            }
+            var opts = Options()
+            opts.send = true
+            try withTempDir { tmp in
+                let msg = message()
+                let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), html: RecordingHTMLDelivery())
+                try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, automation: automation)
+            }
+            try expectEqual(mail.launches, 1)
+            try expectEqual(makeAttempts, 4)
+            try expectEqual(recorder.names, ["core/crel", "core/crel", "core/crel", "core/crel", "core/setd", "core/crel", "emsg/send"])
+            try expectEqual(recorder.events[3].params, recorder.events[0].params)
+            try expect(mail.now < 10, "four attempts must not use up the readiness wait: \(mail.now)s")
+        }
+    },
+
+    TestCase(name: "make_message_gives_up_after_the_readiness_wait_with_the_minus_600_mapping") {
+        let mail = FakeMail()
+        let recorder = AppleEventRecorder()
+        recorder.onSend = { _ in throw AppleEventError(code: -600, message: "procNotFound") }
+        let start = mail.now
+        var thrown: Error?
+        do {
+            try AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail).run([
+                .makeMessage(subject: "s", visible: true, sender: nil),
+                .setContent("b"),
+            ])
+        } catch {
+            thrown = error
+        }
+        try expectEqual((thrown as? AppleEventError)?.code, -600)
+        try expectEqual(FailureReport(thrown!).exitCode, .tempFail)
+        let waited = mail.now - start
+        try expect(waited >= 10 && waited < 10.5, "gave up after \(waited)s, not after the 10s readiness wait")
+        try expect(recorder.events.count > 2, "expected several attempts, got \(recorder.events.count)")
+        try expect(recorder.events.count < 20, "the pause must grow, got \(recorder.events.count) attempts")
+        try expect(!recorder.names.contains("core/setd"), "nothing may follow a make_message that never succeeded")
+    },
+
+    TestCase(name: "make_message_is_not_retried_for_other_errors") {
+        let mail = FakeMail()
+        let recorder = AppleEventRecorder()
+        recorder.failure = (index: 0, error: AppleEventError(code: -1712, message: "AppleEvent timed out."))
+        var thrown: Error?
+        do {
+            try AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail).run([.makeMessage(subject: "s", visible: true, sender: nil)])
+        } catch {
+            thrown = error
+        }
+        try expectEqual((thrown as? AppleEventError)?.code, -1712)
+        try expectEqual(recorder.events.count, 1)
+        try expectEqual(mail.now, 0)
+    },
+
+    TestCase(name: "events_after_make_message_are_never_retried") {
+        for (index, code) in [(1, -600), (1, -609), (2, -600), (3, -609)] {
+            let mail = FakeMail()
+            let recorder = AppleEventRecorder()
+            recorder.failure = (index: index, error: AppleEventError(code: code, message: "not answering"))
+            var opts = Options()
+            opts.send = true
+            var thrown: Error?
+            do {
+                try withTempDir { tmp in
+                    let msg = message()
+                    let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), html: RecordingHTMLDelivery())
+                    try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, automation: automation)
+                }
+            } catch {
+                thrown = error
+            }
+            try expectEqual((thrown as? AppleEventError)?.code, code)
+            try expectEqual(recorder.events.count, index + 1)
+            try expectEqual(recorder.creations(of: "bcke").count, 1)
+            try expectEqual(mail.now, 0)
+        }
     },
 
     // MARK: - Plain plan and dry run
