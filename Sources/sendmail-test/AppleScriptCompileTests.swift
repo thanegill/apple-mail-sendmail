@@ -194,7 +194,7 @@ let appleScriptCompileTests = TestSuite(name: "AppleScriptCompile", cases: [
         ]
         for send in [false, true] {
             for emlPath in emlPaths {
-                let script = MailDriver.buildEditDraftScript(emlPath: emlPath, send: send)
+                let script = AppleScriptMailAutomation.buildEditDraftScript(emlPath: emlPath, send: send)
                 try expectCompiles(script, origin: "edit-draft send=\(send) emlPath=\(emlPath)")
             }
         }

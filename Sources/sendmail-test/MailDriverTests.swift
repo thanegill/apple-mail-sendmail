@@ -377,7 +377,9 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
 
     // MARK: - Edit-draft path (HTML present)
 
-    TestCase(name: "edit_draft_script_probes_accessibility_first") {
+    TestCase(name: "edit_draft_script_starts_at_mail_launch_without_an_applescript_accessibility_probe") {
+        // Accessibility is checked in Swift before the script runs (see the
+        // Accessibility suite), so the script goes straight to Mail.
         try withTempDir { tmp in
             let recorder = Recorder()
             var msg = ParsedMessage()
@@ -385,9 +387,10 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.body = "plain fallback"
             msg.htmlBody = "<p>rich</p>"
             let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("get name of menu bar 1 of process \"Finder\""), "Accessibility probe must read UI of another process (the real gate)")
-            try expect(script.contains("Accessibility permission required"))
-            try expect(script.contains("if errNum is -1719 or errNum is 1002"))
+            try expect(!script.contains("process \"Finder\""), "the Finder menu-bar probe must be gone")
+            try expect(!script.contains("1719"))
+            let statements = trimmedLines(script).filter { !$0.isEmpty }
+            try expectEqual(Array(statements.prefix(2)), ["use scripting additions", "tell application \"Mail\" to launch"])
         }
     },
 

@@ -90,11 +90,15 @@ do {
     die("failed to create temp dir: \(error)", code: .tempFail)
 }
 
-let dryRun = env["SENDMAIL_DRY_RUN"] == "1"
-let runner: ScriptRunner? = dryRun ? { script in
-    FileHandle.standardOutput.write(Data(script.utf8))
-    FileHandle.standardOutput.write(Data("\n".utf8))
-} : nil
+let automation: MailAutomation
+if env["SENDMAIL_DRY_RUN"] == "1" {
+    automation = AppleScriptMailAutomation(staging: tmp, accessibility: .notChecked) { script in
+        FileHandle.standardOutput.write(Data(script.utf8))
+        FileHandle.standardOutput.write(Data("\n".utf8))
+    }
+} else {
+    automation = AppleScriptMailAutomation(staging: tmp)
+}
 
 // Build the .eml bytes that the edit-draft path will hand to Mail. Keep
 // the original stdin body verbatim (no MIME re-encoding) and apply CLI
@@ -108,12 +112,20 @@ let emlBytes = EmlBuilder.buildEml(
 )
 
 do {
-    try MailDriver.deliverThenCleanUp(message, emlBytes: emlBytes, options: options, tmp: tmp, runner: runner)
+    try MailDriver.deliverThenCleanUp(message, emlBytes: emlBytes, options: options, tmp: tmp, automation: automation)
 } catch let f as AppleScript.Failure {
     if f.code == -1743 {
         die("Mail.app automation denied. Grant permission in System Settings → Privacy & Security → Automation. (\(f.message))", code: .config)
     }
+    // System Events reports a missing Accessibility grant this way if it is
+    // revoked after the up-front check.
+    if f.code == -1719 || f.code == 1002 {
+        let osMajorVersion = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        die("\(AccessibilityNotGranted(osMajorVersion: osMajorVersion)) (\(f.message))", code: .config)
+    }
     die("AppleScript failed (\(f.code)): \(f.message)", code: .osErr)
+} catch let denied as AccessibilityNotGranted {
+    die("\(denied)", code: .config)
 } catch {
     die("delivery failed: \(error)", code: .osErr)
 }

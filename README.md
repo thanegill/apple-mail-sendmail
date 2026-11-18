@@ -68,7 +68,9 @@ Automation**. If automation is denied, the binary exits with status 78
 
 **Messages with an HTML body require an additional Accessibility grant**
 for the calling process in **System Settings -> Privacy & Security ->
-Accessibility**. The HTML path opens the message in Mail, invokes
+Accessibility** (on macOS 27 and later, **Privacy & Security -> Device
+Control and Data Access**). Without it the binary exits with status 78
+(`EX_CONFIG`) before touching Mail, and names that pane. The HTML path opens the message in Mail, invokes
 `Message > Send Again` (⇧⌘D) via a System Events menu click to convert
 the viewer into an editable compose, and (with `--send`) clicks
 `Message > Send` — both of which need Accessibility. Plain-text-only messages take the classic

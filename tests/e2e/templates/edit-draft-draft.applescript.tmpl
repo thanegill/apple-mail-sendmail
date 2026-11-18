@@ -1,15 +1,5 @@
 use scripting additions
 
-try
-    tell application "System Events" to get name of menu bar 1 of process "Finder"
-on error errMsg number errNum
-    if errNum is -1719 or errNum is 1002 then
-        error "Accessibility permission required. Grant apple-mail-sendmail Accessibility in System Settings > Privacy & Security > Accessibility." number errNum
-    else
-        error errMsg number errNum
-    end if
-end try
-
 tell application "Mail" to launch
 delay 0.5
 tell application "Mail" to set beforeOpenIDs to id of every window

@@ -309,7 +309,9 @@ In that user, from the repository root:
      Outgoing Mail Account -> Edit SMTP Server List**); only Mailpit's
      `127.0.0.1:1025` and `e2e-b-smtp.test:1025` may remain.
 4. Grant the terminal you run from **Accessibility** (System Settings
-   -> Privacy & Security -> Accessibility), and allow its **Automation**
+   -> Privacy & Security -> Accessibility; on macOS 27 and later,
+   Privacy & Security -> Device Control and Data Access), and allow its
+   **Automation**
    requests for Mail and System Events on the first run.
 
 Only `e2e-a` is required. Scenarios that send from `e2e-b` are skipped
