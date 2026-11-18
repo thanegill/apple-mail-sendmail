@@ -21,7 +21,7 @@
             then throw "flake.nix: ${toString versionFile} has no `public static let string = \"X.Y.Z\"` line to read the version from"
             else builtins.head versionMatch;
 
-          # The pinned nixpkgs ships Tart 2.30.6, which predates macOS 27
+          # The pinned nixpkgs ships Tart 2.37.0, which predates macOS 27
           # guests (Cirrus Labs' golden-gate images), and `tart exec` before
           # 2.41.1 can drop or truncate large output (openai/tart#1347).
           tart = pkgs.tart.overrideAttrs (finalAttrs: previousAttrs: {
