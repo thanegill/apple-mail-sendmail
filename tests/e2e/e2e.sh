@@ -2145,6 +2145,25 @@ self_test_expect() {
   if (($# > 0)); then printf '         reason: %s\n' "$@"; fi
 }
 
+# refusal_outcome WANTED_REASON REASON...: "refused" when WANTED_REASON is
+# empty or a substring of some REASON, so a case can prove that the guard it
+# targets fired rather than an unrelated one.
+refusal_outcome() {
+  local wanted_reason=$1 reason
+  shift
+  if [[ -z $wanted_reason ]]; then
+    printf 'refused\n'
+    return
+  fi
+  for reason in "$@"; do
+    if [[ $reason == *"$wanted_reason"* ]]; then
+      printf 'refused\n'
+      return
+    fi
+  done
+  printf 'refused without "%s"\n' "$wanted_reason"
+}
+
 # expect_outcome WANTED LABEL WORD_IF_TRUE WORD_IF_FALSE COMMAND...
 expect_outcome() {
   local wanted=$1 label=$2 true_word=$3 false_word=$4
@@ -2483,12 +2502,12 @@ self_test_dry_run() {
   printf 'binary dry-run checks (sandboxed)\n'
 
   run_dry_run_case() {
-    local label=$1 wanted=$2
+    local label=$1 wanted=$2 wanted_reason=${3-}
     GUARD_REASONS=()
     if dry_run_scenario; then
       self_test_expect "$wanted" "$label" accepted
     else
-      self_test_expect "$wanted" "$label" refused "${GUARD_REASONS[@]}"
+      self_test_expect "$wanted" "$label" "$(refusal_outcome "$wanted_reason" "${GUARD_REASONS[@]}")" "${GUARD_REASONS[@]}"
     fi
   }
 
@@ -2522,7 +2541,9 @@ self_test_dry_run() {
 
   define_scenario plain-send
   SEND_ARGS=(-t)
-  run_dry_run_case "plain path with no -f (no sender: in the script)" refused
+  sed -i '/^From:/d' "$FIXTURE"
+  run_dry_run_case "plain path with no -f and no From (no sender: set)" refused \
+    "plain-text script sets no sender"
 
   define_scenario plain-send
   sed -i '/^To:/d' "$FIXTURE"
@@ -2575,7 +2596,7 @@ self_test_script_analysis() {
   }
 
   run_analysis_case() {
-    local label=$1 wanted=$2 scenario=$3 script_file="$workdir/logs/crafted.applescript"
+    local label=$1 wanted=$2 scenario=$3 wanted_reason=${5-} script_file="$workdir/logs/crafted.applescript"
     define_scenario "$scenario"
     DRY_RUN_TMP=$crafted_root
     printf '%s\n' "$4" >"$script_file"
@@ -2583,7 +2604,7 @@ self_test_script_analysis() {
     if analyze_dry_run_script "$script_file"; then
       self_test_expect "$wanted" "$label" accepted
     else
-      self_test_expect "$wanted" "$label" refused "${GUARD_REASONS[@]}"
+      self_test_expect "$wanted" "$label" "$(refusal_outcome "$wanted_reason" "${GUARD_REASONS[@]}")" "${GUARD_REASONS[@]}"
     fi
   }
 
@@ -2594,8 +2615,10 @@ self_test_script_analysis() {
   run_analysis_case "plain draft whose subject mentions send" accepted draft-later-plain-attachment \
     "$(plain_script true '' | sed 's/subject:"s"/subject:"please send"/')"
 
-  run_analysis_case "HTML send with a second keystroke \"d\"" refused html-send \
-    "$(sed '0,/keystroke "d"/s//keystroke "d" using {shift down, command down}\n        keystroke "d"/' <<<"$html_send")"
+  local send_again_click='click menu item "Send Again" of menu "Message" of menu bar 1'
+  run_analysis_case "HTML send with a keystroke after the Send Again click" refused html-send \
+    "${html_send/"$send_again_click"/"$send_again_click"$'\n''                keystroke "d" using {shift down, command down}'}" \
+    "script differs from the send template"
   run_analysis_case "HTML draft with perform action AXPress" refused draft-later-html-attachment \
     "$(sed '0,/^end tell$/s//end tell\ntell application "System Events" to tell process "Mail" to perform action "AXPress" of button 1 of window 1/' <<<"$html_draft")"
   run_analysis_case "HTML send without the Message > Send click" refused html-send \
@@ -2627,7 +2650,8 @@ self_test_script_analysis() {
   run_analysis_case "plain --send script without a send verb" refused plain-send "$(plain_script false '')"
   run_analysis_case "plain draft script with a send verb" refused draft-later-plain-attachment "$(plain_script true send)"
   run_analysis_case "plain draft script that is invisible" refused draft-later-plain-attachment "$(plain_script false '')"
-  run_analysis_case "plain script without a sender property" refused plain-send "$(plain_script false send '')"
+  run_analysis_case "plain script without a sender property" refused plain-send "$(plain_script false send '')" \
+    "plain-text script sets no sender"
   run_analysis_case "plain script with a real sender" refused plain-send \
     "$(plain_script false send ', sender:"Me <me@gmail.com>"')"
   run_analysis_case "plain sender naming two addresses" refused plain-send \
