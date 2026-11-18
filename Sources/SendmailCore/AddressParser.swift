@@ -30,7 +30,9 @@ enum MailboxFormatTarget {
 ///
 /// A display name containing anything outside RFC 5322 `atext` and space
 /// (e.g. the comma in `Doe, John`) is written as a quoted-string; unquoted,
-/// a re-parser would split it into several mailboxes.
+/// a re-parser would split it into several mailboxes. So is one with a run
+/// of spaces or a leading or trailing space, which a re-parser would
+/// otherwise read as single spaces (RFC 5322 3.2.2) or drop.
 func formatMailbox(name: String?, address: String, for target: MailboxFormatTarget) -> String {
     guard let name, !name.isEmpty else { return address }
     return "\(formatDisplayName(name, for: target)) <\(address)>"
@@ -40,7 +42,10 @@ private func formatDisplayName(_ name: String, for target: MailboxFormatTarget) 
     if target == .rfc822Header && !name.unicodeScalars.allSatisfy(\.isASCII) {
         return EncodedWord.encode(name)
     }
-    guard name.unicodeScalars.contains(where: displayNameScalarNeedsQuoting) else { return name }
+    let spacesSurviveUnquoted = !name.hasPrefix(" ") && !name.hasSuffix(" ") && !name.contains("  ")
+    guard !spacesSurviveUnquoted || name.unicodeScalars.contains(where: displayNameScalarNeedsQuoting) else {
+        return name
+    }
     let escaped = name
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")

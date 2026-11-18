@@ -61,6 +61,14 @@ private func expectEncodedWordsSplitBetweenScalars(_ input: String) throws {
 }
 
 let mailboxFormatTests = TestSuite(name: "MailboxFormat", cases: [
+    TestCase(name: "display_name_with_space_run_is_quoted_and_round_trips") {
+        let spaced = try roundTripToHeader(#""Quoted   Spaces" <q@x.test>"#)
+        try expectEqual(spaced.emlTo, #""Quoted   Spaces" <q@x.test>"#)
+        try expectEqual(spaced.reparsed.map(\.displayName), ["Quoted   Spaces"])
+        let plain = try roundTripToHeader("Plain Name <p@x.test>")
+        try expectEqual(plain.emlTo, "Plain Name <p@x.test>")
+    },
+
     TestCase(name: "quoted_pair_display_name_round_trips_without_double_escaping") {
         let bob = try roundTripToHeader(#""Smith \"Bob\"" <a@x.test>"#)
         try expectEqual(bob.parsed.displayName, #"Smith "Bob""#)

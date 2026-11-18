@@ -94,14 +94,6 @@
         "local/header-edge-cases.eml cc",
         "local/header-edge-cases.eml subject"
       ]
-    },
-    {
-      "id": "display-name-whitespace-not-quoted",
-      "class": "ours-bug",
-      "note": "formatMailbox wrote a display name with a run of spaces unquoted, and RFC 5322 3.2.2 reads that run as one space, so 'Quoted   Spaces' did not survive the .eml round trip.",
-      "cases": [
-        "local/header-edge-cases.eml rebuilt-eml.to"
-      ]
     }
   ]
 }
