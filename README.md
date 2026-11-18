@@ -64,10 +64,10 @@ Automation**. If automation is denied, the binary exits with status 78
 
 **Messages with an HTML body require an additional Accessibility grant**
 for the calling process in **System Settings -> Privacy & Security ->
-Accessibility**. The HTML path opens the message in Mail, sends a
-Cmd-Shift-D keystroke ("Send Again") to convert the viewer into an
-editable compose, and (with `--send`) clicks `Message > Send` — all of
-which need Accessibility. Plain-text-only messages take the classic
+Accessibility**. The HTML path opens the message in Mail, invokes
+`Message > Send Again` (⇧⌘D) via a System Events menu click to convert
+the viewer into an editable compose, and (with `--send`) clicks
+`Message > Send` — both of which need Accessibility. Plain-text-only messages take the classic
 AppleScript path and do not need Accessibility.
 
 ## Usage
@@ -173,10 +173,15 @@ hands the message to Mail by:
 2. `open -a Mail file.eml` so Mail opens it as a viewer window —
    rendered by WKWebView, the same engine Mail uses for received
    mail.
-3. Sending `Cmd-Shift-D` ("Send Again") via System Events. Mail
-   converts the viewer into a brand-new editable compose carrying
-   the .eml's `To` / `Subject` / `From` and the rendered HTML.
-4. With `--send`, clicking `Message > Send` via System Events.
+3. Invoking `Message > Send Again` (⇧⌘D) via a System Events menu
+   click, once the viewer is verified as Mail's front, main and key
+   window. Mail converts the viewer into a brand-new editable
+   compose carrying the .eml's `To` / `Subject` / `From` and the
+   rendered HTML. The click targets Mail's process, so unlike a
+   keystroke it cannot land in another app; Mail must still be
+   frontmost, because in the background the click does nothing.
+4. With `--send`, verifying the compose window the same way, then
+   clicking `Message > Send` via System Events.
 5. Closing the leftover viewer window.
 
 This preserves **everything** the source HTML expresses — tables,
@@ -206,7 +211,7 @@ Tradeoffs:
   silently" the way the classic plain-text path can.
 - **Mail must be running** (or quickly launchable) — `open -a Mail`
   starts it if not already running, then needs the window to
-  appear before the keystroke fires. The script polls up to 5
+  appear before the Send Again click. The script polls up to 5
   seconds; longer cold-starts produce a clean timeout error.
 
 ### Dry run
