@@ -74,6 +74,18 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectEqual(msg.body, "a=ZZb")
     },
 
+    // RFC 2045 section 6.7: trailing whitespace on an encoded line is transport
+    // padding and must be deleted (rule 3), so `= ` then a line break is still
+    // a soft line break (rule 5). Encoded whitespace (=20, =09) is kept.
+    TestCase(name: "rfc2045_quoted_printable_transport_padding") {
+        for lineBreak in ["\n", "\r\n"] {
+            let body = ["padded   ", "soft= \t", "break", "kept=20", "tab=09", "end="].joined(separator: lineBreak)
+            let input = "Content-Type: text/plain; charset=utf-8\(lineBreak)Content-Transfer-Encoding: quoted-printable\(lineBreak)\(lineBreak)\(body)"
+            let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+            try expectEqual(msg.body, ["padded", "softbreak", "kept ", "tab\t", "end"].joined(separator: lineBreak))
+        }
+    },
+
     TestCase(name: "base64_body") {
         let input = """
         Subject: B64

@@ -262,33 +262,44 @@ public enum MIMEParser {
         }
     }
 
+    /// Decode quoted-printable line by line (RFC 2045 6.7). Whitespace at the
+    /// end of an encoded line is transport padding and is deleted (rule 3), so
+    /// a line ending in `=` after that is a soft line break (rule 5) even when
+    /// padding followed the `=`. Hard line breaks keep their CRLF or LF form.
     private static func decodeQuotedPrintable(_ data: Data) -> Data {
         var out = Data()
-        let bytes = [UInt8](data)
-        var i = 0
-        while i < bytes.count {
-            let b = bytes[i]
-            if b == 0x3D { // '='
-                if i + 1 < bytes.count && bytes[i + 1] == 0x0A {
-                    i += 2; continue // soft break "=\n"
-                }
-                if i + 2 < bytes.count && bytes[i + 1] == 0x0D && bytes[i + 2] == 0x0A {
-                    i += 3; continue // soft break "=\r\n"
-                }
-                if i + 2 < bytes.count {
-                    let hi = bytes[i + 1].hexNibble
-                    let lo = bytes[i + 2].hexNibble
-                    if let hi = hi, let lo = lo {
-                        out.append(UInt8(hi * 16 + lo))
-                        i += 3
-                        continue
-                    }
-                }
+        let lines = [UInt8](data).split(separator: 0x0A, omittingEmptySubsequences: false)
+        for (lineIndex, rawLine) in lines.enumerated() {
+            var line = rawLine[...]
+            let endsWithCR = line.last == 0x0D
+            if endsWithCR { line = line.dropLast() }
+            while let last = line.last, last == 0x20 || last == 0x09 {
+                line = line.dropLast()
             }
-            out.append(b)
-            i += 1
+            let isSoftBreak = line.last == 0x3D
+            if isSoftBreak { line = line.dropLast() }
+            appendQuotedPrintableEscapes(line, to: &out)
+            let isFinalLine = lineIndex == lines.count - 1
+            if !isSoftBreak && !isFinalLine {
+                if endsWithCR { out.append(0x0D) }
+                out.append(0x0A)
+            }
         }
         return out
+    }
+
+    private static func appendQuotedPrintableEscapes(_ line: ArraySlice<UInt8>, to out: inout Data) {
+        var i = line.startIndex
+        while i < line.endIndex {
+            if line[i] == 0x3D, i + 2 < line.endIndex,
+               let hi = line[i + 1].hexNibble, let lo = line[i + 2].hexNibble {
+                out.append(UInt8(hi * 16 + lo))
+                i += 3
+                continue
+            }
+            out.append(line[i])
+            i += 1
+        }
     }
 
     // Compile the stripHTML patterns once at type init rather than on every
