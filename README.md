@@ -324,3 +324,7 @@ setup, safety rules and scenarios are in
 │   └── e2e/                  (live end-to-end harness, `nix run .#e2e`)
 └── README.md
 ```
+
+## License
+
+MIT; see [LICENSE](LICENSE).

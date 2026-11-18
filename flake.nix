@@ -75,6 +75,7 @@
 
               meta = {
                 description = "sendmail-compatible CLI that hands messages to Apple Mail";
+                license = pkgs.lib.licenses.mit;
                 platforms = pkgs.lib.platforms.darwin;
                 mainProgram = "apple-mail-sendmail";
               };
