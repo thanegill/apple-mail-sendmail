@@ -219,7 +219,7 @@ SENDMAIL_DRY_RUN=1 apple-mail-sendmail -t < msg.eml
 | `-f <addr>`      | Set the From address                                     |
 | `-F <name>`      | Set the From display name                                |
 | `--send`         | Actually deliver (default: draft for review)             |
-| `-h`, `--help`   | Print usage                                              |
+| `--help`         | Print usage                                              |
 | `--version`      | Print version                                            |
 
 Legacy sendmail flags accepted for compatibility and otherwise ignored:
@@ -227,6 +227,11 @@ Legacy sendmail flags accepted for compatibility and otherwise ignored:
 `-M*`. The value-taking flags `-B`, `-N`, `-R`, `-X`, `-O`, and `-C`
 consume their argument (attached like `-B8BITMIME`, or the next token
 like `-B 8BITMIME`) so the value is not mistaken for a recipient.
+`-h N` (sendmail's hop count) is accepted and ignored the same way, but
+its value is required and must be all digits (`-h 20` or `-h20`); a
+missing or non-numeric hop count is a usage error. This is stricter than
+sendmail, which also accepts a sign or leading spaces. `-h` is not a help
+flag; use `--help`.
 
 ## Exit codes
 
