@@ -2591,6 +2591,27 @@ self_test_dry_run() {
   run_dry_run_case "HTML fixture with --no-ui (the binary must refuse it)" refused \
     "dry run exited 64"
 
+  # Mail holds a message without a Subject for a confirmation the binary
+  # cannot answer, so --send without one must stop before Mail is touched.
+  define_scenario plain-send
+  sed -i '/^Subject:/d' "$FIXTURE"
+  run_dry_run_case "--send fixture without a Subject (the binary must refuse it)" refused \
+    "dry run exited 65"
+
+  define_scenario plain-send-no-ui
+  sed -i 's/^Subject: .*/Subject: /' "$FIXTURE"
+  run_dry_run_case "--no-ui --send fixture with an empty Subject (the binary must refuse it)" refused \
+    "dry run exited 65"
+
+  define_scenario html-send
+  sed -i 's/^Subject: .*/Subject:  \t /' "$FIXTURE"
+  run_dry_run_case "HTML --send fixture with a whitespace-only Subject (the binary must refuse it)" refused \
+    "dry run exited 65"
+
+  define_scenario draft-later-plain-attachment
+  sed -i '/^Subject:/d' "$FIXTURE"
+  run_dry_run_case "draft fixture without a Subject (still a draft)" accepted
+
   define_scenario draft-later-plain-attachment
   SEND_ARGS+=(--send)
   run_dry_run_case "plain draft that would press Send" refused \

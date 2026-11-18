@@ -60,6 +60,33 @@ private func sendThroughPlainPath(_ recorder: AppleEventRecorder) throws {
     }
 }
 
+/// Runs `msg` through the real .eml and `--no-ui` deliveries against a fake
+/// Mail that is not running, recording what reached it and what was staged.
+private func deliverThroughRealPaths(_ msg: ParsedMessage, options: Options) -> (error: Error?, mail: FakeMail, recorder: AppleEventRecorder, tmpFiles: [String]) {
+    let mail = FakeMail()
+    mail.mailRunning = false
+    let recorder = AppleEventRecorder()
+    let automation = MailAutomation(
+        plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail),
+        eml: AXEmlDelivery(ax: mail, workspace: mail, clock: mail, accessibility: AccessibilityPermission(osMajorVersion: 26) { true })
+    )
+    var thrown: Error?
+    var tmpFiles: [String] = []
+    do {
+        let tmp = try TempDir()
+        defer { tmp.cleanup() }
+        do {
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: options, tmp: tmp, automation: automation)
+        } catch {
+            thrown = error
+        }
+        tmpFiles = (try? FileManager.default.contentsOfDirectory(atPath: tmp.url.path)) ?? []
+    } catch {
+        thrown = error
+    }
+    return (thrown, mail, recorder, tmpFiles)
+}
+
 private let messageContent = AEValue.specifier(want: "prop", from: recordedMessageSpecifier, form: "prop", seld: .type("ctnt"))
 
 let mailDriverTests = TestSuite(name: "MailDriver", cases: [
@@ -182,6 +209,54 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             thrown = error
         }
         try expectEqual(thrown as? HTMLNeedsUI, HTMLNeedsUI())
+    },
+
+    // MARK: - --send needs a Subject
+
+    TestCase(name: "send_without_a_subject_is_refused_on_both_paths_before_touching_mail") {
+        for noUI in [false, true] {
+            for subject in ["", " \t\n "] {
+                var opts = Options()
+                opts.send = true
+                opts.noUI = noUI
+                let run = deliverThroughRealPaths(message(subject: subject), options: opts)
+                let label = "noUI \(noUI), subject \(subject.debugDescription)"
+                try expect(run.error as? SendNeedsSubject == SendNeedsSubject(), "\(label): expected SendNeedsSubject, got \(String(describing: run.error))")
+                try expect(run.mail.axCalls == 0 && run.mail.openedURLs.isEmpty && run.mail.launches == 0, "\(label): Mail was touched")
+                try expect(run.recorder.events.isEmpty, "\(label): an Apple Event was sent")
+                try expect(run.tmpFiles.isEmpty, "\(label): files were staged: \(run.tmpFiles)")
+            }
+        }
+    },
+
+    TestCase(name: "draft_without_a_subject_still_reaches_mail_on_both_paths") {
+        let eml = deliverThroughRealPaths(message(subject: ""), options: Options())
+        try expectNil(eml.error.map { "\($0)" })
+        try expectEqual(eml.mail.sendAgainPresses.count, 1)
+        try expect(eml.recorder.events.isEmpty)
+
+        let noUI = deliverThroughRealPaths(message(subject: "  "), options: noUIOptions())
+        try expectNil(noUI.error.map { "\($0)" })
+        try expectEqual(noUI.recorder.names.first, "core/crel")
+        try expectEqual(noUI.recorder.messageProperties["pvis"], .bool(true))
+        try expect(!noUI.recorder.names.contains("emsg/send"))
+        try expectEqual(noUI.mail.axCalls, 0)
+    },
+
+    TestCase(name: "require_deliverable_refuses_send_only_without_a_subject") {
+        var send = Options()
+        send.send = true
+        try MailDriver.requireDeliverable(message(subject: "s"), options: send)
+        try MailDriver.requireDeliverable(message(subject: ""), options: Options())
+        for subject in ["", " ", "\t\r\n"] {
+            var thrown: Error?
+            do {
+                try MailDriver.requireDeliverable(message(subject: subject), options: send)
+            } catch {
+                thrown = error
+            }
+            try expectEqual(thrown as? SendNeedsSubject, SendNeedsSubject())
+        }
     },
 
     // MARK: - --no-ui plain path events
@@ -763,6 +838,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
                 var opts = Options()
                 opts.send = send
                 var msg = ParsedMessage()
+                msg.subject = "rich"
                 msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
                 msg.htmlBody = "<p>rich</p>"
                 try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: AppleEventRecorder(), eml: html)

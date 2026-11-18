@@ -169,7 +169,9 @@ header is handed to Mail unchanged inside the `.eml`, and Mail picks
 the account from it. With `--no-ui` it becomes the new message's
 `sender` instead, except that a `From:` address with no `@domain`
 (cron's `root (Cron Daemon)`, for example) is not passed, so no sender
-is set.
+is set. On the default path such a `From:` goes into the `.eml` as it
+is; verified live (macOS 27, Mail 16.0), Mail then sends from its
+default account.
 
 ### Attachments
 
@@ -232,13 +234,15 @@ press, in case another window appeared in place of ours. With no
 Subject, Mail shows a placeholder title instead, so that check is
 skipped.
 
-**`--send` needs a Subject**, for plain text and HTML alike. Sending a
-compose with no Subject makes Mail ask "This message has no subject.
-Send anyway?". The binary never answers Mail's prompts, so it stops
-there: the compose stays open as a draft, nothing is sent, and it
-exits 71 with "Mail is asking to confirm sending a message with no
-Subject ... --send needs a Subject". Add a `Subject:` header, or leave
-out `--send` and send the draft by hand.
+**`--send` needs a Subject**, with or without `--no-ui`. Mail holds a
+message with no Subject for a "This message has no subject. Send
+anyway?" confirmation that the binary cannot answer (with `--no-ui`
+there is not even a window to show it, so Mail keeps the message
+unsent while reporting success). So the binary refuses `--send` when
+the Subject is empty or only whitespace, before touching Mail: it
+exits 65 (`EX_DATAERR`) with "--send needs a non-empty Subject ...",
+and nothing is sent. Add a `Subject:` header, or leave out `--send`
+to get a draft, which works without a Subject.
 
 This preserves **everything** the source HTML expresses — tables,
 CSS padding and backgrounds, monospace `<pre>` styling, inline
@@ -343,7 +347,7 @@ Following `sysexits.h`:
 |-----:|---------------------------------------------------------------|
 |    0 | Message handed to Mail.app successfully; with `--check-permissions`, both grants in place |
 |   64 | Usage error (unknown flag, malformed argv), or `--no-ui` with an HTML body |
-|   65 | Data error (unparseable message)                              |
+|   65 | Data error (unparseable message, or `--send` with no Subject) |
 |   67 | No recipients resolved                                        |
 |   71 | Driving Mail failed (an `.eml`-path step, or an Apple Event with `--no-ui`) |
 |   75 | Temporary failure: no temp file, or Mail not running (EX_TEMPFAIL) |

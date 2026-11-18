@@ -377,6 +377,8 @@ private final class PlanRun {
             let gone = poll(timeout: goneTimeout) { isPresent(target) ? nil : true }
             if gone != nil { return }
             if hasSheet(target) {
+                // Backstop only: MailDriver.requireDeliverable refuses --send
+                // without a Subject before Mail is touched.
                 if WindowCheck.normalizedTitle(subject).isEmpty {
                     throw DeliveryError("Mail is asking to confirm sending a message with no Subject (a sheet opened on the \(window.displayName) window after the \(item.fallbackName) press); it is not confirmed, and the message was not sent. --send needs a Subject: add a non-empty Subject header, or leave out --send to get a draft")
                 }

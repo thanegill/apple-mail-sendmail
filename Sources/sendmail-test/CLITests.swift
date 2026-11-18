@@ -77,6 +77,13 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expectUsageError(["--noui"], containing: "unknown option: --noui")
     },
 
+    TestCase(name: "help_text_says_send_needs_a_subject") {
+        let h = CLI.helpText()
+        let sendRow = h.components(separatedBy: "\n  --no-ui ").first?.components(separatedBy: "\n  --send ").last ?? ""
+        let flattened = sendRow.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        try expect(flattened.contains("needs a non-empty Subject; without one the binary exits 65"), "missing the Subject rule in --send:\n\(h)")
+    },
+
     TestCase(name: "help_text_documents_no_ui_and_its_quoting") {
         let h = CLI.helpText()
         try expect(h.contains("[--no-ui]"), "missing --no-ui in USAGE:\n\(h)")

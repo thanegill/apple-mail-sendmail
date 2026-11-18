@@ -10,6 +10,14 @@ let failureReportTests = TestSuite(name: "FailureReport", cases: [
         try expectEqual(report.message, "Mail.app automation denied. --no-ui drives Mail with Apple Events, which needs Automation for Mail: grant it in System Settings → Privacy & Security → Automation, or run without --no-ui, which needs Accessibility instead. (Not authorized to send Apple events to Mail.)")
     },
 
+    TestCase(name: "send_without_a_subject_is_a_data_error_that_names_the_way_out") {
+        let report = FailureReport(SendNeedsSubject())
+        try expectEqual(report.exitCode, .dataErr)
+        try expectEqual(report.exitCode.rawValue, 65)
+        try expect(report.message.hasPrefix("--send needs a non-empty Subject: Mail holds a message without one for a confirmation it can't show from here, so it would not be sent."), report.message)
+        try expect(report.message.contains("leave out --send to get a draft"), report.message)
+    },
+
     TestCase(name: "html_with_no_ui_is_a_usage_error_that_names_the_way_out") {
         let report = FailureReport(HTMLNeedsUI())
         try expectEqual(report.exitCode, .usage)

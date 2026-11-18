@@ -178,7 +178,7 @@ public enum CLI {
             ("-t",                  "Read recipients from To, Cc, and Bcc headers."),
             ("-f <addr>",           "Set the From address (Mail.app account selector)."),
             ("-F <name>",           "Set the From display name. Applies only with -f."),
-            ("--send",              "Actually deliver the message. Default is draft for review."),
+            ("--send",              "Actually deliver the message. Default is draft for review. The message needs a non-empty Subject; without one the binary exits 65 and sends nothing."),
             ("--no-ui",             "Hand a plain-text message to Mail with Apple Events, without opening or pressing anything in Mail's windows, for cron or launchd jobs where Mail cannot come to the front. Needs Automation for Mail, not Accessibility. Mail sends the body as a quotation (every line prefixed with \"> \"; Mail bug FB11734014). A message with an HTML body is refused (exit 64)."),
             ("--check-permissions", "Report whether Accessibility (needed by default) and Automation for Mail (needed only with --no-ui) are granted, and how to grant them. Exits 0 when both are granted, 78 otherwise. Starts Mail if needed and may show macOS's Automation prompt; sends nothing and reads no stdin."),
             ("--help",              "Show this help."),

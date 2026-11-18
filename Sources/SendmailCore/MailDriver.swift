@@ -63,11 +63,15 @@ public enum MailDriver {
         ))
     }
 
-    /// Throws `HTMLNeedsUI` for a message `deliver` would refuse, so the
-    /// executable can stop before it creates a temp dir.
+    /// Throws for a message `deliver` would refuse, so the executable can
+    /// stop before it creates a temp dir: `HTMLNeedsUI` for an HTML body with
+    /// `--no-ui`, and `SendNeedsSubject` for `--send` without a Subject.
     public static func requireDeliverable(_ msg: ParsedMessage, options: Options) throws {
         if options.noUI && hasHTMLBody(msg) {
             throw HTMLNeedsUI()
+        }
+        if options.send && msg.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw SendNeedsSubject()
         }
     }
 
@@ -106,5 +110,18 @@ public struct HTMLNeedsUI: Error, CustomStringConvertible, Equatable {
 
     public var description: String {
         "--no-ui (or SENDMAIL_NO_UI=1) cannot deliver a message with an HTML body: only the default path, which works through Mail's windows and needs Accessibility, renders HTML. Nothing was sent. Run without --no-ui, or send a text/plain message."
+    }
+}
+
+/// `--send` was asked for a message whose decoded Subject is empty or only
+/// whitespace. Mail holds such a message for a "no subject, send anyway?"
+/// confirmation: the .eml path's compose shows it as a sheet the binary never
+/// answers, and a `--no-ui` message, which has no window, keeps it invisible
+/// in `outgoing messages` and never sends it, though `send` reports success.
+public struct SendNeedsSubject: Error, CustomStringConvertible, Equatable {
+    public init() {}
+
+    public var description: String {
+        "--send needs a non-empty Subject: Mail holds a message without one for a confirmation it can't show from here, so it would not be sent. Nothing was sent. Add a Subject header, or leave out --send to get a draft."
     }
 }

@@ -24,6 +24,9 @@ public struct FailureReport: Equatable {
         case let refused as HTMLNeedsUI:
             message = refused.description
             exitCode = .usage
+        case let refused as SendNeedsSubject:
+            message = refused.description
+            exitCode = .dataErr
         case let failure as DeliveryError:
             message = failure.message
             exitCode = .osErr
