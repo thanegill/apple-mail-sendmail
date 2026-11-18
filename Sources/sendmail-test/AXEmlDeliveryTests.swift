@@ -209,7 +209,9 @@ let axEmlDeliveryTests = TestSuite(name: "AXEmlDelivery", cases: [
         let trace = TraceLog()
         try expectSuccess(runEml(mail, send: true, trace: trace))
         try expectEqual(trace.lines, [
+            #"the eml viewer window's title (AXTitle) "Test Subject" matches the Subject"#,
             "pressing Message > Send Again on the eml viewer window, found by its shift-cmd-D shortcut",
+            #"the compose window's title (AXTitle) "Test Subject" matches the Subject"#,
             "pressing Message > Send on the compose window, found by its shift-cmd-D shortcut",
         ])
     },
@@ -241,7 +243,7 @@ let axEmlDeliveryTests = TestSuite(name: "AXEmlDelivery", cases: [
         let trace = TraceLog()
         try expectSuccess(runEml(mail, send: true, trace: trace))
         try expectEqual(mail.sentWindows, [mail.composeID!])
-        try expectEqual(trace.lines, [
+        try expectEqual(trace.lines.filter { $0.hasPrefix("pressing") }, [
             "pressing Message > Send Again on the eml viewer window, found by its English title (no enabled item has the shift-cmd-D shortcut)",
             "pressing Message > Send on the compose window, found by its English title (no enabled item has the shift-cmd-D shortcut)",
         ])
@@ -262,7 +264,9 @@ let axEmlDeliveryTests = TestSuite(name: "AXEmlDelivery", cases: [
         let trace = TraceLog()
         try expectSuccess(runEml(mail, send: true, trace: trace))
         try expectEqual(mail.presses.map(\.item), ["Send Again", "Send"])
-        try expect(trace.lines.allSatisfy { $0.hasSuffix("found by its shift-cmd-D shortcut") }, "\(trace.lines)")
+        let pressLines = trace.lines.filter { $0.hasPrefix("pressing") }
+        try expectEqual(pressLines.count, 2)
+        try expect(pressLines.allSatisfy { $0.hasSuffix("found by its shift-cmd-D shortcut") }, "\(trace.lines)")
     },
 
     TestCase(name: "dictation_d_with_other_modifiers_is_not_the_shortcut") {
@@ -342,6 +346,7 @@ let axEmlDeliveryTests = TestSuite(name: "AXEmlDelivery", cases: [
                 "the message has no Subject, so Mail titles the eml viewer window with a localized placeholder; its title is not checked, and the window diff alone identifies it",
                 "the message has no Subject, so Mail titles the compose window with a localized placeholder; its title is not checked, and the window diff alone identifies it",
             ])
+            try expect(!trace.lines.contains { $0.contains("matches the Subject") }, "\(trace.lines)")
         }
     },
 
@@ -354,8 +359,13 @@ let axEmlDeliveryTests = TestSuite(name: "AXEmlDelivery", cases: [
         for (subject, title) in cases {
             let mail = FakeMail()
             mail.messageTitle = title
-            try expectSuccess(runEml(mail, send: true, subject: subject))
+            let trace = TraceLog()
+            try expectSuccess(runEml(mail, send: true, subject: subject, trace: trace))
             try expectEqual(mail.sentWindows, [mail.composeID!])
+            try expectEqual(trace.lines.filter { $0.contains("matches the Subject") }, [
+                "the eml viewer window's title (AXTitle) \(String(reflecting: title)) matches the Subject",
+                "the compose window's title (AXTitle) \(String(reflecting: title)) matches the Subject",
+            ])
         }
     },
 

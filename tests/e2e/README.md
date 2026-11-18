@@ -11,7 +11,10 @@ Each scenario pipes a fixture through the binary and asserts on
 Mailpit's API: sender, To/Cc and envelope-only Bcc recipients, display
 names, raw headers (no `Resent-*`, no `Bcc:`), the HTML part, each
 attachment's exact name, size and SHA-256, and that the body is not sent
-as a quotation.
+as a quotation. The `subject-*` scenarios (folded, `Re:`/`Fwd:` and
+encoded Subjects) also read the binary's unified-log trace with `log
+show` and check that every press followed a title check that found the
+Subject in Mail's window title.
 
 Every scenario but `plain-send-no-ui` runs the binary's default `.eml`
 path. `plain-send-no-ui` runs the `--no-ui` Apple Event path, on which

@@ -267,14 +267,21 @@ private final class PlanRun {
         }
     }
 
-    func failedContentCheck(_ check: WindowCheck, target: UIElement, window: EmlWindow) -> String? {
+    enum ContentCheckResult {
+        case passed(trace: String?)
+        case failed(String)
+    }
+
+    func contentCheck(_ check: WindowCheck, target: UIElement, window: EmlWindow) -> ContentCheckResult {
         switch check {
         case .titleMatchesSubject:
             let expected = WindowCheck.normalizedTitle(subject)
-            guard !expected.isEmpty else { return nil }
+            guard !expected.isEmpty else { return .passed(trace: nil) }
             let shown = title(target)
-            if let shown, WindowCheck.normalizedTitle(shown) == expected { return nil }
-            return "the \(window.displayName) window's title (AXTitle) is \(shown.map { String(reflecting: $0) } ?? "unreadable"), but the message's Subject is \(String(reflecting: subject))"
+            if let shown, WindowCheck.normalizedTitle(shown) == expected {
+                return .passed(trace: "the \(window.displayName) window's title (AXTitle) \(String(reflecting: shown)) matches the Subject")
+            }
+            return .failed("the \(window.displayName) window's title (AXTitle) is \(shown.map { String(reflecting: $0) } ?? "unreadable"), but the message's Subject is \(String(reflecting: subject))")
         }
     }
 
@@ -300,9 +307,15 @@ private final class PlanRun {
                 if failure != nil { break }
             }
             lastFailureIsContents = false
+            var verifiedTraces: [String] = []
             if failure == nil {
                 for check in verify {
-                    failure = failedContentCheck(check, target: target, window: window)
+                    switch contentCheck(check, target: target, window: window) {
+                    case let .passed(verifiedTrace):
+                        if let verifiedTrace { verifiedTraces.append(verifiedTrace) }
+                    case let .failed(reason):
+                        failure = reason
+                    }
                     if failure != nil { break }
                 }
                 lastFailureIsContents = failure != nil
@@ -310,6 +323,7 @@ private final class PlanRun {
             if failure == nil {
                 if let resolved = try resolve(item) {
                     if isEnabled(resolved.element) {
+                        verifiedTraces.forEach(trace)
                         trace(pressTrace(item, foundBy: resolved.foundBy, window: window))
                         return .pressed(ax.performAction(kAXPressAction, on: resolved.element))
                     }
