@@ -2,10 +2,10 @@ import Foundation
 
 public typealias ScriptRunner = (String) throws -> Void
 
-/// `MailAutomation` by generated AppleScript, handed to a `ScriptRunner`
+/// Both deliveries by generated AppleScript, handed to a `ScriptRunner`
 /// (`AppleScript.run` by default; tests and the dry run record or print the
 /// script instead).
-public struct AppleScriptMailAutomation: MailAutomation {
+public struct AppleScriptMailAutomation: PlainDelivery, HTMLDelivery {
     /// Where the plain path stages the body file its script reads.
     let staging: TempDir
     let accessibility: AccessibilityPermission

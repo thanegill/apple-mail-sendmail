@@ -35,12 +35,12 @@ public enum MailDriver {
     /// Hand the parsed message to Mail.app.
     ///
     /// - For messages with an HTML body, write `emlBytes` to a temp `.eml`
-    ///   and hand it to `automation.deliverHTML`, which opens it in Mail and
+    ///   and hand it to `automation.html`, which opens it in Mail and
     ///   converts the viewer into a fresh editable compose with Message >
     ///   Send Again -- the only path that preserves tables, CSS padding,
     ///   monospace backgrounds, etc.
     /// - For plain-text-only messages, stage the attachments as files and
-    ///   hand the rest to `automation.deliverPlain`.
+    ///   hand the rest to `automation.plain`.
     public static func deliver(
         _ msg: ParsedMessage,
         emlBytes: Data,
@@ -50,7 +50,7 @@ public enum MailDriver {
     ) throws {
         if shouldUseEditDraft(msg) {
             let emlURL = try tmp.write(emlBytes, name: "compose-\(UUID().uuidString).eml")
-            try automation.deliverHTML(emlURL: emlURL, send: options.send)
+            try automation.html.deliverHTML(emlURL: emlURL, send: options.send)
             return
         }
 
@@ -61,7 +61,7 @@ public enum MailDriver {
             let url = try tmp.write(att.data, name: prefix + safe)
             attachmentURLs.append(url)
         }
-        try automation.deliverPlain(PlainCompose(
+        try automation.plain.deliverPlain(PlainCompose(
             subject: msg.subject,
             sender: composeSender(options: options, headerFrom: msg.from),
             body: msg.body,
@@ -85,10 +85,11 @@ public enum MailDriver {
         runner: @escaping ScriptRunner
     ) throws -> String {
         var script = ""
-        let automation = AppleScriptMailAutomation(staging: tmp, accessibility: .notChecked) { source in
+        let appleScript = AppleScriptMailAutomation(staging: tmp, accessibility: .notChecked) { source in
             script = source
             try runner(source)
         }
+        let automation = MailAutomation(plain: appleScript, html: appleScript)
         try deliver(msg, emlBytes: emlBytes, options: options, tmp: tmp, automation: automation)
         return script
     }

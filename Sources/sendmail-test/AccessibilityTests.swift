@@ -31,11 +31,12 @@ private func message(html: Bool) -> ParsedMessage {
 private func deliver(html: Bool, probe: PermissionProbe, log: ScriptLog, osMajorVersion: Int = 26) throws {
     let tmp = try TempDir()
     defer { tmp.cleanup() }
-    let automation = AppleScriptMailAutomation(
+    let appleScript = AppleScriptMailAutomation(
         staging: tmp,
         accessibility: probe.permission(osMajorVersion: osMajorVersion),
         runner: log.run
     )
+    let automation = MailAutomation(plain: appleScript, html: appleScript)
     try MailDriver.deliver(message(html: html), emlBytes: Data("Subject: a11y\r\n\r\n<p>rich</p>".utf8), options: Options(), tmp: tmp, automation: automation)
 }
 

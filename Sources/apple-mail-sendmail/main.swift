@@ -90,15 +90,16 @@ do {
     die("failed to create temp dir: \(error)", code: .tempFail)
 }
 
-let automation: MailAutomation
+let appleScript: AppleScriptMailAutomation
 if env["SENDMAIL_DRY_RUN"] == "1" {
-    automation = AppleScriptMailAutomation(staging: tmp, accessibility: .notChecked) { script in
+    appleScript = AppleScriptMailAutomation(staging: tmp, accessibility: .notChecked) { script in
         FileHandle.standardOutput.write(Data(script.utf8))
         FileHandle.standardOutput.write(Data("\n".utf8))
     }
 } else {
-    automation = AppleScriptMailAutomation(staging: tmp)
+    appleScript = AppleScriptMailAutomation(staging: tmp)
 }
+let automation = MailAutomation(plain: appleScript, html: appleScript)
 
 // Build the .eml bytes that the edit-draft path will hand to Mail. Keep
 // the original stdin body verbatim (no MIME re-encoding) and apply CLI
