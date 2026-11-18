@@ -76,6 +76,10 @@
               };
               nativeBuildInputs = [ pkgs.swift pkgs.swiftpm ];
 
+              preBuild = ''
+                export CFFIXED_USER_HOME="$TMPDIR"
+              '';
+
               installPhase = ''
                 runHook preInstall
                 install -Dm755 "$(swiftpmBinPath)/apple-mail-sendmail" "$out/bin/apple-mail-sendmail"
