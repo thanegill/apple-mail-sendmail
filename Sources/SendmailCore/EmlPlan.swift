@@ -1,7 +1,7 @@
 import Foundation
 
-/// The windows the HTML path works on, found by window diff.
-public enum HTMLWindow: String {
+/// The windows the .eml path works on, found by window diff.
+public enum EmlWindow: String {
     case viewer
     case compose
 
@@ -92,10 +92,10 @@ public enum WindowCheck: String, CaseIterable {
     }
 }
 
-/// One step of the HTML path. `HTMLPlan.steps` builds the list, the AX
+/// One step of the .eml path. `EmlPlan.steps` builds the list, the AX
 /// driver executes it, and the dry run prints it, so the printed plan is
 /// what a live run does.
-public enum HTMLStep: Equatable {
+public enum EmlStep: Equatable {
     case requireAccessibility
     /// Start Mail without activating it if it is not running, then wait for
     /// its accessibility interface to answer.
@@ -107,28 +107,28 @@ public enum HTMLStep: Equatable {
     case openEml(path: String)
     /// Wait for exactly one new standard window since the snapshot. Two or
     /// more at once fail closed.
-    case waitForNewWindow(HTMLWindow, since: WindowSnapshot, timeoutMs: Int)
+    case waitForNewWindow(EmlWindow, since: WindowSnapshot, timeoutMs: Int)
     /// Raise the window, run the guard and `verify` until they pass or time
     /// out, then press the menu item once. Never retried.
-    case pressMenuItem(MenuItemTarget, window: HTMLWindow, guardChecks: [GuardCheck], verify: [WindowCheck], guardTimeoutMs: Int)
+    case pressMenuItem(MenuItemTarget, window: EmlWindow, guardChecks: [GuardCheck], verify: [WindowCheck], guardTimeoutMs: Int)
     /// Press the menu item up to `maxPresses` times, each after waiting for
     /// it to be enabled and running the guard and `verify`, until the
     /// window closes. Whether to press again is decided only by whether the
     /// window is still open with no sheet, never by what the press returned.
     case pressUntilWindowCloses(
-        MenuItemTarget, window: HTMLWindow, guardChecks: [GuardCheck], verify: [WindowCheck], guardTimeoutMs: Int,
+        MenuItemTarget, window: EmlWindow, guardChecks: [GuardCheck], verify: [WindowCheck], guardTimeoutMs: Int,
         maxPresses: Int, readyTimeoutMs: Int, goneTimeoutMs: Int
     )
-    case closeWindow(HTMLWindow)
+    case closeWindow(EmlWindow)
 }
 
-public enum HTMLPlan {
+public enum EmlPlan {
     public static let maxSendPresses = 3
 
-    public static func steps(emlPath: String, send: Bool) -> [HTMLStep] {
+    public static func steps(emlPath: String, send: Bool) -> [EmlStep] {
         let guardChecks = GuardCheck.allCases
         let verify = WindowCheck.allCases
-        var steps: [HTMLStep] = [
+        var steps: [EmlStep] = [
             .requireAccessibility,
             .launchMail(timeoutMs: 10_000),
             .snapshotWindows(.beforeOpen, settle: true),
@@ -149,11 +149,11 @@ public enum HTMLPlan {
     }
 
     /// One JSON object per step (`planJSONLine`).
-    public static func jsonLines(_ steps: [HTMLStep]) -> [String] {
+    public static func jsonLines(_ steps: [EmlStep]) -> [String] {
         steps.map { planJSONLine(fields($0)) }
     }
 
-    static func fields(_ step: HTMLStep) -> [String: Any] {
+    static func fields(_ step: EmlStep) -> [String: Any] {
         switch step {
         case .requireAccessibility:
             return ["step": "require_accessibility"]
@@ -193,17 +193,17 @@ func planJSONLine(_ fields: [String: Any]) -> String {
     return String(decoding: data, as: UTF8.self)
 }
 
-/// The dry run's HTML delivery: prints the plan, one JSON object per line,
+/// The dry run's .eml delivery: prints the plan, one JSON object per line,
 /// and touches nothing else.
-public struct HTMLPlanPrinter: HTMLDelivery {
+public struct EmlPlanPrinter: EmlDelivery {
     let output: (String) -> Void
 
     public init(output: @escaping (String) -> Void) {
         self.output = output
     }
 
-    public func deliverHTML(emlURL: URL, subject: String, send: Bool) throws {
-        for line in HTMLPlan.jsonLines(HTMLPlan.steps(emlPath: emlURL.path, send: send)) {
+    public func deliverEml(emlURL: URL, subject: String, send: Bool) throws {
+        for line in EmlPlan.jsonLines(EmlPlan.steps(emlPath: emlURL.path, send: send)) {
             output(line)
         }
     }

@@ -33,7 +33,7 @@ private func deliver(html: Bool, probe: PermissionProbe, log: EventLog, mail: Fa
     defer { tmp.cleanup() }
     let automation = MailAutomation(
         plain: AppleEventPlainDelivery(events: log.recorder, workspace: mail, clock: mail),
-        html: AXHTMLDelivery(ax: mail, workspace: mail, clock: mail, accessibility: probe.permission(osMajorVersion: osMajorVersion))
+        eml: AXEmlDelivery(ax: mail, workspace: mail, clock: mail, accessibility: probe.permission(osMajorVersion: osMajorVersion))
     )
     try MailDriver.deliver(message(html: html), emlBytes: Data("Subject: a11y\r\n\r\n<p>rich</p>".utf8), options: Options(), tmp: tmp, automation: automation)
 }

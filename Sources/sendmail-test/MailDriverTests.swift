@@ -360,7 +360,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             let recorder = AppleEventRecorder()
             let mail = FakeMail()
             mail.mailRunning = false
-            let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), html: RecordingHTMLDelivery())
+            let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), eml: RecordingEmlDelivery())
             let msg = message()
             try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: automation)
             try expectEqual(mail.launches, 1)
@@ -477,7 +477,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             opts.send = true
             try withTempDir { tmp in
                 let msg = message()
-                let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), html: RecordingHTMLDelivery())
+                let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), eml: RecordingEmlDelivery())
                 try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, automation: automation)
             }
             try expectEqual(mail.launches, 1)
@@ -537,7 +537,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             do {
                 try withTempDir { tmp in
                     let msg = message()
-                    let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), html: RecordingHTMLDelivery())
+                    let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), eml: RecordingEmlDelivery())
                     try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, automation: automation)
                 }
             } catch {
@@ -587,7 +587,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         msg.attachments = [Attachment(filename: "a.txt", contentType: "text/plain", data: Data("a".utf8))]
         try withTempDir { tmp in
             var printed: [String] = []
-            let printer = MailAutomation(plain: PlainPlanPrinter { printed.append($0) }, html: RecordingHTMLDelivery())
+            let printer = MailAutomation(plain: PlainPlanPrinter { printed.append($0) }, eml: RecordingEmlDelivery())
             try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, automation: printer)
             let recorder = AppleEventRecorder()
             try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: recorder)
@@ -602,7 +602,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             var printed: [String] = []
             var msg = message()
             msg.attachments = [Attachment(filename: "a.txt", contentType: "text/plain", data: Data("a".utf8))]
-            let printer = MailAutomation(plain: PlainPlanPrinter { printed.append($0) }, html: RecordingHTMLDelivery())
+            let printer = MailAutomation(plain: PlainPlanPrinter { printed.append($0) }, eml: RecordingEmlDelivery())
             try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: printer)
             let attachLine = printed.first { $0.contains(#""step":"add_attachment""#) } ?? ""
             let path = tmp.url.appendingPathComponent("att-01-a.txt").path
@@ -613,18 +613,18 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
 
     // MARK: - HTML path routing
     //
-    // The HTML path's own steps are covered by the AXHTMLDelivery suite;
+    // The HTML path's own steps are covered by the AXEmlDelivery suite;
     // these check what MailDriver hands it.
 
     TestCase(name: "html_message_hands_its_eml_to_the_html_path_and_sends_no_apple_event") {
         try withTempDir { tmp in
             let recorder = AppleEventRecorder()
-            let html = RecordingHTMLDelivery()
+            let html = RecordingEmlDelivery()
             var msg = ParsedMessage()
             msg.subject = "rich-html-subj"
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.htmlBody = "<p>rich</p>"
-            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: recorder, html: html)
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: recorder, eml: html)
             try expect(recorder.events.isEmpty, "an HTML message must not send Apple Events")
             try expectEqual(html.calls.count, 1)
             let url = html.calls[0].url
@@ -638,13 +638,13 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     TestCase(name: "html_path_gets_the_send_flag") {
         for send in [false, true] {
             try withTempDir { tmp in
-                let html = RecordingHTMLDelivery()
+                let html = RecordingEmlDelivery()
                 var opts = Options()
                 opts.send = send
                 var msg = ParsedMessage()
                 msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
                 msg.htmlBody = "<p>rich</p>"
-                try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: AppleEventRecorder(), html: html)
+                try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: AppleEventRecorder(), eml: html)
                 try expectEqual(html.calls.map(\.send), [send])
             }
         }
@@ -675,7 +675,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         // attach step does not run for HTML messages.
         try withTempDir { tmp in
             let recorder = AppleEventRecorder()
-            let html = RecordingHTMLDelivery()
+            let html = RecordingEmlDelivery()
             var msg = ParsedMessage()
             msg.subject = "html-attach"
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
@@ -698,7 +698,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
                 + "\r\n"
                 + "hi\r\n"
                 + "--B--\r\n"
-            try MailDriver.deliver(msg, emlBytes: Data(emlText.utf8), options: Options(), tmp: tmp, recorder: recorder, html: html)
+            try MailDriver.deliver(msg, emlBytes: Data(emlText.utf8), options: Options(), tmp: tmp, recorder: recorder, eml: html)
             try expectEqual(html.calls.count, 1)
             try expect(recorder.events.isEmpty, "the plain attachment events are bypassed for HTML messages")
             let files = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
@@ -712,12 +712,12 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     TestCase(name: "html_path_skipped_when_html_body_is_whitespace_only") {
         try withTempDir { tmp in
             let recorder = AppleEventRecorder()
-            let html = RecordingHTMLDelivery()
+            let html = RecordingEmlDelivery()
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.body = "plain"
             msg.htmlBody = "   \n\t  \n"
-            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: recorder, html: html)
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: recorder, eml: html)
             try expect(html.calls.isEmpty)
             try expect(recorder.names.contains("core/setd"))
         }
@@ -748,8 +748,8 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             """
             let raw = try RFC822Parser.parse(Data(payload.utf8))
             let msg = MIMEParser.parse(raw)
-            let html = RecordingHTMLDelivery()
-            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: AppleEventRecorder(), html: html)
+            let html = RecordingEmlDelivery()
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: AppleEventRecorder(), eml: html)
             try expect(html.calls.count == 1, "wrapper-with-html must take the HTML path")
         }
     },
@@ -763,11 +763,11 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         var msg = ParsedMessage()
         msg.to = [ParsedAddress(displayName: nil, address: "rcpt@example.test")]
         msg.htmlBody = "<p>hi</p>"
-        let html = RecordingHTMLDelivery()
+        let html = RecordingEmlDelivery()
         html.onDeliver = { _ in
             filesSeenByDelivery = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
         }
-        try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: recordingAutomation(AppleEventRecorder(), html: html))
+        try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: recordingAutomation(AppleEventRecorder(), eml: html))
         try expect(filesSeenByDelivery.contains { $0.hasSuffix(".eml") }, "eml must exist while the HTML path runs")
         try expect(!FileManager.default.fileExists(atPath: tmp.url.path), "temp dir left behind after success")
     },

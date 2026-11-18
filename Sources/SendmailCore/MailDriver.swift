@@ -21,7 +21,7 @@ public enum MailDriver {
     /// Hand the parsed message to Mail.app.
     ///
     /// - For messages with an HTML body, write `emlBytes` to a temp `.eml`
-    ///   and hand it to `automation.html`, which opens it in Mail and
+    ///   and hand it to `automation.eml`, which opens it in Mail and
     ///   converts the viewer into a fresh editable compose with Message >
     ///   Send Again -- the only path that preserves tables, CSS padding,
     ///   monospace backgrounds, etc.
@@ -36,7 +36,7 @@ public enum MailDriver {
     ) throws {
         if shouldUseEditDraft(msg) {
             let emlURL = try tmp.write(emlBytes, name: "compose-\(UUID().uuidString).eml")
-            try automation.html.deliverHTML(emlURL: emlURL, subject: msg.subject, send: options.send)
+            try automation.eml.deliverEml(emlURL: emlURL, subject: msg.subject, send: options.send)
             return
         }
 

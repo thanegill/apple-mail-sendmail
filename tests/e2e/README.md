@@ -329,7 +329,7 @@ the e2e accounts as offline; that is expected.
 The HTML-path templates in [`templates/`](templates)
 (`html-plan-{send,draft}.jsonl.tmpl`) are the dry-run step plans of the
 binary on the branch the harness lives on, with the `.eml` path replaced
-by `<EML>`. A branch that changes `HTMLPlan` makes every HTML scenario
+by `<EML>`. A branch that changes `EmlPlan` makes every HTML scenario
 refuse, with a "plan differs from the … template" diff, until the
 templates are regenerated from that branch's binary. Review the diff
 before committing it. From the repository root:

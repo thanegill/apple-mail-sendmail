@@ -46,8 +46,8 @@ public protocol PlainDelivery {
 /// with Message > Send Again; with `send`, also sends that compose.
 /// `subject` is the message's decoded Subject, which Mail shows as the
 /// viewer's and the compose's title.
-public protocol HTMLDelivery {
-    func deliverHTML(emlURL: URL, subject: String, send: Bool) throws
+public protocol EmlDelivery {
+    func deliverEml(emlURL: URL, subject: String, send: Bool) throws
 }
 
 /// How the binary drives Mail.app, one implementation per path. `MailDriver`
@@ -58,10 +58,10 @@ public protocol HTMLDelivery {
 /// substitute a recorder and never launch Mail.
 public struct MailAutomation {
     public var plain: PlainDelivery
-    public var html: HTMLDelivery
+    public var eml: EmlDelivery
 
-    public init(plain: PlainDelivery, html: HTMLDelivery) {
+    public init(plain: PlainDelivery, eml: EmlDelivery) {
         self.plain = plain
-        self.html = html
+        self.eml = eml
     }
 }

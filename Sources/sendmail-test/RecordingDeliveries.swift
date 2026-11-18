@@ -1,9 +1,9 @@
 import Foundation
 import SendmailCore
 
-/// Records what `MailDriver` hands the HTML path, and whether the `.eml`
+/// Records what `MailDriver` hands the .eml path, and whether the `.eml`
 /// existed at that moment.
-final class RecordingHTMLDelivery: HTMLDelivery {
+final class RecordingEmlDelivery: EmlDelivery {
     struct Call {
         let url: URL
         let subject: String
@@ -14,7 +14,7 @@ final class RecordingHTMLDelivery: HTMLDelivery {
     private(set) var calls: [Call] = []
     var onDeliver: ((URL) throws -> Void)?
 
-    func deliverHTML(emlURL: URL, subject: String, send: Bool) throws {
+    func deliverEml(emlURL: URL, subject: String, send: Bool) throws {
         calls.append(Call(url: emlURL, subject: subject, send: send, emlExisted: FileManager.default.fileExists(atPath: emlURL.path)))
         try onDeliver?(emlURL)
     }
@@ -22,9 +22,9 @@ final class RecordingHTMLDelivery: HTMLDelivery {
 
 /// The real plain path, sending its Apple Events to `recorder` and running
 /// against a fake Mail that is already running.
-func recordingAutomation(_ recorder: AppleEventRecorder, html: HTMLDelivery = RecordingHTMLDelivery()) -> MailAutomation {
+func recordingAutomation(_ recorder: AppleEventRecorder, eml: EmlDelivery = RecordingEmlDelivery()) -> MailAutomation {
     let mail = FakeMail()
-    return MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), html: html)
+    return MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), eml: eml)
 }
 
 /// The `sender` the plain path gives Mail for `msg`, or nil if it sets none.
@@ -39,15 +39,15 @@ func plainSender(_ msg: ParsedMessage, options: Options) throws -> String? {
 
 extension MailDriver {
     /// `deliver` with the plain path's Apple Events going to `recorder`, and
-    /// the HTML path through `html`.
+    /// the .eml path through `eml`.
     static func deliver(
         _ msg: ParsedMessage,
         emlBytes: Data,
         options: Options,
         tmp: TempDir,
         recorder: AppleEventRecorder,
-        html: HTMLDelivery = RecordingHTMLDelivery()
+        eml: EmlDelivery = RecordingEmlDelivery()
     ) throws {
-        try deliver(msg, emlBytes: emlBytes, options: options, tmp: tmp, automation: recordingAutomation(recorder, html: html))
+        try deliver(msg, emlBytes: emlBytes, options: options, tmp: tmp, automation: recordingAutomation(recorder, eml: eml))
     }
 }

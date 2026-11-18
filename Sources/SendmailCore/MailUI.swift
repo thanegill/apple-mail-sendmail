@@ -11,7 +11,7 @@ public struct UIElement: Hashable {
     }
 }
 
-/// The attribute values the HTML path reads.
+/// The attribute values the .eml path reads.
 public enum AXAttributeValue: Equatable {
     case element(UIElement)
     case elements([UIElement])
@@ -21,7 +21,7 @@ public enum AXAttributeValue: Equatable {
     case unsupported
 }
 
-/// The few Accessibility calls the HTML path makes, so tests can drive a
+/// The few Accessibility calls the .eml path makes, so tests can drive a
 /// fake Mail instead of the real one.
 public protocol AXClient {
     /// Mail's application element, with a bounded messaging timeout.

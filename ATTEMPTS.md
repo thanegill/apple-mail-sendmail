@@ -300,7 +300,7 @@ Accessibility, and AppleScript added failure modes of its own:
   are usually resolved by title), so key == main had to be read as
   `AXMain` of `AXFocusedWindow`, with an `AXTitle` cross-check.
 
-The AX driver (`AXHTMLDelivery`) does the same steps with AX element
+The AX driver (`AXEmlDelivery`) does the same steps with AX element
 identity (`CFEqual`) and NSWorkspace, sends no Apple Events, and is unit
 tested against a fake Mail rather than by matching script text.
 
