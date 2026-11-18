@@ -43,15 +43,40 @@ public protocol MailWorkspace {
     func open(_ url: URL, timeout: TimeInterval) throws
 }
 
-/// Time for the HTML path's polls and deadlines.
+/// Time for polls and deadlines.
 public protocol Clock {
     /// Monotonic seconds.
     var now: TimeInterval { get }
     func sleep(_ seconds: TimeInterval)
 }
 
-/// A failure of the HTML path with the message the user sees.
-public struct HTMLDeliveryError: Error, CustomStringConvertible, Equatable {
+extension Clock {
+    /// Calls `body` until it returns non-nil or `timeout` passes; checks at
+    /// least once, and once more at the deadline.
+    func poll<T>(timeout: TimeInterval, interval: TimeInterval = 0.1, _ body: () throws -> T?) rethrows -> T? {
+        let deadline = now + timeout
+        while true {
+            if let value = try body() { return value }
+            if now >= deadline { return nil }
+            sleep(min(interval, max(deadline - now, 0.001)))
+        }
+    }
+}
+
+extension MailWorkspace {
+    /// Mail's pid, starting Mail without activating it if it is not running.
+    func ensureMailRunning(clock: Clock, timeout: TimeInterval) throws -> Int32 {
+        if let pid = runningMailPID() { return pid }
+        try launchMail(timeout: timeout)
+        guard let pid = clock.poll(timeout: timeout, { runningMailPID() }) else {
+            throw DeliveryError("Mail did not start within \(Int(timeout))s")
+        }
+        return pid
+    }
+}
+
+/// A failure driving Mail, with the message the user sees.
+public struct DeliveryError: Error, CustomStringConvertible, Equatable {
     public let message: String
 
     public init(_ message: String) {

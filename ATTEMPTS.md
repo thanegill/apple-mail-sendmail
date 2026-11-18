@@ -130,7 +130,8 @@ Selection", pasteboard)`. Not viable.
 - **`set content` AFTER `make new attachment`.** Silently no-ops — the
   body keeps just the attachment glyph (`U+FFFC`) and the assigned
   text is dropped. The reverse order (set content, then attach) works
-  and is what the rich-RTF and classic paths both use.
+  and is what the rich-RTF path used and the plain path still does
+  (`set_content` before `add_attachment` in `PlainPlan`).
 - **Per-paragraph rich-text-suite build (superseded).** An earlier
   iteration of this branch built the rich body in the dictionary by
   emitting `make new paragraph at end of content with data "..." with
@@ -302,3 +303,18 @@ Accessibility, and AppleScript added failure modes of its own:
 The AX driver (`AXHTMLDelivery`) does the same steps with AX element
 identity (`CFEqual`) and NSWorkspace, sends no Apple Events, and is unit
 tested against a fake Mail rather than by matching script text.
+
+### The plain path as generated AppleScript (worked, then superseded)
+
+Until the raw Apple Events in `AppleEventPlainDelivery`, the plain path
+was one generated `tell application "Mail"` script run through
+NSAppleScript. Every subject, name and address had to be escaped into an
+AppleScript string literal (`AppleScript.quote`, which had to work on
+Unicode scalars, because a `"` fused with a combining mark is one Swift
+`Character` and slipped past a Character-level escape), and the body was
+written to a temp `body.txt` and read back with `read POSIX file ... as
+«class utf8»`. A compile-only test suite caught broken block structure.
+The events are the same ones that script compiled to (see CLAUDE.md, "The
+plain path sends raw Apple Events"), but text now travels as text
+descriptors with nothing to escape, the body needs no file, and the tests
+assert on event classes and parameters rather than on script text.

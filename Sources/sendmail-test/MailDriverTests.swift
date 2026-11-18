@@ -1,14 +1,6 @@
 import Foundation
 import SendmailCore
 
-private final class Recorder {
-    var scripts: [String] = []
-    func run(_ source: String) throws {
-        scripts.append(source)
-        capturedMailDriverScripts.append(CapturedScript(testName: currentTestName, source: source))
-    }
-}
-
 private func withTempDir(_ body: (TempDir) throws -> Void) throws {
     let tmp = try TempDir()
     defer { tmp.cleanup() }
@@ -33,345 +25,388 @@ private func syntheticEml(for msg: ParsedMessage) -> Data {
     }
 }
 
-/// Substring search over unicode scalars, so a needle that starts or ends
-/// inside a grapheme cluster of the haystack still matches exactly.
-private func scalarsContain(_ haystack: String, _ needle: String) -> Bool {
-    let hayScalars = Array(haystack.unicodeScalars)
-    let needleScalars = Array(needle.unicodeScalars)
-    guard !needleScalars.isEmpty, needleScalars.count <= hayScalars.count else { return needleScalars.isEmpty }
-    for start in 0...(hayScalars.count - needleScalars.count)
-    where hayScalars[start..<(start + needleScalars.count)].elementsEqual(needleScalars) {
-        return true
+/// Run `msg` through the plain path and return the recorded Apple Events.
+private func plainEvents(_ msg: ParsedMessage, options: Options = Options(), emlBytes: Data? = nil) throws -> AppleEventRecorder {
+    let recorder = AppleEventRecorder()
+    try withTempDir { tmp in
+        try MailDriver.deliver(msg, emlBytes: emlBytes ?? syntheticEml(for: msg), options: options, tmp: tmp, recorder: recorder)
     }
-    return false
+    return recorder
 }
 
 /// Run a plain-text message with the given raw `From:` value through the
-/// real parsers and the classic path, returning the emitted script.
-private func classicScript(fromHeader: String, tmp: TempDir) throws -> String {
+/// real parsers and the plain path.
+private func plainEvents(fromHeader: String) throws -> AppleEventRecorder {
     let input = "From: \(fromHeader)\nTo: u@example.test\nSubject: s\nContent-Type: text/plain\n\nbody\n"
-    let raw = try RFC822Parser.parse(Data(input.utf8))
-    let msg = MIMEParser.parse(raw)
-    let recorder = Recorder()
-    return try MailDriver.deliver(msg, emlBytes: Data(input.utf8), options: Options(), tmp: tmp, runner: recorder.run)
+    let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+    return try plainEvents(msg, emlBytes: Data(input.utf8))
 }
 
+private func message(to address: String = "u@h", subject: String = "s", body: String = "b") -> ParsedMessage {
+    var msg = ParsedMessage()
+    msg.subject = subject
+    msg.to = [ParsedAddress(displayName: nil, address: address)]
+    msg.body = body
+    return msg
+}
+
+private let messageContent = AEValue.specifier(want: "prop", from: recordedMessageSpecifier, form: "prop", seld: .type("ctnt"))
+
 let mailDriverTests = TestSuite(name: "MailDriver", cases: [
-    TestCase(name: "draft_mode_emits_visible_true_and_no_send") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.subject = "Hello"
-            msg.to = [ParsedAddress(displayName: "Alice", address: "alice@example.com")]
-            msg.body = "Body."
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expectEqual(recorder.scripts.count, 1)
-            try expect(script.contains("visible:true"))
-            try expect(!script.contains("\n        send"), "draft must not emit send")
-            try expect(script.contains("subject:\"Hello\""))
-            try expect(script.contains("alice@example.com"))
-            try expect(script.contains("name:\"Alice\""))
+    // MARK: - Plain path events
+
+    TestCase(name: "draft_mode_makes_a_visible_message_and_never_sends") {
+        var msg = message(subject: "Hello", body: "Body.")
+        msg.to = [ParsedAddress(displayName: "Alice", address: "alice@example.com")]
+        let recorder = try plainEvents(msg)
+        try expectEqual(recorder.names, ["core/crel", "core/setd", "core/crel"])
+        try expectEqual(recorder.messageProperties["pvis"], .bool(true))
+        try expectEqual(recorder.messageProperties["subj"], .text("Hello"))
+        try expect(!recorder.names.contains("emsg/send"), "a draft must not be sent")
+        let recipient = recorder.creations(of: "trcp")
+        try expectEqual(recipient.count, 1)
+        try expectEqual(recipient[0].params["prdt"], .record(["radd": .text("alice@example.com"), "pnam": .text("Alice")]))
+    },
+
+    TestCase(name: "send_mode_makes_an_invisible_message_and_sends_it_last") {
+        var opts = Options()
+        opts.send = true
+        let recorder = try plainEvents(message(to: "x@y", subject: "S"), options: opts)
+        try expectEqual(recorder.messageProperties["pvis"], .bool(false))
+        try expectEqual(recorder.names.last, "emsg/send")
+        try expectEqual(recorder.names.filter { $0 == "emsg/send" }.count, 1)
+        try expectEqual(recorder.events.last?.params["----"], recordedMessageSpecifier)
+    },
+
+    TestCase(name: "every_event_targets_mail_by_bundle_id") {
+        var opts = Options()
+        opts.send = true
+        let recorder = try plainEvents(message(), options: opts)
+        for event in recorder.events {
+            try expectEqual(event.target, "com.apple.mail")
         }
     },
 
-    TestCase(name: "send_mode_emits_visible_false_and_send_verb") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var opts = Options()
-            opts.send = true
-            var msg = ParsedMessage()
-            msg.subject = "S"
-            msg.to = [ParsedAddress(displayName: nil, address: "x@y")]
-            msg.body = "b"
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
-            try expect(script.contains("visible:false"))
-            try expect(script.contains("\n        send"))
-        }
+    TestCase(name: "make_message_names_the_outgoing_message_class_and_nothing_else") {
+        let recorder = try plainEvents(message())
+        let make = recorder.events[0]
+        try expectEqual(make.name, "core/crel")
+        try expectEqual(Set(make.params.keys), ["kocl", "prdt"])
+        try expectEqual(make.params["kocl"], .type("bcke"))
     },
 
     TestCase(name: "sender_combined_from_F_and_f") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var opts = Options()
-            opts.fromName = "Bot"
-            opts.fromAddress = "bot@x.com"
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
-            try expect(script.contains("sender:\"Bot <bot@x.com>\""))
-        }
+        var opts = Options()
+        opts.fromName = "Bot"
+        opts.fromAddress = "bot@x.com"
+        let recorder = try plainEvents(message(to: "u@h"), options: opts)
+        try expectEqual(recorder.messageProperties["sndr"], .text("Bot <bot@x.com>"))
     },
 
     TestCase(name: "sender_address_only") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var opts = Options()
-            opts.fromAddress = "bare@x.com"
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
-            try expect(script.contains("sender:\"bare@x.com\""))
-        }
+        var opts = Options()
+        opts.fromAddress = "bare@x.com"
+        let recorder = try plainEvents(message(to: "u@h"), options: opts)
+        try expectEqual(recorder.messageProperties["sndr"], .text("bare@x.com"))
     },
 
     TestCase(name: "sender_f_without_domain_passed_through") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var opts = Options()
-            opts.fromAddress = "root"
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
-            msg.body = "b"
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
-            try expect(script.contains("sender:\"root\""), "the header-From domain check must not filter an explicit -f")
-        }
+        var opts = Options()
+        opts.fromAddress = "root"
+        let recorder = try plainEvents(message(to: "u@example.test"), options: opts)
+        // The header-From domain check must not filter an explicit -f.
+        try expectEqual(recorder.messageProperties["sndr"], .text("root"))
     },
 
     TestCase(name: "sender_from_header_when_no_f") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.from = ParsedAddress(displayName: nil, address: "work@example.test")
-            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
-            msg.body = "b"
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("sender:\"work@example.test\""), "header From must select the account")
-        }
+        var msg = message(to: "u@example.test")
+        msg.from = ParsedAddress(displayName: nil, address: "work@example.test")
+        let recorder = try plainEvents(msg)
+        try expectEqual(recorder.messageProperties["sndr"], .text("work@example.test"))
     },
 
     TestCase(name: "sender_f_overrides_header_from") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var opts = Options()
-            opts.fromAddress = "cli@example.test"
-            var msg = ParsedMessage()
-            msg.from = ParsedAddress(displayName: "Work Bot", address: "work@example.test")
-            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
-            msg.body = "b"
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
-            try expect(script.contains("sender:\"cli@example.test\""))
-            try expect(!script.contains("work@example.test"), "-f must fully replace the header From, display name included")
-        }
+        var opts = Options()
+        opts.fromAddress = "cli@example.test"
+        var msg = message(to: "u@example.test")
+        msg.from = ParsedAddress(displayName: "Work Bot", address: "work@example.test")
+        let recorder = try plainEvents(msg, options: opts)
+        try expectEqual(recorder.messageProperties["sndr"], .text("cli@example.test"))
+        try expect(!recorder.allTexts.contains { $0.contains("work@example.test") }, "-f must fully replace the header From, display name included")
     },
 
     TestCase(name: "sender_F_without_f_keeps_header_from") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var opts = Options()
-            opts.fromName = "Ignored Name"
-            var msg = ParsedMessage()
-            msg.from = ParsedAddress(displayName: "Work Bot", address: "work@example.test")
-            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
-            msg.body = "b"
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
-            try expect(script.contains("sender:\"Work Bot <work@example.test>\""))
-            try expect(!script.contains("Ignored Name"))
-        }
+        var opts = Options()
+        opts.fromName = "Ignored Name"
+        var msg = message(to: "u@example.test")
+        msg.from = ParsedAddress(displayName: "Work Bot", address: "work@example.test")
+        let recorder = try plainEvents(msg, options: opts)
+        try expectEqual(recorder.messageProperties["sndr"], .text("Work Bot <work@example.test>"))
+        try expect(!recorder.allTexts.contains { $0.contains("Ignored Name") })
     },
 
     TestCase(name: "sender_omitted_without_f_or_header_from") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var opts = Options()
-            opts.fromName = "Ignored Name"
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
-            msg.body = "b"
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
-            try expect(!script.contains("sender:"))
-        }
+        var opts = Options()
+        opts.fromName = "Ignored Name"
+        let recorder = try plainEvents(message(to: "u@example.test"), options: opts)
+        try expectNil(recorder.messageProperties["sndr"])
+        try expectEqual(Set(recorder.messageProperties.keys), ["subj", "pvis"])
     },
 
     TestCase(name: "sender_omitted_for_cron_daemon_header_from") {
-        try withTempDir { tmp in
-            let script = try classicScript(fromHeader: "root (Cron Daemon)", tmp: tmp)
-            try expect(!script.contains("sender:"), "a local-only cron From must leave Mail on its default account")
-        }
+        try expectNil(try plainEvents(fromHeader: "root (Cron Daemon)").messageProperties["sndr"])
     },
 
     TestCase(name: "sender_omitted_for_bare_local_header_from") {
-        try withTempDir { tmp in
-            let script = try classicScript(fromHeader: "root", tmp: tmp)
-            try expect(!script.contains("sender:"))
-        }
+        try expectNil(try plainEvents(fromHeader: "root").messageProperties["sndr"])
     },
 
     TestCase(name: "sender_omitted_for_empty_group_header_from") {
-        try withTempDir { tmp in
-            let script = try classicScript(fromHeader: "undisclosed-recipients:;", tmp: tmp)
-            try expect(!script.contains("sender:"))
-        }
+        try expectNil(try plainEvents(fromHeader: "undisclosed-recipients:;").messageProperties["sndr"])
     },
 
     TestCase(name: "sender_from_parsed_header_with_encoded_display_name") {
-        try withTempDir { tmp in
-            let input = """
-            From: =?UTF-8?B?QsO8cm8gQm90?= <work@example.test>
-            To: u@example.test
-            Subject: cron
-            Content-Type: text/plain; charset=utf-8
+        let input = """
+        From: =?UTF-8?B?QsO8cm8gQm90?= <work@example.test>
+        To: u@example.test
+        Subject: cron
+        Content-Type: text/plain; charset=utf-8
 
-            plain body
-            """
-            let raw = try RFC822Parser.parse(Data(input.utf8))
-            let msg = MIMEParser.parse(raw)
-            let recorder = Recorder()
-            let script = try MailDriver.deliver(msg, emlBytes: Data(input.utf8), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("sender:\"Büro Bot <work@example.test>\""))
-        }
+        plain body
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        let recorder = try plainEvents(msg, emlBytes: Data(input.utf8))
+        try expectEqual(recorder.messageProperties["sndr"], .text("Büro Bot <work@example.test>"))
     },
 
-    TestCase(name: "cc_and_bcc_recipient_lines_emitted") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "a@x")]
-            msg.cc = [ParsedAddress(displayName: nil, address: "b@y")]
-            msg.bcc = [ParsedAddress(displayName: nil, address: "c@z")]
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("make new to recipient at end of to recipients"))
-            try expect(script.contains("make new cc recipient at end of cc recipients"))
-            try expect(script.contains("make new bcc recipient at end of bcc recipients"))
-            try expect(script.contains("address:\"a@x\""))
-            try expect(script.contains("address:\"b@y\""))
-            try expect(script.contains("address:\"c@z\""))
+    TestCase(name: "to_cc_and_bcc_recipients_are_made_at_the_end_of_their_own_list") {
+        var msg = message(to: "a@x")
+        msg.cc = [ParsedAddress(displayName: nil, address: "b@y")]
+        msg.bcc = [ParsedAddress(displayName: nil, address: "c@z")]
+        let recorder = try plainEvents(msg)
+        for (classCode, address) in [("trcp", "a@x"), ("crcp", "b@y"), ("brcp", "c@z")] {
+            let made = recorder.creations(of: classCode)
+            try expectEqual(made.count, 1)
+            try expectEqual(made[0].params["prdt"], .record(["radd": .text(address)]))
+            try expectEqual(
+                made[0].params["insh"],
+                .insertion(position: "end ", object: .specifier(want: classCode, from: recordedMessageSpecifier, form: "indx", seld: .ordinal("all ")))
+            )
         }
+        try expectEqual(recorder.names, ["core/crel", "core/setd", "core/crel", "core/crel", "core/crel"])
     },
 
-    TestCase(name: "attachment_makes_temp_file_and_references_it") {
+    TestCase(name: "recipient_without_a_display_name_sets_no_name") {
+        var msg = message(to: "a@x")
+        msg.to.append(ParsedAddress(displayName: "", address: "b@x"))
+        let recorder = try plainEvents(msg)
+        try expectEqual(recorder.creations(of: "trcp").map { $0.params["prdt"] }, [
+            .record(["radd": .text("a@x")]),
+            .record(["radd": .text("b@x")]),
+        ])
+    },
+
+    TestCase(name: "attachment_makes_temp_file_and_attaches_it_after_the_last_paragraph") {
         try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
+            let recorder = AppleEventRecorder()
+            var msg = message()
             msg.attachments = [
                 Attachment(filename: "note.txt", contentType: "text/plain", data: Data("hello\n".utf8))
             ]
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("make new attachment with properties {file name:(POSIX file"))
-            let contents = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
-            let attFile = contents.first(where: { $0.hasPrefix("att-") })
-            try expectNotNil(attFile)
-            let attData = try Data(contentsOf: tmp.url.appendingPathComponent(attFile!))
-            try expectEqual(attData, Data("hello\n".utf8))
+            var attachedData: Data?
+            recorder.onSend = { event in
+                if event.params["kocl"] == .type("atts"), case let .record(fields)? = event.params["prdt"], case let .fileURL(path)? = fields["atfn"] {
+                    attachedData = try Data(contentsOf: URL(fileURLWithPath: path))
+                    try expect(URL(fileURLWithPath: path).lastPathComponent == "att-01-note.txt", "unexpected staged name \(path)")
+                    try expectEqual(URL(fileURLWithPath: path).deletingLastPathComponent().path, tmp.url.path)
+                }
+            }
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: recorder)
+            try expectEqual(attachedData, Data("hello\n".utf8))
+            let attach = recorder.creations(of: "atts")
+            try expectEqual(attach.count, 1)
+            try expectEqual(
+                attach[0].params["insh"],
+                .insertion(position: "afte", object: .specifier(want: "cpar", from: messageContent, form: "indx", seld: .ordinal("last")))
+            )
         }
     },
 
-    TestCase(name: "body_written_to_temp_file_with_quotes_and_backslashes") {
+    TestCase(name: "attachments_come_after_recipients_and_before_send") {
+        var opts = Options()
+        opts.send = true
+        var msg = message()
+        msg.attachments = [
+            Attachment(filename: "a.txt", contentType: "text/plain", data: Data("a".utf8)),
+            Attachment(filename: "b.txt", contentType: "text/plain", data: Data("b".utf8)),
+        ]
+        let recorder = try plainEvents(msg, options: opts)
+        let kinds = recorder.events.map { $0.params["kocl"].map(\.description) ?? $0.name }
+        try expectEqual(kinds, ["type(bcke)", "core/setd", "type(trcp)", "type(atts)", "type(atts)", "emsg/send"])
+    },
+
+    TestCase(name: "body_is_set_as_text_verbatim_without_a_temp_file") {
         try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.body = "Body with \"quotes\" and \\backslashes."
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("body.txt"))
-            let body = try String(contentsOf: tmp.url.appendingPathComponent("body.txt"), encoding: .utf8)
-            try expectEqual(body, "Body with \"quotes\" and \\backslashes.")
+            let recorder = AppleEventRecorder()
+            let msg = message(body: "Body with \"quotes\" and \\backslashes.\nline two")
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: recorder)
+            let setContent = recorder.events.filter { $0.name == "core/setd" }
+            try expectEqual(setContent.count, 1)
+            try expectEqual(setContent[0].params["----"], messageContent)
+            try expectEqual(setContent[0].params["data"], .text("Body with \"quotes\" and \\backslashes.\nline two"))
+            try expect(!FileManager.default.fileExists(atPath: tmp.url.appendingPathComponent("body.txt").path), "the body needs no file any more")
         }
     },
 
-    TestCase(name: "subject_with_special_chars_is_escaped") {
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.subject = "He said \"hi\" \\"
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.contains("subject:\"He said \\\"hi\\\" \\\\\""))
+    TestCase(name: "subject_is_passed_verbatim") {
+        for subject in ["He said \"hi\" \\", "before\u{2028}after\u{2029}end", "a\r\nb", "caf\u{E9} \u{1F600}"] {
+            let recorder = try plainEvents(message(subject: subject))
+            try expectEqual(recorder.messageProperties["subj"], .text(subject))
         }
     },
 
-    TestCase(name: "subject_with_line_separator_does_not_split_literal") {
-        // AppleScript.quote must not pass U+2028 (LINE SEPARATOR) or U+2029
-        // (PARAGRAPH SEPARATOR) through raw -- they could split the
-        // double-quoted literal. They are mapped to an escaped \n.
-        try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            msg.subject = "before\u{2028}after\u{2029}end"
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(!script.contains("\u{2028}"), "raw U+2028 must not appear in the emitted literal")
-            try expect(!script.contains("\u{2029}"), "raw U+2029 must not appear in the emitted literal")
-            try expect(script.contains("subject:\"before\\nafter\\nend\""))
-        }
-    },
-
-    TestCase(name: "quote_escapes_crlf_grapheme_cluster") {
-        // Swift fuses "\r\n" into one Character, which matches neither the
-        // "\r" nor the "\n" case of a Character-level switch.
-        let quoted = AppleScript.quote("a\r\nb")
-        try expectEqual(quoted, "\"a\\r\\nb\"")
-        try expect(!quoted.unicodeScalars.contains("\r"), "raw CR must not appear in the literal")
-        try expect(!quoted.unicodeScalars.contains("\n"), "raw LF must not appear in the literal")
-    },
-
-    TestCase(name: "quote_maps_control_with_combining_mark_to_space") {
-        // The combining mark must survive while the control before it is
-        // still escaped or mapped to a space.
-        let quoted = AppleScript.quote("a\u{01}\u{0301}b\r\u{0301}c")
-        try expectEqual(quoted, "\"a \u{0301}b\\r\u{0301}c\"")
-        try expect(!quoted.unicodeScalars.contains { $0.value < 0x20 }, "no raw C0 control may appear in the literal")
-    },
-
-    TestCase(name: "quote_existing_escapes_unchanged") {
-        try expectEqual(AppleScript.quote(""), "\"\"")
-        try expectEqual(AppleScript.quote("plain ASCII 123"), "\"plain ASCII 123\"")
-        try expectEqual(AppleScript.quote("q\"b\\"), "\"q\\\"b\\\\\"")
-        try expectEqual(AppleScript.quote("n\nr\rt\t"), "\"n\\nr\\rt\\t\"")
-        try expectEqual(AppleScript.quote("ls\u{2028}ps\u{2029}"), "\"ls\\nps\\n\"")
-        try expectEqual(AppleScript.quote("nul\u{00}esc\u{1B}us\u{1F}"), "\"nul esc us \"")
-        try expectEqual(AppleScript.quote("del\u{7F}"), "\"del\u{7F}\"")
-        try expectEqual(AppleScript.quote("caf\u{E9} e\u{0301} \u{1F600} \u{1F1FA}\u{1F1F8}"), "\"caf\u{E9} e\u{0301} \u{1F600} \u{1F1FA}\u{1F1F8}\"")
-    },
-
-    // A `"` or `\` that shares a grapheme cluster with a neighbour (GB9,
-    // GB9a, GB9b) is not a bare "\"" Character, so a Character-level switch
-    // passed it through unescaped and it could end the literal.
-    TestCase(name: "quote_escapes_quote_followed_by_combining_mark") {
-        try expectEqual(AppleScript.quote("\"\u{0301}"), "\"\\\"\u{0301}\"")
-    },
-
-    TestCase(name: "quote_escapes_quote_preceded_by_prepend") {
-        try expectEqual(AppleScript.quote("\u{0600}\""), "\"\u{0600}\\\"\"")
-    },
-
-    TestCase(name: "quote_escapes_backslash_followed_by_combining_mark") {
-        try expectEqual(AppleScript.quote("\\\u{0301}"), "\"\\\\\u{0301}\"")
-    },
-
-    TestCase(name: "encoded_subject_cannot_inject_applescript") {
+    TestCase(name: "encoded_subject_stays_one_text_parameter") {
+        // What once had to be escaped into an AppleScript literal is now one
+        // text parameter, whatever it contains.
         let payload = "X\u{0600}\" & (count {1, 2, 3}) & (character id {80, 87, 78}) & \"\u{0301}"
         let encoded = "=?UTF-8?B?" + Data(payload.utf8).base64EncodedString() + "?="
         let eml = Data("To: u@h\r\nSubject: \(encoded)\r\n\r\nbody\r\n".utf8)
         let msg = MIMEParser.parse(try RFC822Parser.parse(eml))
         try expectEqual(msg.subject, payload)
+        let recorder = try plainEvents(msg, emlBytes: eml)
+        try expectEqual(recorder.messageProperties["subj"], .text(payload))
+        try expectEqual(recorder.names, ["core/crel", "core/setd", "core/crel"])
+    },
+
+    TestCase(name: "no_attachments_means_no_attachment_event") {
+        let recorder = try plainEvents(message())
+        try expect(recorder.creations(of: "atts").isEmpty)
+    },
+
+    TestCase(name: "plain_path_launches_mail_without_activating_it_when_not_running") {
         try withTempDir { tmp in
-            let recorder = Recorder()
-            let script = try MailDriver.deliver(msg, emlBytes: eml, options: Options(), tmp: tmp, runner: recorder.run)
-            let escapedLiteral = "subject:\"X\u{0600}\\\" & (count {1, 2, 3}) & (character id {80, 87, 78}) & \\\"\u{0301}\""
-            try expect(scalarsContain(script, escapedLiteral), "subject must be emitted as one escaped literal")
-            try expect(!scalarsContain(script, "\u{0600}\" & (count"), "unescaped quote would end the literal and run the injected expression")
+            let recorder = AppleEventRecorder()
+            let mail = FakeMail()
+            mail.mailRunning = false
+            let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), html: RecordingHTMLDelivery())
+            let msg = message()
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: automation)
+            try expectEqual(mail.launches, 1)
+            try expect(mail.openedURLs.isEmpty)
+            try expectEqual(recorder.names.first, "core/crel")
         }
     },
 
-    TestCase(name: "no_attachments_means_no_attachment_block") {
+    TestCase(name: "plain_path_stops_at_the_first_failed_event") {
+        let recorder = AppleEventRecorder()
+        recorder.failure = (index: 0, error: AppleEventError(code: -1743, message: "Not authorized to send Apple events to Mail."))
+        var opts = Options()
+        opts.send = true
+        var thrown: Error?
+        do {
+            try withTempDir { tmp in
+                let msg = message()
+                try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: recorder)
+            }
+        } catch {
+            thrown = error
+        }
+        try expectEqual((thrown as? AppleEventError)?.code, -1743)
+        try expectEqual(recorder.events.count, 1)
+    },
+
+    TestCase(name: "a_failed_recipient_never_reaches_send") {
+        let recorder = AppleEventRecorder()
+        recorder.failure = (index: 2, error: AppleEventError(code: -10000, message: "Apple event handler failed."))
+        var opts = Options()
+        opts.send = true
+        var thrown: Error?
+        do {
+            try withTempDir { tmp in
+                let msg = message()
+                try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: recorder)
+            }
+        } catch {
+            thrown = error
+        }
+        try expectEqual((thrown as? AppleEventError)?.code, -10000)
+        try expect(!recorder.names.contains("emsg/send"))
+    },
+
+    TestCase(name: "make_message_reply_without_a_message_is_an_error_before_anything_else") {
+        let recorder = AppleEventRecorder()
+        recorder.replyWithoutMessage = true
+        var thrown: Error?
+        do {
+            try withTempDir { tmp in
+                let msg = message()
+                try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: recorder)
+            }
+        } catch {
+            thrown = error
+        }
+        try expectEqual(thrown as? DeliveryError, DeliveryError("Mail did not return the new outgoing message"))
+        try expectEqual(recorder.events.count, 1)
+    },
+
+    // MARK: - Plain plan and dry run
+
+    TestCase(name: "plain_plan_prints_one_json_object_per_step") {
+        let compose = PlainCompose(
+            subject: "Hi \"there\"", sender: "Ops <ops@example.test>", body: "line\nnext",
+            to: [ParsedAddress(displayName: "A", address: "a@example.test")],
+            cc: [ParsedAddress(displayName: nil, address: "c@example.test")],
+            bcc: [],
+            attachmentURLs: [URL(fileURLWithPath: "/tmp/x/att-01-a.txt")],
+            send: true
+        )
+        try expectEqual(PlainPlan.jsonLines(PlainPlan.steps(compose)), [
+            #"{"activates":false,"step":"launch_mail","timeout_ms":10000}"#,
+            #"{"sender":"Ops <ops@example.test>","step":"make_message","subject":"Hi \"there\"","visible":false}"#,
+            #"{"step":"set_content","text":"line\nnext"}"#,
+            #"{"address":"a@example.test","kind":"to","name":"A","step":"add_recipient"}"#,
+            #"{"address":"c@example.test","kind":"cc","name":null,"step":"add_recipient"}"#,
+            #"{"path":"/tmp/x/att-01-a.txt","step":"add_attachment"}"#,
+            #"{"step":"send"}"#,
+        ])
+    },
+
+    TestCase(name: "plain_draft_plan_has_no_send_and_a_null_sender_when_none_is_set") {
+        let compose = PlainCompose(subject: "s", sender: nil, body: "b", to: [ParsedAddress(displayName: nil, address: "a@x")], cc: [], bcc: [], attachmentURLs: [], send: false)
+        let lines = PlainPlan.jsonLines(PlainPlan.steps(compose))
+        try expectEqual(lines[1], #"{"sender":null,"step":"make_message","subject":"s","visible":true}"#)
+        try expect(!lines.contains(#"{"step":"send"}"#))
+    },
+
+    TestCase(name: "each_plan_step_after_launch_sends_exactly_one_event") {
+        var opts = Options()
+        opts.send = true
+        var msg = message()
+        msg.cc = [ParsedAddress(displayName: nil, address: "c@x")]
+        msg.attachments = [Attachment(filename: "a.txt", contentType: "text/plain", data: Data("a".utf8))]
         try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(!script.contains("make new attachment"))
+            var printed: [String] = []
+            let printer = MailAutomation(plain: PlainPlanPrinter { printed.append($0) }, html: RecordingHTMLDelivery())
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, automation: printer)
+            let recorder = AppleEventRecorder()
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: recorder)
+            try expectEqual(recorder.events.count, printed.count - 1)
         }
     },
 
-    TestCase(name: "runner_receives_well_formed_tell_block") {
+    TestCase(name: "plain_plan_printer_sends_no_events_and_launches_nothing") {
+        // The printer has no Apple Event or Launch Services dependency at all;
+        // this checks it still stages the attachment it names.
         try withTempDir { tmp in
-            let recorder = Recorder()
-            var msg = ParsedMessage()
-            msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
-            try expect(script.hasPrefix("tell application \"Mail\""))
-            try expect(script.hasSuffix("end tell"))
+            var printed: [String] = []
+            var msg = message()
+            msg.attachments = [Attachment(filename: "a.txt", contentType: "text/plain", data: Data("a".utf8))]
+            let printer = MailAutomation(plain: PlainPlanPrinter { printed.append($0) }, html: RecordingHTMLDelivery())
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: printer)
+            let attachLine = printed.first { $0.contains(#""step":"add_attachment""#) } ?? ""
+            let path = tmp.url.appendingPathComponent("att-01-a.txt").path
+            try expect(attachLine.contains(path), "attachment step must name the staged file: \(attachLine)")
+            try expect(FileManager.default.fileExists(atPath: path))
         }
     },
 
@@ -380,16 +415,16 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     // The HTML path's own steps are covered by the AXHTMLDelivery suite;
     // these check what MailDriver hands it.
 
-    TestCase(name: "html_message_hands_its_eml_to_the_html_path_and_runs_no_applescript") {
+    TestCase(name: "html_message_hands_its_eml_to_the_html_path_and_sends_no_apple_event") {
         try withTempDir { tmp in
-            let recorder = Recorder()
+            let recorder = AppleEventRecorder()
             let html = RecordingHTMLDelivery()
             var msg = ParsedMessage()
             msg.subject = "rich-html-subj"
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.htmlBody = "<p>rich</p>"
-            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run, html: html)
-            try expect(recorder.scripts.isEmpty, "an HTML message must not run AppleScript")
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: recorder, html: html)
+            try expect(recorder.events.isEmpty, "an HTML message must not send Apple Events")
             try expectEqual(html.calls.count, 1)
             let url = html.calls[0].url
             try expect(url.lastPathComponent.hasPrefix("compose-") && url.pathExtension == "eml", "unexpected eml name \(url.lastPathComponent)")
@@ -407,7 +442,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
                 var msg = ParsedMessage()
                 msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
                 msg.htmlBody = "<p>rich</p>"
-                try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: Recorder().run, html: html)
+                try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, recorder: AppleEventRecorder(), html: html)
                 try expectEqual(html.calls.map(\.send), [send])
             }
         }
@@ -419,7 +454,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.subject = "x"
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.htmlBody = "<p>HTML payload</p>"
-            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: Recorder().run)
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: AppleEventRecorder())
             let emlFiles = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
                 .filter { $0.hasSuffix(".eml") }
             try expectEqual(emlFiles.count, 1)
@@ -431,13 +466,13 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
 
     TestCase(name: "html_path_carries_attachment_through_eml") {
         // A message with an HTML body AND an attachment routes to the HTML
-        // path, which bypasses the classic `make new attachment` code -- the
+        // path, which bypasses the plain path's attachment events -- the
         // attachment rides inside the raw .eml instead. Verified live
         // (2026-07-09): note7.txt arrived attached. This guards that the .eml
-        // handed to Mail still carries the attachment part and that the
-        // classic attach code does not run for HTML messages.
+        // handed to Mail still carries the attachment part and that the plain
+        // attach step does not run for HTML messages.
         try withTempDir { tmp in
-            let recorder = Recorder()
+            let recorder = AppleEventRecorder()
             let html = RecordingHTMLDelivery()
             var msg = ParsedMessage()
             msg.subject = "html-attach"
@@ -461,9 +496,9 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
                 + "\r\n"
                 + "hi\r\n"
                 + "--B--\r\n"
-            try MailDriver.deliver(msg, emlBytes: Data(emlText.utf8), options: Options(), tmp: tmp, runner: recorder.run, html: html)
+            try MailDriver.deliver(msg, emlBytes: Data(emlText.utf8), options: Options(), tmp: tmp, recorder: recorder, html: html)
             try expectEqual(html.calls.count, 1)
-            try expect(recorder.scripts.isEmpty, "classic attachment code is bypassed for HTML messages")
+            try expect(recorder.events.isEmpty, "the plain attachment events are bypassed for HTML messages")
             let files = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
             try expect(!files.contains { $0.hasPrefix("att-") }, "HTML messages stage no attachment files")
             let written = String(data: try Data(contentsOf: html.calls[0].url), encoding: .utf8) ?? ""
@@ -474,15 +509,15 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
 
     TestCase(name: "html_path_skipped_when_html_body_is_whitespace_only") {
         try withTempDir { tmp in
-            let recorder = Recorder()
+            let recorder = AppleEventRecorder()
             let html = RecordingHTMLDelivery()
             var msg = ParsedMessage()
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             msg.body = "plain"
             msg.htmlBody = "   \n\t  \n"
-            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run, html: html)
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: recorder, html: html)
             try expect(html.calls.isEmpty)
-            try expect(script.contains("set content to (read"))
+            try expect(recorder.names.contains("core/setd"))
         }
     },
 
@@ -512,10 +547,12 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             let raw = try RFC822Parser.parse(Data(payload.utf8))
             let msg = MIMEParser.parse(raw)
             let html = RecordingHTMLDelivery()
-            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: Recorder().run, html: html)
+            try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, recorder: AppleEventRecorder(), html: html)
             try expect(html.calls.count == 1, "wrapper-with-html must take the HTML path")
         }
     },
+
+    // MARK: - Temp-dir cleanup
 
     TestCase(name: "deliver_then_clean_up_removes_tmp_after_html_success") {
         let tmp = try TempDir()
@@ -528,29 +565,27 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         html.onDeliver = { _ in
             filesSeenByDelivery = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
         }
-        let automation = MailAutomation(plain: AppleScriptPlainDelivery(staging: tmp, runner: Recorder().run), html: html)
-        try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: automation)
+        try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: recordingAutomation(AppleEventRecorder(), html: html))
         try expect(filesSeenByDelivery.contains { $0.hasSuffix(".eml") }, "eml must exist while the HTML path runs")
         try expect(!FileManager.default.fileExists(atPath: tmp.url.path), "temp dir left behind after success")
     },
 
-    TestCase(name: "deliver_then_clean_up_removes_tmp_after_classic_success") {
+    TestCase(name: "deliver_then_clean_up_removes_tmp_after_plain_success") {
         let tmp = try TempDir()
         defer { tmp.cleanup() }
-        var filesSeenByRunner: [String] = []
+        var filesSeenWhileSending: [String] = []
         var msg = ParsedMessage()
         msg.to = [ParsedAddress(displayName: nil, address: "rcpt@example.test")]
         msg.body = "plain"
         msg.attachments = [
             Attachment(filename: "note.txt", contentType: "text/plain", data: Data("hello\n".utf8))
         ]
-        let plain = AppleScriptPlainDelivery(staging: tmp) { _ in
-            filesSeenByRunner = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
+        let recorder = AppleEventRecorder()
+        recorder.onSend = { _ in
+            filesSeenWhileSending = try FileManager.default.contentsOfDirectory(atPath: tmp.url.path)
         }
-        let automation = MailAutomation(plain: plain, html: RecordingHTMLDelivery())
-        try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: automation)
-        try expect(filesSeenByRunner.contains("body.txt"), "body must exist while the script runs")
-        try expect(filesSeenByRunner.contains { $0.hasPrefix("att-") }, "attachment must exist while the script runs")
+        try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: recordingAutomation(recorder))
+        try expect(filesSeenWhileSending.contains { $0.hasPrefix("att-") }, "attachment must exist while the events are sent")
         try expect(!FileManager.default.fileExists(atPath: tmp.url.path), "temp dir left behind after success")
     },
 
@@ -560,16 +595,15 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         var msg = ParsedMessage()
         msg.to = [ParsedAddress(displayName: nil, address: "rcpt@example.test")]
         msg.body = "plain"
-        let plain = AppleScriptPlainDelivery(staging: tmp) { _ in
-            throw AppleScript.Failure(code: -1743, message: "denied")
-        }
+        let recorder = AppleEventRecorder()
+        recorder.failure = (index: 0, error: AppleEventError(code: -1743, message: "denied"))
         var thrown: Error?
         do {
-            try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: MailAutomation(plain: plain, html: RecordingHTMLDelivery()))
+            try MailDriver.deliverThenCleanUp(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, automation: recordingAutomation(recorder))
         } catch {
             thrown = error
         }
-        try expectEqual((thrown as? AppleScript.Failure)?.code, -1743)
+        try expectEqual((thrown as? AppleEventError)?.code, -1743)
         try expect(!FileManager.default.fileExists(atPath: tmp.url.path), "temp dir left behind after a delivery failure")
     },
 ])

@@ -24,8 +24,8 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
         with:
-          # The AppleScriptCompile suite skips itself when the sandbox hides
-          # the AppleScript compiler; keep it running as on a default macOS Nix.
+          # Run the checks as on a default macOS Nix install, which is how
+          # they are run locally.
           extra-conf: |
             sandbox = false
 

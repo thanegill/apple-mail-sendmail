@@ -11,6 +11,6 @@ let result = runSuites([
     mailDriverTests,
     accessibilityTests,
     axHTMLDeliveryTests,
-    appleScriptCompileTests,
+    failureReportTests,
 ])
 exit(result)

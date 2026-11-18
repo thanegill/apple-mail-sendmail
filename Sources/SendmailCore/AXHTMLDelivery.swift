@@ -62,7 +62,7 @@ private final class PlanRun {
             case .pressed:
                 break
             case .targetGone:
-                throw HTMLDeliveryError("The \(window.displayName) window closed before the \(menu) > \(item) press")
+                throw DeliveryError("The \(window.displayName) window closed before the \(menu) > \(item) press")
             }
         case let .pressUntilWindowCloses(menu, item, window, guardChecks, guardTimeoutMs, maxPresses, readyTimeoutMs, goneTimeoutMs):
             try pressUntilClosed(
@@ -80,43 +80,31 @@ private final class PlanRun {
         TimeInterval(milliseconds) / 1000
     }
 
-    /// Calls `body` until it returns non-nil or `timeout` passes; checks at
-    /// least once, and once more at the deadline.
     func poll<T>(timeout: TimeInterval, interval: TimeInterval = 0.1, _ body: () throws -> T?) rethrows -> T? {
-        let deadline = clock.now + timeout
-        while true {
-            if let value = try body() { return value }
-            if clock.now >= deadline { return nil }
-            clock.sleep(min(interval, max(deadline - clock.now, 0.001)))
-        }
+        try clock.poll(timeout: timeout, interval: interval, body)
     }
 
     // MARK: - Mail and its windows
 
     func requireApp() throws -> UIElement {
-        guard let app else { throw HTMLDeliveryError("internal error: Mail's application element was used before launch_mail") }
+        guard let app else { throw DeliveryError("internal error: Mail's application element was used before launch_mail") }
         return app
     }
 
     func requireWindow(_ window: HTMLWindow) throws -> UIElement {
         guard let element = windows[window] else {
-            throw HTMLDeliveryError("internal error: the \(window.displayName) window was used before it was found")
+            throw DeliveryError("internal error: the \(window.displayName) window was used before it was found")
         }
         return element
     }
 
     func launchMail(timeout: TimeInterval) throws {
-        var pid = workspace.runningMailPID()
-        if pid == nil {
-            try workspace.launchMail(timeout: timeout)
-            pid = poll(timeout: timeout) { workspace.runningMailPID() }
-        }
-        guard let pid else { throw HTMLDeliveryError("Mail did not start within \(Int(timeout))s") }
+        let pid = try workspace.ensureMailRunning(clock: clock, timeout: timeout)
         let app = ax.application(pid: pid)
         self.app = app
         let answered = poll(timeout: timeout) { readWindows(app) }
         if answered == nil {
-            throw HTMLDeliveryError("Mail's accessibility interface did not answer within \(Int(timeout))s")
+            throw DeliveryError("Mail's accessibility interface did not answer within \(Int(timeout))s")
         }
     }
 
@@ -127,7 +115,7 @@ private final class PlanRun {
 
     func currentWindows() throws -> [UIElement] {
         guard let windows = readWindows(try requireApp()) else {
-            throw HTMLDeliveryError("Mail's window list could not be read")
+            throw DeliveryError("Mail's window list could not be read")
         }
         return windows
     }
@@ -169,7 +157,7 @@ private final class PlanRun {
 
     func waitForNewWindow(_ window: HTMLWindow, since snapshot: WindowSnapshot, timeout: TimeInterval) throws -> UIElement {
         guard let before = snapshots[snapshot] else {
-            throw HTMLDeliveryError("internal error: no \(snapshot.rawValue) window snapshot")
+            throw DeliveryError("internal error: no \(snapshot.rawValue) window snapshot")
         }
         let app = try requireApp()
         let added = poll(timeout: timeout) { () -> [UIElement]? in
@@ -178,12 +166,12 @@ private final class PlanRun {
         }
         guard let added else {
             switch window {
-            case .viewer: throw HTMLDeliveryError("Mail did not open a viewer for the eml within \(Int(timeout))s")
-            case .compose: throw HTMLDeliveryError("Compose window did not appear after Send Again within \(Int(timeout))s")
+            case .viewer: throw DeliveryError("Mail did not open a viewer for the eml within \(Int(timeout))s")
+            case .compose: throw DeliveryError("Compose window did not appear after Send Again within \(Int(timeout))s")
             }
         }
         guard added.count == 1 else {
-            throw HTMLDeliveryError("Mail opened more than one new window while waiting for the \(window.displayName); refusing to guess which is ours (found \(added.count))")
+            throw DeliveryError("Mail opened more than one new window while waiting for the \(window.displayName); refusing to guess which is ours (found \(added.count))")
         }
         return added[0]
     }
@@ -277,7 +265,7 @@ private final class PlanRun {
             }
             lastFailure = failure ?? lastFailure
         } while clock.now < deadline
-        throw HTMLDeliveryError("The \(window.displayName) window did not pass the key-window check within \(Int(timeout))s; the \(menu) > \(item) press was not sent. Last failed check: \(lastFailure)")
+        throw DeliveryError("The \(window.displayName) window did not pass the key-window check within \(Int(timeout))s; the \(menu) > \(item) press was not sent. Last failed check: \(lastFailure)")
     }
 
     /// Mail closes the compose when it accepts Send, so a compose still open
@@ -294,7 +282,7 @@ private final class PlanRun {
         while presses < maxPresses {
             guard isPresent(target) else {
                 if presses > 0 { return }
-                throw HTMLDeliveryError("The \(window.displayName) window closed before the \(menu) > \(item) press")
+                throw DeliveryError("The \(window.displayName) window closed before the \(menu) > \(item) press")
             }
             let ready = poll(timeout: readyTimeout, interval: 0.2) { () -> Bool? in
                 guard let menuItem = menuItem(menu: menu, item: item), isEnabled(menuItem) else { return nil }
@@ -302,12 +290,12 @@ private final class PlanRun {
             }
             if ready == nil {
                 if presses > 0 && !isPresent(target) { return }
-                throw HTMLDeliveryError("Mail's \(menu) > \(item) menu item did not become available within \(Int(readyTimeout))s; the \(window.displayName) was not sent")
+                throw DeliveryError("Mail's \(menu) > \(item) menu item did not become available within \(Int(readyTimeout))s; the \(window.displayName) was not sent")
             }
             switch try guardedPress(menu: menu, item: item, on: target, window: window, checks: checks, timeout: guardTimeout) {
             case .targetGone:
                 if presses > 0 { return }
-                throw HTMLDeliveryError("The \(window.displayName) window closed before the \(menu) > \(item) press")
+                throw DeliveryError("The \(window.displayName) window closed before the \(menu) > \(item) press")
             case let .pressed(result):
                 presses += 1
                 lastPress = result
@@ -315,10 +303,10 @@ private final class PlanRun {
             let gone = poll(timeout: goneTimeout) { isPresent(target) ? nil : true }
             if gone != nil { return }
             if hasSheet(target) {
-                throw HTMLDeliveryError("A sheet is open on the \(window.displayName) window after the \(menu) > \(item) press; not pressing \(item) through it, and the message was not sent")
+                throw DeliveryError("A sheet is open on the \(window.displayName) window after the \(menu) > \(item) press; not pressing \(item) through it, and the message was not sent")
             }
         }
-        throw HTMLDeliveryError("\(item) did not complete: the \(window.displayName) window is still open after \(maxPresses) \(menu) > \(item) presses (the last press returned AX error \(lastPress.rawValue))")
+        throw DeliveryError("\(item) did not complete: the \(window.displayName) window is still open after \(maxPresses) \(menu) > \(item) presses (the last press returned AX error \(lastPress.rawValue))")
     }
 
     // MARK: - Closing

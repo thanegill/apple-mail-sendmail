@@ -63,7 +63,7 @@ inputs.apple-mail-sendmail.packages.${system}.default.override {
 The two kinds of message need different grants, each for the calling
 terminal (or whichever process invokes the binary):
 
-- **Plain-text messages** drive Mail through AppleScript, so they need
+- **Plain-text messages** drive Mail through Apple Events, so they need
   **Automation** access to Mail. The first time, macOS prompts for it
   in **System Settings -> Privacy & Security -> Automation**. If it is
   denied, the binary exits with status 78 (`EX_CONFIG`) and prints a
@@ -197,7 +197,7 @@ WKWebView pipeline. There is no RTF or NSAttributedString
 intermediate that flattens layout.
 
 Because the new compose window is spawned by Mail's "Send Again"
-verb rather than `make new outgoing message`, AppleScript's
+verb rather than `make new outgoing message`, Mail's scripting
 `outgoing messages` collection does not see it; CLI flag overrides
 must be applied to the .eml bytes **before** Mail opens it, not
 afterward. That is what the binary does.
@@ -214,7 +214,7 @@ Tradeoffs:
   at System Settings.
 - **One Mail window briefly flashes** during each invocation.
   Cron-style use is fine but the binary cannot run "completely
-  silently" the way the classic plain-text path can.
+  silently" the way the plain-text path can.
 - **Mail must be running** (or quickly launchable) — the binary
   starts it if not already running, then needs the viewer window to
   appear before the Send Again press. It waits up to 5 seconds;
@@ -223,8 +223,8 @@ Tradeoffs:
 ### Dry run
 
 Set `SENDMAIL_DRY_RUN=1` to print what the binary would do and skip
-every call to Mail.app: the HTML path's steps, one JSON object per line,
-or the plain path's AppleScript. Useful for debugging.
+every call to Mail.app: the steps of whichever path the message takes,
+one JSON object per line. Useful for debugging.
 
 ```sh
 SENDMAIL_DRY_RUN=1 apple-mail-sendmail -t < msg.eml
@@ -262,8 +262,8 @@ Following `sysexits.h`:
 |   64 | Usage error (unknown flag, malformed argv)                    |
 |   65 | Data error (unparseable message)                              |
 |   67 | No recipients resolved                                        |
-|   71 | Driving Mail failed (AppleScript or the HTML path's steps)    |
-|   75 | Temporary failure: could not create the temp file (EX_TEMPFAIL) |
+|   71 | Driving Mail failed (an Apple Event or an HTML-path step)     |
+|   75 | Temporary failure: no temp file, or Mail not running (EX_TEMPFAIL) |
 |   78 | Automation or Accessibility permission denied                 |
 
 ## Alternatives considered
@@ -296,7 +296,7 @@ swift build
 
 ### Run tests
 
-The tests record the plain path's AppleScript and run the HTML path
+The tests record the plain path's Apple Events and run the HTML path
 against a fake Mail, so they never drive Mail.app.
 
 ```sh
