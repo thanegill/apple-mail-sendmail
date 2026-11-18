@@ -58,7 +58,19 @@ stdin bytes -> RFC822Parser -> MIMEParser -> ParsedMessage -> MailDriver -> Scri
 
 ### Tests don't need WebKit or pandoc anymore
 
-The edit-draft path is pure script emission + .eml byte assembly. The test runner injects a recording `ScriptRunner`, so Mail.app is never invoked. `nix build .#default`'s `checkPhase` runs the full test suite in the sandbox without any WebKit/pandoc/Accessibility prerequisites.
+The edit-draft path is pure script emission + .eml byte assembly. The test runner injects a recording `ScriptRunner`, so Mail.app is never invoked. `nix build .#default`'s `checkPhase` runs the full test suite without any WebKit/pandoc/Accessibility prerequisites.
+
+### AppleScript compile check
+
+The `AppleScriptCompile` suite (`Sources/sendmail-test/AppleScriptCompileTests.swift`) compiles, never executes, every script the MailDriver suite's recording runner captured, plus a classic-emitter matrix (send/draft x attachments x odd subjects and names) and edit-draft scripts for send/draft with an `.eml` path containing quotes, a backslash, spaces and non-ASCII, via `NSAppleScript.compileAndReturnError`. A failure names the originating test, the compiler error, and the offending line.
+
+What a compile pass catches: broken block structure (a dropped `end tell` / `end if`, an unclosed record or literal) and unknown class or command terms that break parsing (e.g. `make new to recipient` outside a Mail `tell`). What it does NOT catch: misspelled record labels (`{visable:true}` compiles as a user label), misspelled bare properties that compile as variables, menu / menu-item name strings, and any runtime error (e.g. the -1700 live-reference poll bug). Those still need the text-match tests or a live run.
+
+Compiling an app's terms is safe only because Mail and System Events declare a static `OSAScriptingDefinition`: the compiler reads the sdef and neither launches the app, sends it an AppleEvent, nor triggers an Automation prompt. Before compiling, the suite looks each app up through Launch Services and fails (without compiling) if the key is missing, since compiling would then launch the app.
+
+`every_script_captured_from_maildriver_suite_compiles` reads the MailDriver suite's captures and asserts both emitters are represented, so `appleScriptCompileTests` must stay after `mailDriverTests` in `main.swift`, and focusing on AppleScriptCompile alone still needs MailDriver enabled.
+
+Where it runs: the dev shell (`nix develop --command swift run sendmail-test`) and `nix build` under the default macOS Nix setting `sandbox = false`. The only skip condition is the compiler failing to compile a bare `return 1`; under `sandbox = true` that was observed failing with error -2147450879, so the five cases print `SKIP ... (the AppleScript compiler is unavailable here ...)` while the rest of the suite runs. Every other problem (Mail's terms not loading, a missing static sdef) is a FAIL.
 
 ## Project-specific constraints (read before changing)
 
