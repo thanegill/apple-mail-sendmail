@@ -547,6 +547,40 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectEqual(msg.body, "caf\u{E9}")
     },
 
+    // RFC 2046 section 5.1.1's sample message: a preamble, a body part with no
+    // header fields (implicitly typed US-ASCII text), and an epilogue.
+    TestCase(name: "rfc2046_sec5_1_1_sample_with_headerless_part") {
+        let input = """
+        From: Nathaniel Borenstein <nsb@bellcore.com>
+        To: Ned Freed <ned@innosoft.com>
+        Date: Sun, 21 Mar 1993 23:56:48 -0800 (PST)
+        Subject: Sample message
+        MIME-Version: 1.0
+        Content-type: multipart/mixed; boundary="simple boundary"
+
+        This is the preamble.  It is to be ignored, though it
+        is a handy place for composition agents to include an
+        explanatory note to non-MIME conformant readers.
+
+        --simple boundary
+
+        This is implicitly typed plain US-ASCII text.
+        It does NOT end with a linebreak.
+        --simple boundary
+        Content-type: text/plain; charset=us-ascii
+
+        This is explicitly typed plain US-ASCII text.
+        It DOES end with a linebreak.
+
+        --simple boundary--
+
+        This is the epilogue.  It is also to be ignored.
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "This is implicitly typed plain US-ASCII text.\nIt does NOT end with a linebreak.")
+        try expect(msg.attachments.isEmpty)
+    },
+
     TestCase(name: "rfc2231_continuation_gap_stops_joining") {
         try expectEqual(
             try attachmentFilenames(contentDisposition: "attachment; filename*0*=UTF-8''a; filename*2*=c"),

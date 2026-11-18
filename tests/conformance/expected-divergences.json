@@ -17,34 +17,26 @@
         "cpython/msg_16.txt body",
         "cpython/msg_26.txt body",
         "cpython/msg_34.txt body",
+        "cpython/msg_36.txt body",
         "cpython/msg_37.txt body",
         "cpython/msg_39.txt body",
+        "cpython/msg_42.txt body",
         "cpython/msg_43.txt body",
         "cpython/msg_44.txt attachments",
-        "cpython/msg_45.txt body",
         "cpython/msg_45.txt attachments",
+        "cpython/msg_45.txt body",
         "local/alternative-nested.eml body",
-        "local/part-trailing-newlines-crlf.eml body",
         "local/part-trailing-newlines-crlf.eml attachments",
-        "local/part-trailing-newlines.eml body",
+        "local/part-trailing-newlines-crlf.eml body",
         "local/part-trailing-newlines.eml attachments",
-        "mail-parser/rfc-003.eml body",
+        "local/part-trailing-newlines.eml body",
+        "mail-parser/rfc-000.eml body",
         "mail-parser/rfc-003.eml attachments",
+        "mail-parser/rfc-003.eml body",
         "mail-parser/rfc-006.eml body",
         "mail-parser/rfc-006.eml html",
         "mail-parser/rfc-009.eml body",
         "mail-parser/rfc-009.eml html"
-      ]
-    },
-    {
-      "id": "headerless-body-part",
-      "class": "ours-bug",
-      "note": "RFC 2046 5.1.1: a body part may have no header fields, so it starts with the blank line. RFC822Parser looked for the next blank line instead, treating the part's first paragraph as headers and dropping it (the RFC's own sample message lost its first part).",
-      "cases": [
-        "cpython/msg_36.txt body",
-        "cpython/msg_42.txt body",
-        "mail-parser/rfc-000.eml body",
-        "mail-parser/rfc-005.eml body"
       ]
     },
     {

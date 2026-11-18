@@ -58,6 +58,14 @@ let rfc822Tests = TestSuite(name: "RFC822Parser", cases: [
         try expectEqual(params["name"], "weird;name.txt")
     },
 
+    TestCase(name: "leading_blank_line_means_no_headers") {
+        for input in ["\nfirst paragraph\n\nsecond\n", "\r\nfirst paragraph\r\n\r\nsecond\r\n"] {
+            let raw = try RFC822Parser.parse(Data(input.utf8))
+            try expect(raw.headers.isEmpty, "headers parsed from \(input.debugDescription)")
+            try expectEqual(String(decoding: raw.body, as: UTF8.self), String(input.dropFirst()))
+        }
+    },
+
     TestCase(name: "no_blank_line_treats_as_headers_only") {
         let input = "Subject: only-headers\n"
         let raw = try RFC822Parser.parse(Data(input.utf8))

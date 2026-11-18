@@ -49,6 +49,14 @@ public enum RFC822Parser {
         // CRLF-boundary logic (which is fragile -- see the crlf_separator test)
         // easy to read. Not worth a Data-subrange rewrite.
         let bytes = [UInt8](data)
+        // A MIME body part with no header fields starts with the blank line
+        // (RFC 2046 5.1.1).
+        if bytes.first == 0x0A {
+            return (Data(), Data(bytes.dropFirst()))
+        }
+        if bytes.starts(with: [0x0D, 0x0A]) {
+            return (Data(), Data(bytes.dropFirst(2)))
+        }
         var i = 0
         while i < bytes.count {
             // case 1: LF LF
