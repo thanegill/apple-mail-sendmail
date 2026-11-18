@@ -631,6 +631,7 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             try expect(url.lastPathComponent.hasPrefix("compose-") && url.pathExtension == "eml", "unexpected eml name \(url.lastPathComponent)")
             try expectEqual(url.deletingLastPathComponent().path, tmp.url.path)
             try expect(html.calls[0].emlExisted, "the eml must exist when the HTML path runs")
+            try expectEqual(html.calls[0].subject, "rich-html-subj")
         }
     },
 

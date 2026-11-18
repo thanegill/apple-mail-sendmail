@@ -81,6 +81,7 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
     struct Window {
         let id: Int
         let kind: Kind
+        var title = ""
         var sheets = 0
         var standard = true
     }
@@ -94,10 +95,21 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
 
     var mailRunning = true
     var axAnswers = true
+    /// The title Mail gives the eml's viewer and the compose made from it.
+    var messageTitle = "Test Subject"
     var viewerAppears = true
     var viewerDelay: TimeInterval = 0.3
     /// Another standard window appears together with the viewer.
     var strayWindowWithViewer = false
+    /// A viewer for another message, with this title, appears alone where
+    /// the eml's viewer should; the eml's own viewer follows 2s later.
+    var strayViewerInsteadOfViewer: String?
+    /// A compose with this title, not made by Send Again, appears alone
+    /// where ours should; ours follows 2s later.
+    var strayComposeInsteadOfCompose: String?
+    /// The compose first shows "New Message" and takes `messageTitle` this
+    /// long after it appears.
+    var composeTitleDelay: TimeInterval?
     /// A non-standard window (a panel) appears together with the viewer.
     var strayPanelWithViewer = false
     var composeAppears = true
@@ -142,6 +154,7 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
     private(set) var axCalls = 0
     private(set) var viewerID: Int?
     private(set) var composeID: Int?
+    private(set) var strayID: Int?
 
     /// A compose the user already had open when the binary ran.
     @discardableResult
@@ -197,10 +210,13 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
         openedURLs.append(url)
         if !refusesFrontmost { frontmost = true }
         guard viewerAppears else { return }
-        after(viewerDelay) {
+        if let strayTitle = strayViewerInsteadOfViewer {
+            after(viewerDelay) { self.strayID = self.appendWindow(.viewer, title: strayTitle) }
+        }
+        after(viewerDelay + (strayViewerInsteadOfViewer == nil ? 0 : 2)) {
             let id = self.takeID()
             self.viewerID = id
-            self.windows.append(Window(id: id, kind: .viewer))
+            self.windows.append(Window(id: id, kind: .viewer, title: self.messageTitle))
             self.focusOn(id)
             if self.strayWindowWithViewer {
                 self.windows.append(Window(id: self.takeID(), kind: .viewer))
@@ -209,6 +225,18 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
                 self.windows.append(Window(id: self.takeID(), kind: .panel))
             }
         }
+    }
+
+    private func retitle(_ id: Int, _ title: String) {
+        guard let index = windows.firstIndex(where: { $0.id == id }) else { return }
+        windows[index].title = title
+    }
+
+    private func appendWindow(_ kind: Kind, title: String) -> Int {
+        let id = takeID()
+        windows.append(Window(id: id, kind: kind, title: title))
+        focusOn(id)
+        return id
     }
 
     private func focusOn(_ id: Int) {
@@ -247,6 +275,7 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
             case kAXSubroleAttribute: return .string(window.kind == .panel || !window.standard ? kAXFloatingWindowSubrole : kAXStandardWindowSubrole)
             case kAXChildrenAttribute: return .elements((0..<window.sheets).map { _ in UIElement(Node.sheet(id)) })
             case kAXCloseButtonAttribute: return .element(UIElement(Node.closeButton(id)))
+            case kAXTitleAttribute: return .string(window.title)
             default: return nil
             }
         case .sheet:
@@ -333,11 +362,18 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
         switch (action, target.kind) {
         case (.sendAgain, .viewer):
             guard composeAppears else { return .success }
-            after(composeDelay) {
+            if let strayTitle = strayComposeInsteadOfCompose {
+                after(composeDelay) { self.strayID = self.appendWindow(.compose, title: strayTitle) }
+            }
+            after(composeDelay + (strayComposeInsteadOfCompose == nil ? 0 : 2)) {
                 let id = self.takeID()
                 self.composeID = id
-                self.windows.append(Window(id: id, kind: .compose, sheets: self.composeArrivesWithSheet ? 1 : 0))
+                let title = self.composeTitleDelay == nil ? self.messageTitle : "New Message"
+                self.windows.append(Window(id: id, kind: .compose, title: title, sheets: self.composeArrivesWithSheet ? 1 : 0))
                 self.focusOn(id)
+                if let titleDelay = self.composeTitleDelay {
+                    self.after(titleDelay) { self.retitle(id, self.messageTitle) }
+                }
                 if let closeAfter = self.composeClosedByUserAfter {
                     self.after(closeAfter) { self.windows.removeAll { $0.id == id } }
                 }

@@ -27,10 +27,14 @@ private func delivery(
     )
 }
 
-/// Runs the HTML path against `mail` and returns the error it threw, if any.
-private func runHTML(_ mail: FakeMail, send: Bool, granted: Bool = true, trace: TraceLog = TraceLog()) -> Error? {
+/// Runs the HTML path against `mail` for a message whose Subject is
+/// `subject` (by default the title FakeMail shows), and returns the error
+/// it threw, if any.
+private func runHTML(
+    _ mail: FakeMail, send: Bool, subject: String? = nil, granted: Bool = true, trace: TraceLog = TraceLog()
+) -> Error? {
     do {
-        try delivery(mail, granted: granted, trace: trace).deliverHTML(emlURL: emlURL, send: send)
+        try delivery(mail, granted: granted, trace: trace).deliverHTML(emlURL: emlURL, subject: subject ?? mail.messageTitle, send: send)
         return nil
     } catch {
         return error
@@ -85,7 +89,7 @@ let axHTMLDeliveryTests = TestSuite(name: "AXHTMLDelivery", cases: [
         let counter = PermissionCounter()
         var thrown: Error?
         do {
-            try delivery(mail, granted: false, counter: counter).deliverHTML(emlURL: emlURL, send: true)
+            try delivery(mail, granted: false, counter: counter).deliverHTML(emlURL: emlURL, subject: mail.messageTitle, send: true)
         } catch {
             thrown = error
         }
@@ -176,16 +180,20 @@ let axHTMLDeliveryTests = TestSuite(name: "AXHTMLDelivery", cases: [
         try expect(mail.sentWindows.isEmpty)
     },
 
-    TestCase(name: "plan_runs_every_guard_check_before_each_press") {
+    TestCase(name: "plan_runs_every_guard_and_window_check_before_each_press") {
         for send in [false, true] {
+            var presses = 0
             for step in HTMLPlan.steps(emlPath: emlURL.path, send: send) {
                 switch step {
-                case let .pressMenuItem(_, _, checks, _), let .pressUntilWindowCloses(_, _, checks, _, _, _, _):
+                case let .pressMenuItem(_, _, checks, verify, _), let .pressUntilWindowCloses(_, _, checks, verify, _, _, _, _):
+                    presses += 1
                     try expectEqual(checks, GuardCheck.allCases)
+                    try expectEqual(verify, [.titleMatchesSubject])
                 default:
                     continue
                 }
             }
+            try expectEqual(presses, send ? 2 : 1)
         }
     },
 
@@ -271,7 +279,7 @@ let axHTMLDeliveryTests = TestSuite(name: "AXHTMLDelivery", cases: [
     TestCase(name: "plan_finds_both_presses_by_shift_cmd_d_with_the_english_title_as_fallback") {
         let targets = HTMLPlan.steps(emlPath: emlURL.path, send: true).compactMap { step -> MenuItemTarget? in
             switch step {
-            case let .pressMenuItem(item, _, _, _), let .pressUntilWindowCloses(item, _, _, _, _, _, _):
+            case let .pressMenuItem(item, _, _, _, _), let .pressUntilWindowCloses(item, _, _, _, _, _, _, _):
                 return item
             default:
                 return nil
@@ -280,6 +288,99 @@ let axHTMLDeliveryTests = TestSuite(name: "AXHTMLDelivery", cases: [
         try expectEqual(targets, [.sendAgain, .send])
         try expectEqual(targets.map(\.shortcutName), ["shift-cmd-D", "shift-cmd-D"])
         try expectEqual(targets.map(\.fallbackName), ["Message > Send Again", "Message > Send"])
+    },
+
+    // MARK: Window contents
+
+    TestCase(name: "stray_viewer_for_another_message_in_place_of_ours_is_refused_without_pressing") {
+        let mail = FakeMail()
+        mail.strayViewerInsteadOfViewer = "Quarterly Report"
+        try expectFailure(runHTML(mail, send: true), containing: #"The eml viewer window does not show this message, so it may be a stray window and not ours; the Message > Send Again press was not sent: the eml viewer window's title (AXTitle) is "Quarterly Report", but the message's Subject is "Test Subject""#)
+        try expect(mail.presses.isEmpty, "a stray viewer must not be pressed: \(mail.presses)")
+        try expect(mail.composeID == nil)
+    },
+
+    TestCase(name: "stray_compose_in_place_of_ours_is_refused_before_send") {
+        let mail = FakeMail()
+        mail.strayComposeInsteadOfCompose = "New Message"
+        try expectFailure(runHTML(mail, send: true), containing: #"the Message > Send press was not sent: the compose window's title (AXTitle) is "New Message", but the message's Subject is "Test Subject""#)
+        try expect(mail.sendPresses.isEmpty, "a stray compose must not be sent: \(mail.presses)")
+        try expect(mail.sentWindows.isEmpty)
+    },
+
+    TestCase(name: "matching_viewer_and_compose_titles_are_accepted") {
+        for send in [false, true] {
+            let mail = FakeMail()
+            mail.messageTitle = "Invoice 2026-11 \u{2014} caf\u{e9}"
+            let trace = TraceLog()
+            try expectSuccess(runHTML(mail, send: send, trace: trace))
+            try expectEqual(mail.presses.count, send ? 2 : 1)
+            try expect(!trace.lines.contains { $0.contains("not checked") }, "\(trace.lines)")
+        }
+    },
+
+    TestCase(name: "title_that_differs_only_in_case_is_refused") {
+        let mail = FakeMail()
+        mail.messageTitle = "test subject"
+        try expectFailure(runHTML(mail, send: false, subject: "Test Subject"), containing: #"the eml viewer window's title (AXTitle) is "test subject", but the message's Subject is "Test Subject""#)
+        try expect(mail.presses.isEmpty)
+    },
+
+    TestCase(name: "title_that_is_only_a_prefix_of_the_subject_is_refused") {
+        let mail = FakeMail()
+        mail.messageTitle = "Test"
+        try expectFailure(runHTML(mail, send: false, subject: "Test Subject"), containing: "does not show this message")
+        try expect(mail.presses.isEmpty)
+    },
+
+    TestCase(name: "empty_subject_skips_the_title_check_relies_on_the_diff_and_traces_it") {
+        for subject in ["", " \n\t "] {
+            let mail = FakeMail()
+            mail.messageTitle = "Kein Betreff"
+            let trace = TraceLog()
+            try expectSuccess(runHTML(mail, send: true, subject: subject, trace: trace))
+            try expectEqual(mail.presses.map(\.item), ["Send Again", "Send"])
+            try expectEqual(trace.lines.filter { $0.contains("no Subject") }, [
+                "the message has no Subject, so Mail titles the eml viewer window with a localized placeholder; its title is not checked, and the window diff alone identifies it",
+                "the message has no Subject, so Mail titles the compose window with a localized placeholder; its title is not checked, and the window diff alone identifies it",
+            ])
+        }
+    },
+
+    TestCase(name: "subject_whitespace_is_normalized_on_both_sides") {
+        let cases: [(subject: String, title: String)] = [
+            ("  Weekly\n report\t\tfor  you  ", "Weekly report for you"),
+            ("Weekly report for you", " Weekly  report\nfor you "),
+            ("Weekly\r\n report", "Weekly report"),
+        ]
+        for (subject, title) in cases {
+            let mail = FakeMail()
+            mail.messageTitle = title
+            try expectSuccess(runHTML(mail, send: true, subject: subject))
+            try expectEqual(mail.sentWindows, [mail.composeID!])
+        }
+    },
+
+    TestCase(name: "normalized_title_collapses_whitespace_runs_and_trims") {
+        try expectEqual(WindowCheck.normalizedTitle("  a \n\t b  c\r\n"), "a b c")
+        try expectEqual(WindowCheck.normalizedTitle(" \n "), "")
+        try expectEqual(WindowCheck.normalizedTitle("A b"), "A b")
+    },
+
+    TestCase(name: "compose_title_that_settles_on_the_subject_within_the_guard_timeout_is_accepted") {
+        let mail = FakeMail()
+        mail.composeTitleDelay = 1
+        try expectSuccess(runHTML(mail, send: true))
+        try expectEqual(mail.sentWindows, [mail.composeID!])
+    },
+
+    TestCase(name: "no_subject_send_confirmation_sheet_fails_closed_saying_send_needs_a_subject") {
+        let mail = FakeMail()
+        mail.messageTitle = "Kein Betreff"
+        mail.sheetOnSend = true
+        try expectFailure(runHTML(mail, send: true, subject: ""), containing: "Mail is asking to confirm sending a message with no Subject (a sheet opened on the compose window after the Message > Send press); it is not confirmed, and the message was not sent. HTML --send needs a Subject: add a non-empty Subject header, or leave out --send to get a draft")
+        try expectEqual(mail.sendPresses.count, 1)
+        try expect(mail.sentWindows.isEmpty)
     },
 
     // MARK: Send retry
@@ -361,7 +462,7 @@ let axHTMLDeliveryTests = TestSuite(name: "AXHTMLDelivery", cases: [
 
     TestCase(name: "plan_printer_prints_the_plan_without_touching_mail") {
         var printed: [String] = []
-        try HTMLPlanPrinter { printed.append($0) }.deliverHTML(emlURL: URL(fileURLWithPath: "/tmp/x/compose-1.eml"), send: true)
+        try HTMLPlanPrinter { printed.append($0) }.deliverHTML(emlURL: URL(fileURLWithPath: "/tmp/x/compose-1.eml"), subject: "s", send: true)
         try expectEqual(printed, HTMLPlan.jsonLines(HTMLPlan.steps(emlPath: "/tmp/x/compose-1.eml", send: true)))
     },
 
@@ -381,9 +482,9 @@ private let draftPlanLines = [
     #"{"activates":true,"path":"/tmp/x/compose-1.eml","step":"open_eml"}"#,
     #"{"since":"before_open","step":"wait_for_new_window","timeout_ms":5000,"window":"viewer"}"#,
     #"{"settle":false,"snapshot":"before_compose","step":"snapshot_windows"}"#,
-    #"{"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send Again","shortcut":"shift-cmd-D"},"step":"press_menu_item","window":"viewer"}"#,
+    #"{"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send Again","shortcut":"shift-cmd-D"},"step":"press_menu_item","verify":["title_matches_subject"],"window":"viewer"}"#,
     #"{"since":"before_compose","step":"wait_for_new_window","timeout_ms":5000,"window":"compose"}"#,
     #"{"step":"close_window","window":"viewer"}"#,
 ]
 
-private let sendPlanLine = #"{"gone_timeout_ms":3000,"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"max_presses":3,"ready_timeout_ms":10000,"step":"press_until_window_closes","window":"compose"}"#
+private let sendPlanLine = #"{"gone_timeout_ms":3000,"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"max_presses":3,"ready_timeout_ms":10000,"step":"press_until_window_closes","verify":["title_matches_subject"],"window":"compose"}"#

@@ -2568,7 +2568,7 @@ self_test_script_analysis() {
     "${html_send/"$send_again_step"/"$send_again_step"$'\n'"$send_again_step"}" \
     "plan differs from the send template"
   run_analysis_case "HTML draft with an extra Send press" refused draft-later-html-attachment \
-    "$(sed '$i {"guard":[],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"step":"press_menu_item","window":"compose"}' <<<"$html_draft")" \
+    "$(sed '$i {"guard":[],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"step":"press_menu_item","verify":["title_matches_subject"],"window":"compose"}' <<<"$html_draft")" \
     "plan differs from the draft template"
   run_analysis_case "HTML send that finds Send Again by title only" refused html-send \
     "${html_send/',"shortcut":"shift-cmd-D"},"step":"press_menu_item"'/'},"step":"press_menu_item"'}" \
@@ -2582,6 +2582,12 @@ self_test_script_analysis() {
   run_analysis_case "HTML send whose presses skip the key-window guard" refused html-send \
     "${html_send//"$full_guard"/'"guard":[]'}" \
     "plan differs from the send template"
+  run_analysis_case "HTML send whose presses skip the window-contents check" refused html-send \
+    "${html_send//'"verify":["title_matches_subject"]'/'"verify":[]'}" \
+    "plan differs from the send template"
+  run_analysis_case "HTML draft whose Send Again skips the window-contents check" refused draft-later-html-attachment \
+    "${html_draft//',"verify":["title_matches_subject"]'/}" \
+    "plan differs from the draft template"
   run_analysis_case "HTML send with unbounded Send presses" refused html-send \
     "${html_send/'"max_presses":3'/'"max_presses":1000'}" \
     "plan differs from the send template"
@@ -2602,7 +2608,7 @@ self_test_script_analysis() {
     "expected exactly one open_eml step"
 
   run_analysis_case "plain send with an extra Message > Send press step" refused plain-send \
-    "$(plain_plan false send; printf '%s\n' '{"guard":[],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"step":"press_menu_item","window":"compose"}')" \
+    "$(plain_plan false send; printf '%s\n' '{"guard":[],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"step":"press_menu_item","verify":["title_matches_subject"],"window":"compose"}')" \
     "is not an allowed step"
   # The subject string hides a second sender behind escaped quotes; a naive
   # scan would take e2e-a for the sender while jq reads the real one.

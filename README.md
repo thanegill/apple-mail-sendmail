@@ -212,7 +212,7 @@ hands the message to Mail by:
    for received mail.
 3. Pressing `Message > Send Again` (⇧⌘D) through the Accessibility
    API, once the viewer is verified as Mail's frontmost, main and key
-   window. Mail converts the viewer into a brand-new editable
+   window, titled with the message's Subject. Mail converts the viewer into a brand-new editable
    compose carrying the .eml's `To` / `Subject` / `From` and the
    rendered HTML. The press targets Mail's own menu item, so unlike a
    keystroke it cannot land in another app; Mail must still be
@@ -221,6 +221,19 @@ hands the message to Mail by:
    pressing `Message > Send`, at most three times and only while the
    compose is still open.
 5. Closing the leftover viewer window.
+
+A window titled differently from the Subject is refused before any
+press, in case another window appeared in place of ours. With no
+Subject, Mail shows a placeholder title instead, so that check is
+skipped.
+
+**HTML `--send` needs a Subject.** Sending a compose with no
+Subject makes Mail ask "This message has no subject. Send anyway?".
+The binary never answers Mail's prompts, so it stops there: the
+compose stays open as a draft, nothing is sent, and it exits 71 with
+"Mail is asking to confirm sending a message with no Subject ...
+HTML --send needs a Subject". Add a `Subject:` header, or leave out
+`--send` and send the draft by hand.
 
 This preserves **everything** the source HTML expresses — tables,
 CSS padding and backgrounds, monospace `<pre>` styling, inline
