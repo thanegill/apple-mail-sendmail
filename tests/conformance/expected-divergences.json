@@ -1,14 +1,6 @@
 {
   "findings": [
     {
-      "id": "comment-quoted-pair",
-      "class": "ours-bug",
-      "note": "RFC 5322 3.2.2: a comment may contain a quoted-pair. AddressParser's comment stripper ended the comment at an escaped \\), leaking the comment's tail into the display name (RFC 5322 A.5).",
-      "cases": [
-        "rfc/rfc5322-a5.eml from"
-      ]
-    },
-    {
       "id": "obsolete-addr-spec",
       "class": "ours-bug",
       "note": "RFC 5322 4.4: an obs-route before the addr-spec is ignored, and CFWS may surround the dots and the @ of an obs-local-part / obs-domain (A.6.1, A.6.3). AddressParser kept the route and the whitespace in the address.",

@@ -145,10 +145,24 @@ public enum AddressParser {
         var paren = 0
         for ch in trimmed {
             if !inQuotes {
+                if paren > 0 {
+                    // Inside a comment only nesting and quoted-pairs such as
+                    // `\)` matter (RFC 5322 3.2.2); a `"` there is plain text.
+                    if quotedPairPending {
+                        quotedPairPending = false
+                    } else if ch == "\\" {
+                        quotedPairPending = true
+                    } else if ch == "(" {
+                        paren += 1
+                    } else if ch == ")" {
+                        paren -= 1
+                    }
+                    continue
+                }
                 if ch == "\"" { inQuotes = true; noComments.append(ch); continue }
                 if ch == "(" { paren += 1; continue }
-                if ch == ")" { paren = max(0, paren - 1); continue }
-                if paren == 0 { noComments.append(ch) }
+                if ch == ")" { continue }
+                noComments.append(ch)
                 continue
             }
             if quotedPairPending {

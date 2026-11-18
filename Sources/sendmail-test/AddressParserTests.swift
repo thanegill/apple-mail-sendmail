@@ -175,6 +175,20 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
         try expect(AddressParser.parse("(Empty list)(start)Hidden recipients  :(nobody(that I know))  ;").isEmpty)
     },
 
+    // RFC 5322 Appendix A.5: a comment holding a quoted-pair `\)`, and comments
+    // inside the addr-spec.
+    TestCase(name: "rfc5322_a5_comment_with_quoted_pair") {
+        let from = AddressParser.parse(#"Pete(A nice \) chap) <pete(his account)@silly.test(his host)>"#)
+        try expectEqual(from.map(\.address), ["pete@silly.test"])
+        try expectEqual(from.map(\.displayName), ["Pete"])
+    },
+
+    TestCase(name: "double_quote_inside_comment_is_plain_text") {
+        let r = AddressParser.parse(#"Bob (says "hi) <b@y.test>, c@z.test"#)
+        try expectEqual(r.map(\.address), ["b@y.test", "c@z.test"])
+        try expectEqual(r[0].displayName, "Bob")
+    },
+
     TestCase(name: "mailbox_after_group_semicolon_without_comma") {
         let r = AddressParser.parse("Team: a@x.test; b@y.test")
         try expectEqual(r.map(\.address), ["a@x.test", "b@y.test"])
