@@ -1,6 +1,22 @@
 import Foundation
 import SendmailCore
 
+private func expectUsageError(
+    _ argv: [String],
+    containing expectedFragment: String,
+    file: StaticString = #file,
+    line: UInt = #line
+) throws {
+    do {
+        _ = try CLI.parse(argv, env: [:])
+    } catch let CLIError.usage(message) {
+        try expect(message.contains(expectedFragment),
+                   "usage message '\(message)' lacks '\(expectedFragment)'", file: file, line: line)
+        return
+    }
+    throw TestFailure(message: "expected usage error for \(argv), got success", file: file, line: line)
+}
+
 let cliTests = TestSuite(name: "CLI", cases: [
     TestCase(name: "dashT_sets_readRecipientsFromHeaders") {
         let opts = try CLI.parse(["-t"], env: [:])
@@ -59,6 +75,11 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expectEqual(opts.recipients, ["user@host"])
     },
 
+    TestCase(name: "C_with_attached_value_does_not_consume_next_arg") {
+        let opts = try CLI.parse(["-C/etc/mail.cf", "user@host"], env: [:])
+        try expectEqual(opts.recipients, ["user@host"])
+    },
+
     TestCase(name: "dashB_consumes_separate_value_not_recipient") {
         // -B takes a space-separated value (body type). 8BITMIME is the value,
         // not a positional recipient.
@@ -98,6 +119,61 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expectThrows { _ = try CLI.parse(["-z"], env: [:]) }
     },
 
+    TestCase(name: "dashh_hop_count_separate_value_ignored") {
+        // sendmail's -h N sets the hop count; it must not show help (exit 0
+        // without delivering) nor turn N into a recipient.
+        let opts = try CLI.parse(["-h", "20", "rcpt@x.test"], env: [:])
+        try expectNil(opts.infoRequest)
+        try expectEqual(opts.recipients, ["rcpt@x.test"])
+    },
+
+    TestCase(name: "dashh_hop_count_attached_value_ignored") {
+        let opts = try CLI.parse(["-h20", "rcpt@x.test"], env: [:])
+        try expectNil(opts.infoRequest)
+        try expectEqual(opts.recipients, ["rcpt@x.test"])
+    },
+
+    TestCase(name: "dashth_cluster_takes_hop_count_from_next_arg") {
+        let opts = try CLI.parse(["-th", "20", "rcpt@x.test"], env: [:])
+        try expect(opts.readRecipientsFromHeaders)
+        try expectNil(opts.infoRequest)
+        try expectEqual(opts.recipients, ["rcpt@x.test"])
+    },
+
+    TestCase(name: "dashh_without_value_is_usage_error") {
+        try expectUsageError(["-h"], containing: "-h requires a hop count")
+    },
+
+    TestCase(name: "dashh_attached_non_numeric_is_usage_error") {
+        // -ht must not silently drop -t by eating "t" as the hop count.
+        try expectUsageError(["-ht", "rcpt@x.test"], containing: "bad hop count: t")
+    },
+
+    TestCase(name: "dashh_separate_non_numeric_is_usage_error") {
+        try expectUsageError(["-h", "abc", "rcpt@x.test"], containing: "bad hop count: abc")
+    },
+
+    TestCase(name: "long_help_requests_help") {
+        let opts = try CLI.parse(["--help"], env: [:])
+        try expectEqual(opts.infoRequest, .help)
+    },
+
+    TestCase(name: "help_wins_over_later_args") {
+        let opts = try CLI.parse(["--help", "--nope", "user@x.com"], env: [:])
+        try expectEqual(opts.infoRequest, .help)
+        try expectEqual(opts.recipients, [])
+    },
+
+    TestCase(name: "version_flag_requests_version") {
+        let opts = try CLI.parse(["--version"], env: [:])
+        try expectEqual(opts.infoRequest, .version)
+    },
+
+    TestCase(name: "ordinary_parse_has_no_info_request") {
+        let opts = try CLI.parse(["-t", "user@x.com"], env: [:])
+        try expectNil(opts.infoRequest)
+    },
+
     TestCase(name: "dashf_missing_value_throws") {
         try expectThrows { _ = try CLI.parse(["-f"], env: [:]) }
     },
@@ -123,14 +199,26 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expect(h.contains("-f <addr>"), "missing -f <addr> in OPTIONS")
         try expect(h.contains("-F <name>"), "missing -F <name> in OPTIONS")
         try expect(h.contains("--send"), "missing --send in OPTIONS")
-        try expect(h.contains("-h, --help"), "missing -h/--help in OPTIONS")
+        try expect(h.contains("--help"), "missing --help in OPTIONS")
         try expect(h.contains("--version"), "missing --version in OPTIONS")
+    },
+
+    TestCase(name: "help_text_lists_dashh_as_legacy_not_help") {
+        let h = CLI.helpText()
+        try expect(!h.contains("-h, --help"), "-h is the hop-count flag, not help")
+        try expect(h.contains("-h <hops>"), "missing -h <hops> in LEGACY FLAGS")
     },
 
     TestCase(name: "help_text_lists_env_vars") {
         let h = CLI.helpText()
         try expect(h.contains("SENDMAIL_SEND=1"), "missing SENDMAIL_SEND env var")
         try expect(h.contains("SENDMAIL_DRY_RUN=1"), "missing SENDMAIL_DRY_RUN env var")
+    },
+
+    TestCase(name: "help_text_does_not_claim_binary_applies_font_prefs") {
+        let h = CLI.helpText()
+        try expect(!h.contains("Message font"), "help still claims Mail's Message font is applied")
+        try expect(h.contains("CSS"), "help should say the HTML's own CSS is kept")
     },
 
     TestCase(name: "tempfail_exit_code_is_75") {
