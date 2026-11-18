@@ -343,7 +343,7 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
             closedByButton.append(id)
             windows.removeAll { $0.id == id }
             return .success
-        case let (.menuItem(menu, item), kAXPressAction):
+        case (.menuItem(let menu, let item), kAXPressAction):
             return press(menus[menu].items[item])
         default:
             return .actionUnsupported
