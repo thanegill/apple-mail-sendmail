@@ -1,7 +1,7 @@
 # Live end-to-end tests
 
-The unit tests (see [`../../README.md`](../../README.md)) only check the
-AppleScript the binary generates. This harness, `nix run .#e2e`, runs
+The unit tests (see [`../../README.md`](../../README.md)) never touch
+the real Mail. This harness, `nix run .#e2e`, runs
 the real binary against Mail.app and checks what Mail actually puts on
 the wire.
 
@@ -124,13 +124,18 @@ unexpected is a refusal. A scenario that fails a guard is skipped
 - **The binary** is copied into the run's work directory and hashed once.
   Dry runs and live runs use that copy, and each live scenario re-checks
   its hash and the hash of the fixture that passed the guards.
-- **The script.** A sandboxed dry run of the binary must print a script
-  of exactly the expected shape:
-  - The HTML path's script must equal [`templates/`](templates) for its
-    mode once the `.eml` path is replaced. That `.eml` must exist inside
-    the dry run's temp dir and pass the same header checks; the sandbox
-    forbids deleting files, so it survives even a binary that cleans up.
-  - A script or `.eml` containing a NUL byte is refused before anything
+- **The dry-run output.** A sandboxed dry run of the binary must print
+  exactly the expected steps:
+  - The HTML path prints its step plan, one JSON object per line, from
+    the same code a live run executes. It must equal
+    [`templates/`](templates) for its mode once the `.eml` path is
+    replaced, so an extra press, a dropped guard check or a changed
+    retry bound is refused. The plan must have exactly one `open_eml`
+    step, whose path has no quote or backslash. That `.eml` must exist
+    inside the dry run's temp dir and pass the same header checks; the
+    sandbox forbids deleting files, so it survives even a binary that
+    cleans up.
+  - Output or an `.eml` containing a NUL byte is refused before anything
     reads it.
   - The plain-text script is read with a scanner that understands
     AppleScript string escapes, and every statement must be one
@@ -172,10 +177,12 @@ The account preflight runs again before every scenario, so an account
 or rule switched on mid-run stops the run.
 
 **Close every compose window first, and select an empty mailbox.**
-Cmd-Shift-D, which the HTML path sends to Mail's front window, is Send
-Again on a viewer but Send on a compose window, and the binary keystrokes
-even if Mail is slow to come to the front. With nothing selected, a stray
-Send Again has nothing to resend.
+Message > Send Again, which the HTML path presses, acts on Mail's key
+window: it is Send Again on a viewer but Send on a compose window. The
+binary presses only after checking that its own viewer or compose is
+Mail's key and main window and that Mail is frontmost, but the check
+cannot close the gap before the press entirely. With nothing selected,
+a stray Send Again has nothing to resend.
 
 ### Mailpit
 
@@ -310,22 +317,24 @@ In that user, from the repository root:
      `127.0.0.1:1025` and `e2e-b-smtp.test:1025` may remain.
 4. Grant the terminal you run from **Accessibility** (System Settings
    -> Privacy & Security -> Accessibility; on macOS 27 and later,
-   Privacy & Security -> Device Control and Data Access), and allow its
-   **Automation**
-   requests for Mail and System Events on the first run.
+   Privacy & Security -> Device Control and Data Access), which the
+   binary's HTML path needs, and allow its **Automation** requests for
+   Mail and System Events on the first run: the binary's plain path
+   needs Mail, and the harness's own AppleScripts need both.
 
 Only `e2e-a` is required. Scenarios that send from `e2e-b` are skipped
 when that account is missing. While Mailpit is not running, Mail reports
 the e2e accounts as offline; that is expected.
 
-## When MailDriver's AppleScript changes
+## When the binary's dry-run output changes
 
-The HTML-path templates in [`templates/`](templates) are the dry-run
-output of the binary on the branch the harness lives on, with the `.eml`
-path replaced by `<EML>`. A branch that changes the edit-draft script
-makes every HTML scenario refuse, with a "script differs from the …
-template" diff, until the templates are regenerated from that branch's
-binary. Review the diff before committing it. From the repository root:
+The HTML-path templates in [`templates/`](templates)
+(`html-plan-{send,draft}.jsonl.tmpl`) are the dry-run step plans of the
+binary on the branch the harness lives on, with the `.eml` path replaced
+by `<EML>`. A branch that changes `HTMLPlan` makes every HTML scenario
+refuse, with a "plan differs from the … template" diff, until the
+templates are regenerated from that branch's binary. Review the diff
+before committing it. From the repository root:
 
 ```sh
 nix build
@@ -333,8 +342,8 @@ printf 'From: e2e-a@example.test\nTo: x@example.test\nSubject: t\nMIME-Version: 
 for mode in send draft; do
   args=(-t); [ "$mode" = send ] && args+=(--send)
   SENDMAIL_DRY_RUN=1 ./result/bin/apple-mail-sendmail "${args[@]}" </tmp/template.eml |
-    sed -E 's#^(do shell script "open -a Mail " & quoted form of )"/[^"]*\.eml"$#\1"<EML>"#' \
-      >"tests/e2e/templates/edit-draft-$mode.applescript.tmpl"
+    sed -E 's#^(\{"activates":true,"path":)"/[^"\\]*\.eml"(,"step":"open_eml"\})$#\1"<EML>"\2#' \
+      >"tests/e2e/templates/html-plan-$mode.jsonl.tmpl"
 done
 ```
 
@@ -344,8 +353,9 @@ mode in its temp dir. A change to the plain-text script needs
 
 ## Running it in a Tart VM
 
-A live run types Cmd-Shift-D into whatever Mail window is frontmost, so
-running it on your own desktop is risky. `nix run .#e2e-vm`
+A live run presses Message > Send Again and Message > Send in Mail, which
+act on whichever Mail window is key, so running it on your own desktop is
+risky. `nix run .#e2e-vm`
 ([`vm.sh`](vm.sh)) runs the same harness inside a throwaway macOS VM
 instead, using [Tart](https://tart.run) (in the dev shell; Apple Silicon
 only). From the repository root:
@@ -413,7 +423,7 @@ transfer and logs. SSH uses a key generated in
 key, pinned during setup over the agent's channel. Every clone boots from
 a copy of the golden disk, so the pin covers the whole image lineage.
 
-**Permissions.** macOS charges an Apple Event or keystroke to the
+**Permissions.** macOS charges an Apple Event or Accessibility call to the
 *responsible* process, and for everything `tart exec` starts that is
 `tart-guest-agent`: the Automation prompts name it, and the guest's TCC
 log records `responsible=tart-guest-agent`. The golden image's grants to

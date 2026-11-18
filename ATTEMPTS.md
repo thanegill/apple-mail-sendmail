@@ -277,3 +277,28 @@ colors from CSS, paragraph structure. Attachments via dictionary
 `make new attachment` after the content is set do not wipe the
 body (verified empirically). `send` via dictionary closes the loop
 for `--send` mode.
+
+### Driving the HTML path with System Events (worked, then superseded)
+
+Until the Accessibility (AX) driver, the HTML path was one generated
+AppleScript: `do shell script "open -a Mail ..."`, window polls over
+Mail's `id of every window`, and `click menu item` on Message > Send
+Again and Message > Send through System Events, after a key-window check
+read through System Events' AX attributes. It worked live, but it needed
+an Automation grant for Mail and for System Events on top of
+Accessibility, and AppleScript added failure modes of its own:
+
+- `repeat with wid in (id of every window)` kept the id list as a live
+  Mail reference, so `item i of id of every window` went back to Mail
+  and failed with -1700 ("can't make ... into type specifier"). The poll
+  had to copy the list into a plain variable first.
+- A sheet showed up in Mail's `windows` as an extra entry with its own
+  id, named "Save Panel Accessory View", which both polls had to skip.
+  Through AX, a sheet is a child of its window instead.
+- Comparing two System Events window references was unreliable (they
+  are usually resolved by title), so key == main had to be read as
+  `AXMain` of `AXFocusedWindow`, with an `AXTitle` cross-check.
+
+The AX driver (`AXHTMLDelivery`) does the same steps with AX element
+identity (`CFEqual`) and NSWorkspace, sends no Apple Events, and is unit
+tested against a fake Mail rather than by matching script text.
