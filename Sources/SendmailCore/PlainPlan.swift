@@ -5,7 +5,6 @@ public enum RecipientKind: String {
     case cc
     case bcc
 
-    /// Mail's class code for this kind of recipient.
     var classCode: String {
         switch self {
         case .to: return "trcp"
@@ -15,11 +14,10 @@ public enum RecipientKind: String {
     }
 }
 
-/// One step of the plain path. `PlainPlan.steps` builds the list,
-/// `AppleEventPlainDelivery` sends one Apple Event per step after the first,
-/// and the dry run prints it, so the printed plan is what a live run does.
+/// The dry run prints the same steps a live run sends, so keep the plan the
+/// only input to `AppleEventPlainDelivery.run`.
 public enum PlainStep: Equatable {
-    /// Start Mail without activating it if it is not running. No Apple Event.
+    /// No Apple Event: an event to a Mail that is not running fails with -600.
     case launchMail(timeoutMs: Int)
     /// `make new outgoing message with properties {subject, visible, sender}`.
     /// A nil sender leaves Mail on its default account.
@@ -35,15 +33,11 @@ public enum PlainStep: Equatable {
     case send
 }
 
-/// The text the plain path hands Mail, with line breaks and control
-/// characters normalized much as the old `AppleScript.quote` did (it kept
-/// CR, and the body never went through it; see CLAUDE.md).
+/// Applied in `PlainPlan.steps`, so the dry-run plan shows exactly the text
+/// Mail gets.
 public enum MailText {
-    /// CR and CRLF become LF, as do U+2028 LINE SEPARATOR and U+2029
-    /// PARAGRAPH SEPARATOR; any other C0 control except tab and LF becomes
-    /// a space. Everything else, DEL and combining marks included, is kept.
-    /// Works per scalar, so a control fused with a combining mark into one
-    /// Character is still mapped and the mark kept.
+    /// Works per scalar, not per Character, so a control fused with a
+    /// combining mark into one Character is still mapped and the mark kept.
     public static func sanitized(_ text: String) -> String {
         var out = String.UnicodeScalarView()
         var previousWasCR = false
@@ -110,8 +104,6 @@ public enum PlainPlan {
     }
 }
 
-/// The dry run's plain delivery: prints the plan, one JSON object per line,
-/// and touches nothing else.
 public struct PlainPlanPrinter: PlainDelivery {
     let output: (String) -> Void
 
@@ -126,13 +118,11 @@ public struct PlainPlanPrinter: PlainDelivery {
     }
 }
 
-/// The plain path through raw Apple Events to Mail, one per plan step.
-/// Needs Automation permission for Mail, as the AppleScript it replaces did.
+/// Needs Automation permission for Mail.
 public struct AppleEventPlainDelivery: PlainDelivery {
     let events: AppleEventSending
     let workspace: MailWorkspace
     let clock: Clock
-    /// How long `make_message` keeps retrying while Mail is not answering yet.
     let readinessTimeout: TimeInterval
 
     public init(events: AppleEventSending, workspace: MailWorkspace, clock: Clock, readinessTimeout: TimeInterval = 10) {
@@ -142,15 +132,12 @@ public struct AppleEventPlainDelivery: PlainDelivery {
         self.readinessTimeout = readinessTimeout
     }
 
-    /// The codes of an event that never reached Mail: its process is not
-    /// there yet (-600, procNotFound), or its port is not ready (-609,
-    /// connectionInvalid). Both happen just after Mail is launched.
+    /// procNotFound and connectionInvalid: the event never reached a
+    /// just-launched Mail.
     static let notAnsweringYet: Set<Int> = [-600, -609]
 
-    /// Sends the event `build` makes, retrying with a growing pause while
-    /// Mail is not answering yet, until `readinessTimeout` has passed. Only
-    /// for the first event: once an event has reached Mail, sending it again
-    /// could make a second message.
+    /// Only for the first event: once an event has reached Mail, sending it
+    /// again could make a second message or send twice.
     func sendOnceMailAnswers(_ build: () -> NSAppleEventDescriptor) throws -> NSAppleEventDescriptor {
         let deadline = clock.now + readinessTimeout
         var pause: TimeInterval = 0.25

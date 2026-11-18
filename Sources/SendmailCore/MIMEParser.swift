@@ -1,7 +1,6 @@
 import Foundation
 
 public enum MIMEParser {
-    /// Build a ParsedMessage from a raw RFC 822 message.
     public static func parse(_ raw: RawMessage) -> ParsedMessage {
         var msg = ParsedMessage()
         msg.subject = EncodedWord.decode(raw.value(for: "Subject") ?? "")
@@ -17,7 +16,6 @@ public enum MIMEParser {
         if mt.hasPrefix("multipart/") {
             walkMultipart(body: raw.body, type: mt, params: params, into: &msg, depth: 0)
             if msg.body.isEmpty {
-                // No text part found in the multipart -- leave body empty rather than dumping raw bytes.
                 msg.body = ""
             }
         } else {
@@ -71,13 +69,10 @@ public enum MIMEParser {
                 || partName != nil
                 || (mt.hasPrefix("text/") == false && mt != "")
 
-            // Treat text/* without an explicit attachment disposition as a body candidate.
             if !isAttachment && mt.hasPrefix("text/") {
                 let charset = parameterValue(subParams, named: "charset") ?? "utf-8"
                 let text = EncodedWord.decodeBytes(decoded, charset: charset) ?? ""
 
-                // Capture raw HTML for the rich-HTML render path independent of
-                // whether plain-text already won the body slot.
                 if mt == "text/html" && msg.htmlBody == nil {
                     msg.htmlBody = text
                 }
@@ -90,12 +85,8 @@ public enum MIMEParser {
                 continue
             }
 
-            // Skip inline body parts (e.g. multipart/related images referenced
-            // by CID from the HTML): Content-Disposition: inline with no
-            // filename/name param. These ride along in the raw .eml and are not
-            // user-facing attachments. Genuine attachments -- disposition
-            // "attachment", a filename/name param present, or a bare non-text
-            // part with no disposition at all -- still fall through below.
+            // Inline parts with no name (e.g. CID images of multipart/related)
+            // ride along in the raw .eml and are not user-facing attachments.
             if dispMain == "inline" && partName == nil {
                 continue
             }
@@ -105,11 +96,8 @@ public enum MIMEParser {
         }
     }
 
-    /// Resolve a MIME parameter, which RFC 2231 lets any parameter encode. An
-    /// extended form (`name*=charset'lang'%XX..` or continuations `name*0*=`,
-    /// `name*1=`, ...) wins over the plain `name=` that senders include as a
-    /// legacy fallback. `plainDecoding` applies to the plain form and to
-    /// all-literal continuations: filenames pass RFC 2047 decoding there,
+    /// An RFC 2231 extended form wins over the plain `name=` that senders
+    /// include as a legacy fallback. Filenames pass `plainDecoding` (RFC 2047),
     /// since senders put encoded-words in them; a boundary must stay verbatim.
     private static func parameterValue(
         _ params: [String: String],
@@ -138,10 +126,8 @@ public enum MIMEParser {
         return params[name].map(plainDecoding)
     }
 
-    /// Join RFC 2231 segments into one string. Only the first segment may
-    /// carry the `charset'language'` prefix, and only when it is encoded.
-    /// All-literal continuations get the same `plainDecoding` as a plain
-    /// parameter, since some senders split an encoded-word across them.
+    /// All-literal continuations get `plainDecoding`, since some senders
+    /// split an encoded-word across them.
     private static func decodeExtendedValue(
         _ segments: [(text: String, isEncoded: Bool)],
         plainDecoding: (String) -> String
@@ -182,22 +168,14 @@ public enum MIMEParser {
         return out
     }
 
-    /// Split a multipart body on its boundary into the inner parts. Per RFC 2046,
-    /// boundary delimiters appear as `--boundary` on a line by themselves; the
-    /// final delimiter is `--boundary--`.
     private static func splitParts(_ body: Data, boundary: String) -> [Data] {
         let delim = Data("--\(boundary)".utf8)
-        // Materializing the part body into [UInt8] (rather than scanning Data
-        // subranges) is intentional-for-simplicity: one short-lived message per
-        // invocation makes the copy negligible, and index-based scanning keeps
-        // the boundary/CRLF-trimming logic readable. Not worth a rewrite.
         let bytes = [UInt8](body)
         let dbytes = [UInt8](delim)
         var positions: [Int] = []
         var i = 0
         while i <= bytes.count - dbytes.count {
             if matchAt(bytes, at: i, pattern: dbytes) {
-                // Must be at line start (i == 0, or preceded by \n).
                 if i == 0 || bytes[i - 1] == 0x0A || bytes[i - 1] == 0x0D {
                     positions.append(i)
                     i += dbytes.count
@@ -209,11 +187,9 @@ public enum MIMEParser {
         var parts: [Data] = []
         for k in 0..<positions.count {
             let start = positions[k] + dbytes.count
-            // Check for terminating "--".
             if start + 1 < bytes.count && bytes[start] == 0x2D && bytes[start + 1] == 0x2D {
                 break
             }
-            // Skip CRLF / LF after the delimiter.
             var s = start
             while s < bytes.count, bytes[s] == 0x0D || bytes[s] == 0x0A {
                 s += 1
@@ -302,12 +278,6 @@ public enum MIMEParser {
         }
     }
 
-    // Compile the stripHTML patterns once at type init rather than on every
-    // call. `dropBlocks` matches whole <style>/<script>/<head> blocks and
-    // comments (replaced with ""); `toNewline` matches block-level break/close
-    // tags (replaced with "\n"). Both use .caseInsensitive, matching the old
-    // per-call replaceRegex behavior. A pattern that fails to compile is
-    // dropped from the array, exactly as the old guard-let-return-s did.
     private static let dropBlockRegexes: [NSRegularExpression] = compileRegexes([
         #"<style\b[^>]*>[\s\S]*?</style>"#,
         #"<script\b[^>]*>[\s\S]*?</script>"#,
@@ -328,10 +298,6 @@ public enum MIMEParser {
         patterns.compactMap { try? NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
     }
 
-    /// Tag-strip an HTML body for a tolerable plain-text fallback.
-    /// Drops <style>, <script>, and <head> block contents (not just their
-    /// tags), turns block-level closing tags into newlines, strips the
-    /// remaining tags, and collapses whitespace.
     private static func stripHTML(_ html: String) -> String {
         var s = html
 
@@ -368,12 +334,8 @@ public enum MIMEParser {
         return result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Decode HTML character references in a single left-to-right pass so that
-    /// an already-escaped ampersand does not get its expansion re-scanned. For
-    /// example `&amp;lt;` must decode to the literal `&lt;`, not `<` -- the old
-    /// chained-replace approach turned `&amp;` into `&` first and then the
-    /// resulting `&lt;` into `<`. Handles named entities plus decimal `&#DDD;`
-    /// and hex `&#xHH;` numeric references.
+    /// One left-to-right pass, so `&amp;lt;` decodes to the literal `&lt;`:
+    /// chained replaces would re-scan a decoded value as an entity.
     private static func decodeEntities(_ s: String) -> String {
         let named: [String: String] = [
             "amp": "&",
@@ -389,8 +351,6 @@ public enum MIMEParser {
         }
         let ns = s as NSString
         let matches = re.matches(in: s, options: [], range: NSRange(location: 0, length: ns.length))
-        // Rebuild the string in one pass, copying the gaps between matches
-        // verbatim so a decoded value can never be re-scanned as an entity.
         var out = ""
         var cursor = 0
         for m in matches {
@@ -416,7 +376,6 @@ public enum MIMEParser {
             } else if let value = named[token.lowercased()] {
                 out += value
             } else {
-                // Unknown named entity: leave it untouched.
                 out += ns.substring(with: full)
             }
             cursor = full.location + full.length

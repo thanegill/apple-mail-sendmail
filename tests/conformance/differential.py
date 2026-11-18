@@ -41,7 +41,6 @@ CLASSES = {
 
 
 def corpus_files(corpus_dirs):
-    """Map each message's name (its path below its corpus root) to its path."""
     files = {}
     for corpus_dir in corpus_dirs:
         for path in corpus_dir.resolve().rglob("*"):
@@ -178,7 +177,6 @@ def normalized_mailbox(mailbox):
 
 
 def compare(ours, reference):
-    """Yield (field, ours, reference) for every field that disagrees."""
     if ours["subject"] != reference["subject"]:
         yield "subject", ours["subject"], reference["subject"]
     if normalized_mailbox(ours["from"]) != normalized_mailbox(reference["from"]):

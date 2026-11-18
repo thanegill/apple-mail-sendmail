@@ -1,13 +1,7 @@
 import Foundation
 
-/// Build the final .eml byte stream for the edit-draft path: start from the
-/// raw rfc822 headers + body, apply CLI-driven header overrides (To/Cc/Bcc
-/// finalized from positional + `-t` logic; From set from `-f`/`-F`), then
-/// concatenate.
-///
-/// Body bytes are passed through verbatim -- no MIME re-encoding. The .eml
-/// produced here is what `open -a Mail` opens, which Mail's WKWebView then
-/// renders.
+/// Every CLI override must be applied here: the compose Send Again makes is
+/// not in Mail's `outgoing messages`, so nothing can be changed after the open.
 public enum EmlBuilder {
     public static func buildEml(
         raw: RawMessage,
@@ -22,10 +16,6 @@ public enum EmlBuilder {
         return serialize(headers: headers, body: raw.body)
     }
 
-    /// Replace To/Cc/Bcc with the CLI-finalized values from `finalRecipients`
-    /// (whose lists already reflect the positional / `-t` rules from
-    /// `main.swift`). Set or replace From if `options.fromAddress` is set.
-    /// All other headers pass through in original order.
     static func applyOverrides(
         headers: [(String, String)],
         finalRecipients: ParsedMessage,
@@ -42,11 +32,8 @@ public enum EmlBuilder {
         if !finalRecipients.cc.isEmpty {
             out.append(("Cc", joinAddresses(finalRecipients.cc)))
         }
-        // Bcc is serialized as a plain rfc822 header. Verified empirically
-        // (2026-07-08): Mail's "Send Again" consumes it as an envelope
-        // recipient and strips the Bcc header from every transmitted copy
-        // -- including the Bcc recipient's own -- so it stays blind, the same
-        // guarantee as the classic path's dedicated bcc-recipient objects.
+        // Stays blind (verified 2026-07-08): Send Again delivers to Bcc as an
+        // envelope recipient and strips the header from every copy, its own too.
         if !finalRecipients.bcc.isEmpty {
             out.append(("Bcc", joinAddresses(finalRecipients.bcc)))
         }
@@ -67,15 +54,11 @@ public enum EmlBuilder {
         return out
     }
 
-    /// Strip embedded CR and LF from a header key or value so a crafted display
-    /// name or address (e.g. `"Alice\r\nBcc: evil@x"`) cannot break out of the
-    /// header line and inject arbitrary headers. Both bare `\r`, bare `\n`, and
-    /// `\r\n` folds are collapsed to a single space; this is the choke point
-    /// through which every serialized header value passes.
+    /// The choke point every serialized header passes through, so a crafted
+    /// name like `"Alice\r\nBcc: evil@x"` cannot inject a header.
     static func sanitizeHeaderValue(_ s: String) -> String {
-        // NB: check at the unicode-scalar level. Swift fuses "\r\n" into a
-        // single Character grapheme cluster, so `s.contains("\r")` is FALSE for
-        // a value containing a CRLF -- iterate scalars instead.
+        // Scalars, not Characters: Swift fuses "\r\n" into one Character, so
+        // `s.contains("\r")` is false for a value containing a CRLF.
         guard s.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\n" }) else {
             return s
         }
@@ -91,11 +74,9 @@ public enum EmlBuilder {
         return out
     }
 
-    /// Keep a header line within RFC 5322's 998-octet limit (2.1.1) by
-    /// inserting a CRLF before a space, which unfolding removes again. The
-    /// parser unfolds each header onto one line, so a long References or a
-    /// long To list would otherwise be written past the limit. A run with no
-    /// space to break at stays long.
+    /// The parser unfolds each header onto one line, so a long References or
+    /// To list must be folded again to stay within RFC 5322's 998-octet limit
+    /// (2.1.1). A run with no space to break at stays long.
     static func fold(_ line: String) -> String {
         let maxLineOctets = 998
         guard line.utf8.count > maxLineOctets else { return line }

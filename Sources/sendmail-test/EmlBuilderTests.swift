@@ -25,8 +25,6 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
         try expect(s.contains("body line one\nbody line two"))
     },
 
-    // RFC 5322 2.1.1: a line is at most 998 octets before its CRLF. The parser
-    // unfolds headers, so long ones must be folded again on the way out.
     TestCase(name: "long_header_lines_are_folded_within_998_octets") {
         let references = (0..<40).map { "<message-id-\($0).1234567890@mail.example.test>" }
         let source = try RFC822Parser.parse(Data(
@@ -58,7 +56,6 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
     TestCase(name: "strips_cc_when_finalized_cc_is_empty") {
         var msg = ParsedMessage()
         msg.to = [ParsedAddress(displayName: nil, address: "a@b")]
-        // msg.cc is empty
         let out = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: msg, options: Options())
         let s = String(data: out, encoding: .utf8) ?? ""
         try expect(!s.contains("Cc:"), "Cc must be stripped when finalRecipients.cc is empty")
@@ -122,26 +119,18 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
     },
 
     TestCase(name: "shared_mailbox_formatting_matches_plain_sender") {
-        // #19: the classic path's `sender:` property and the .eml `From`
-        // header both format via the single shared `formatMailbox` helper, so
-        // the same name+address must produce the same "Name <addr>" string.
         var opts = Options()
         opts.fromName = "Build Bot"
         opts.fromAddress = "bot@x.com"
-        // .eml From header (EmlBuilder.applyOverrides -> formatMailbox).
         var msg = ParsedMessage()
         msg.to = [ParsedAddress(displayName: nil, address: "a@b")]
         let out = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: msg, options: opts)
         let eml = String(data: out, encoding: .utf8) ?? ""
         try expect(eml.contains("From: Build Bot <bot@x.com>"))
-        // Plain path sender (MailDriver.composeSender -> formatMailbox).
-        // Route through deliver on the plain-text path so we observe the
-        // sender property from the same inputs.
         var plain = ParsedMessage()
         plain.to = [ParsedAddress(displayName: nil, address: "a@b")]
         plain.body = "hi"
         try expectEqual(try plainSender(plain, options: opts), "Build Bot <bot@x.com>")
-        // To/Cc/Bcc join uses the same helper too.
         var withCc = ParsedMessage()
         withCc.to = [ParsedAddress(displayName: "Alice A", address: "alice@x")]
         let out2 = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: withCc, options: Options())
@@ -150,19 +139,14 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
     },
 
     TestCase(name: "crlf_in_display_name_does_not_inject_header") {
-        // A recipient display name carrying `\r\nBcc: evil@x` must not break
-        // out of the To: line into an injected Bcc: header. serialize()
-        // sanitizes CR/LF out of every header value.
         var msg = ParsedMessage()
         msg.to = [ParsedAddress(displayName: "Alice\r\nBcc: evil@x", address: "a@b")]
         let out = EmlBuilder.buildEml(raw: sampleRaw, finalRecipients: msg, options: Options())
         let s = String(data: out, encoding: .utf8) ?? ""
-        // Split just the header block (before the blank CRLF separator).
         let headerBlock = s.components(separatedBy: "\r\n\r\n").first ?? s
         let headerLines = headerBlock.components(separatedBy: "\r\n")
         try expect(!headerLines.contains { $0.hasPrefix("Bcc:") }, "no injected Bcc: header line")
         try expect(!s.contains("\r\nBcc: evil@x"), "the CRLF must be neutralized, not preserved")
-        // The address itself still survives on the To line.
         try expect(s.contains("a@b"))
     },
 

@@ -14,16 +14,12 @@ public struct Attachment {
 
 public struct ParsedMessage {
     public var subject: String = ""
-    /// First mailbox of the `From` header. The classic path uses it as the
-    /// account-selecting `sender` when `-f` is not given.
     public var from: ParsedAddress? = nil
     public var to: [ParsedAddress] = []
     public var cc: [ParsedAddress] = []
     public var bcc: [ParsedAddress] = []
+    /// For an HTML-only message, the tag-stripped text of `htmlBody`.
     public var body: String = ""
-    /// Raw (decoded but unstripped) HTML body when the message has an HTML
-    /// part. Used by MailDriver's rich-HTML path; the stripped plain text
-    /// stays in `body` as the fallback.
     public var htmlBody: String? = nil
     public var attachments: [Attachment] = []
 

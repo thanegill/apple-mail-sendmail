@@ -21,8 +21,6 @@ public struct RawMessage {
 }
 
 public enum RFC822Parser {
-    /// Split the raw input into a headers section (decoded as UTF-8, replacing
-    /// invalid bytes) and a body (raw bytes).
     public static func parse(_ data: Data) throws -> RawMessage {
         let (headerData, bodyData) = splitHeadersAndBody(data)
         let headerStr = decode(headerData)
@@ -41,13 +39,7 @@ public enum RFC822Parser {
     }
 
     private static func splitHeadersAndBody(_ data: Data) -> (Data, Data) {
-        // Search for the first blank line. Accept LF/LF, CR/LF/CR/LF, mixed.
-        // This materializes the whole message into a [UInt8] rather than
-        // scanning Data subranges. That copy is intentional-for-simplicity: the
-        // binary processes one short-lived message per invocation, so the extra
-        // allocation is negligible, and index-based [UInt8] scanning keeps the
-        // CRLF-boundary logic (which is fragile -- see the crlf_separator test)
-        // easy to read. Not worth a Data-subrange rewrite.
+        // The CRLF-boundary logic is fragile; see the crlf_separator test.
         let bytes = [UInt8](data)
         // A MIME body part with no header fields starts with the blank line
         // (RFC 2046 5.1.1).
@@ -59,21 +51,18 @@ public enum RFC822Parser {
         }
         var i = 0
         while i < bytes.count {
-            // case 1: LF LF
             if bytes[i] == 0x0A {
                 if i + 1 < bytes.count && bytes[i + 1] == 0x0A {
                     let header = Data(bytes[0..<i])
                     let body = Data(bytes[(i + 2)...])
                     return (header, body)
                 }
-                // case 2: LF CR LF
                 if i + 2 < bytes.count && bytes[i + 1] == 0x0D && bytes[i + 2] == 0x0A {
                     let header = Data(bytes[0..<i])
                     let body = Data(bytes[(i + 3)...])
                     return (header, body)
                 }
             }
-            // case 3: CRLF CRLF
             if bytes[i] == 0x0D && i + 3 < bytes.count
                 && bytes[i + 1] == 0x0A && bytes[i + 2] == 0x0D && bytes[i + 3] == 0x0A {
                 let header = Data(bytes[0..<i])
@@ -82,7 +71,6 @@ public enum RFC822Parser {
             }
             i += 1
         }
-        // No blank line found: treat the whole input as headers (body empty).
         return (data, Data())
     }
 
@@ -91,12 +79,11 @@ public enum RFC822Parser {
         return String(decoding: data, as: UTF8.self)
     }
 
-    /// Unfold RFC 5322 headers: a line beginning with WSP is a continuation of
-    /// the previous logical line, joined by dropping only the line break (the
-    /// WSP stays, RFC 5322 2.2.3). Empty lines are skipped.
+    /// Unfolding drops only the line break; the continuation's WSP stays
+    /// (RFC 5322 2.2.3).
     private static func unfold(_ s: String) -> [String] {
-        // Normalize line endings so the grapheme cluster "\r\n" doesn't hide LF
-        // from the splitter (in Swift, "\r\n" is a single Character).
+        // Swift fuses "\r\n" into one Character, which a split on "\n" never
+        // matches; without this, adjacent headers merge into one.
         let normalized = s.replacingOccurrences(of: "\r\n", with: "\n")
         var lines: [String] = []
         for raw in normalized.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" }) {
@@ -113,9 +100,7 @@ public enum RFC822Parser {
         return lines
     }
 
-    /// Parse a header value of the form `value; param1=foo; param2="bar"` into
-    /// (mainValue, params). Params are returned with lowercased keys; values are
-    /// unquoted.
+    /// Param keys come back lowercased and values unquoted.
     public static func parseStructured(_ value: String) -> (main: String, params: [String: String]) {
         var parts: [String] = []
         var current = ""

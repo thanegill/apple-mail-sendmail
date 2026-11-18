@@ -27,9 +27,7 @@ private func delivery(
     )
 }
 
-/// Runs the .eml path against `mail` for a message whose Subject is
-/// `subject` (by default the title FakeMail shows), and returns the error
-/// it threw, if any.
+/// `subject` defaults to the title FakeMail shows. Returns the error thrown.
 private func runEml(
     _ mail: FakeMail, send: Bool, subject: String? = nil, granted: Bool = true, trace: TraceLog = TraceLog()
 ) -> Error? {

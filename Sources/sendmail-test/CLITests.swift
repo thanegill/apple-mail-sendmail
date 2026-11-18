@@ -118,21 +118,16 @@ let cliTests = TestSuite(name: "CLI", cases: [
     },
 
     TestCase(name: "dashB_consumes_separate_value_not_recipient") {
-        // -B takes a space-separated value (body type). 8BITMIME is the value,
-        // not a positional recipient.
         let opts = try CLI.parse(["-B", "8BITMIME", "user@x.com"], env: [:])
         try expectEqual(opts.recipients, ["user@x.com"])
     },
 
     TestCase(name: "dashN_consumes_separate_value_not_recipient") {
-        // -N takes a space-separated value (DSN notify).
         let opts = try CLI.parse(["-N", "never", "user@x.com"], env: [:])
         try expectEqual(opts.recipients, ["user@x.com"])
     },
 
     TestCase(name: "dashv_takes_no_value") {
-        // -v is verbose: it consumes no argv, so the following token is a
-        // recipient.
         let opts = try CLI.parse(["-v", "user@x.com"], env: [:])
         try expectEqual(opts.recipients, ["user@x.com"])
     },
@@ -163,7 +158,6 @@ let cliTests = TestSuite(name: "CLI", cases: [
     },
 
     TestCase(name: "attached_only_flags_still_parse") {
-        // -oi and -bm carry attached values only and must not consume argv.
         let opts = try CLI.parse(["-oi", "-bm", "user@x.com"], env: [:])
         try expectEqual(opts.recipients, ["user@x.com"])
     },
@@ -182,8 +176,8 @@ let cliTests = TestSuite(name: "CLI", cases: [
     },
 
     TestCase(name: "dashh_hop_count_separate_value_ignored") {
-        // sendmail's -h N sets the hop count; it must not show help (exit 0
-        // without delivering) nor turn N into a recipient.
+        // -h is sendmail's hop count: it must not show help (exit 0 without
+        // delivering) nor turn N into a recipient.
         let opts = try CLI.parse(["-h", "20", "rcpt@x.test"], env: [:])
         try expectNil(opts.infoRequest)
         try expectEqual(opts.recipients, ["rcpt@x.test"])
@@ -207,7 +201,6 @@ let cliTests = TestSuite(name: "CLI", cases: [
     },
 
     TestCase(name: "dashh_attached_non_numeric_is_usage_error") {
-        // -ht must not silently drop -t by eating "t" as the hop count.
         try expectUsageError(["-ht", "rcpt@x.test"], containing: "bad hop count: t")
     },
 
@@ -313,17 +306,12 @@ let cliTests = TestSuite(name: "CLI", cases: [
     },
 
     TestCase(name: "tempfail_exit_code_is_75") {
-        // main.swift exits EX_TEMPFAIL when TempDir() creation fails so an MTA
-        // retries a transient temp-dir failure instead of bouncing it as a
-        // permanent EX_OSERR (71). Guard the constant value.
         try expectEqual(ExitCode.tempFail.rawValue, 75)
         try expectEqual(ExitCode.osErr.rawValue, 71)
     },
 
     TestCase(name: "help_text_wraps_long_descriptions") {
-        // Two-column descriptions wrap so column-2 lines stay <= 80. The
-        // single-line USAGE synopsis is exempt from wrapping (swift-argument-
-        // parser does the same).
+        // The single-line USAGE synopsis is exempt from the 80-column wrap.
         let h = CLI.helpText()
         for line in h.split(separator: "\n") {
             if line.hasPrefix("USAGE:") { continue }

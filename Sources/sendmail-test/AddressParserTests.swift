@@ -59,14 +59,10 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
     },
 
     TestCase(name: "malformed_empty_angle_pair_never_yields_empty_address") {
-        // `<a@x> <>`: the greedy lastIndex(of:) logic would extract the empty
-        // string between the trailing `<>`. The guard must fall back to the
-        // token with angle brackets removed, never emit an empty address.
         let r = AddressParser.parse("<a@x> <>")
         try expectEqual(r.count, 1)
         try expect(!r[0].address.isEmpty, "must never emit an empty address")
         try expectEqual(r[0].address, "a@x")
-        // Regression: a normal angle address is unaffected.
         let n = AddressParser.parse("Bob <b@y>")
         try expectEqual(n.count, 1)
         try expectEqual(n[0].displayName, "Bob")
@@ -145,7 +141,6 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
         try expectEqual(r.map(\.address), ["a@x.test", "b@y.test"])
     },
 
-    // RFC 5322 Appendix A.1.2: quoted, unquoted, bare and angle-only mailboxes.
     TestCase(name: "rfc5322_a1_2_mailbox_forms") {
         let to = AddressParser.parse("Mary Smith <mary@x.test>, jdoe@example.org, Who? <one@y.test>")
         try expectEqual(to.map(\.address), ["mary@x.test", "jdoe@example.org", "one@y.test"])
@@ -156,7 +151,6 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
         try expectEqual(AddressParser.parse(#""Joe Q. Public" <john.q.public@example.com>"#)[0].displayName, "Joe Q. Public")
     },
 
-    // RFC 5322 Appendix A.1.3: a group and an empty group.
     TestCase(name: "rfc5322_a1_3_groups") {
         let to = AddressParser.parse("A Group:Ed Jones <c@a.test>,joe@where.test,John <jdoe@one.test>;")
         try expectEqual(to.map(\.address), ["c@a.test", "joe@where.test", "jdoe@one.test"])
@@ -164,7 +158,6 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
         try expect(AddressParser.parse("Undisclosed recipients:;").isEmpty)
     },
 
-    // RFC 5322 Appendix A.5: comments and folding whitespace around a group.
     TestCase(name: "rfc5322_a5_group_with_comments_and_fws") {
         let to = AddressParser.parse(
             "A Group(Some people)     :Chris Jones <c@(Chris's host.)public.example>,"
@@ -175,16 +168,12 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
         try expect(AddressParser.parse("(Empty list)(start)Hidden recipients  :(nobody(that I know))  ;").isEmpty)
     },
 
-    // RFC 5322 Appendix A.5: a comment holding a quoted-pair `\)`, and comments
-    // inside the addr-spec.
     TestCase(name: "rfc5322_a5_comment_with_quoted_pair") {
         let from = AddressParser.parse(#"Pete(A nice \) chap) <pete(his account)@silly.test(his host)>"#)
         try expectEqual(from.map(\.address), ["pete@silly.test"])
         try expectEqual(from.map(\.displayName), ["Pete"])
     },
 
-    // RFC 5322 Appendix A.6.1 and A.6.3: an obs-route and whitespace or
-    // comments around the dots of an obsolete addr-spec.
     TestCase(name: "rfc5322_a6_obsolete_addr_spec") {
         let to = AddressParser.parse("Mary Smith <@node.test:mary@example.net>, , jdoe@test  . example")
         try expectEqual(to.map(\.address), ["mary@example.net", "jdoe@test.example"])
@@ -194,8 +183,6 @@ let addressTests = TestSuite(name: "AddressParser", cases: [
         try expectEqual(AddressParser.parse(#"<"john  doe" @ example . test>"#).map(\.address), [#""john  doe"@example.test"#])
     },
 
-    // RFC 5322 3.2.2: a run of FWS or CFWS between the words of a phrase is
-    // one space; spaces inside a quoted-string are kept.
     TestCase(name: "display_name_whitespace_runs_read_as_one_space") {
         let r = AddressParser.parse("Mary \t  Smith <m@x.test>, John (middle) Doe <j@x.test>, \"Quoted   Spaces\" <q@x.test>")
         try expectEqual(r.map(\.displayName), ["Mary Smith", "John Doe", "Quoted   Spaces"])

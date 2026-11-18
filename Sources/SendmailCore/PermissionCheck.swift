@@ -2,34 +2,26 @@ import ApplicationServices
 import CoreServices
 import Foundation
 
-/// The two grants `--check-permissions` reads, so tests can answer them
-/// without touching Accessibility or Apple Events.
 public protocol PermissionProbe {
-    /// Whether this process may drive another app's UI, which the .eml path
-    /// needs. Never prompts.
+    /// Never prompts.
     func accessibilityGranted() -> Bool
-    /// Whether this process may send Apple Events to Mail, which --no-ui
-    /// needs, asking the user when macOS can. Mail must be running.
-    /// Returns the OSStatus: 0 granted, -1743 denied, -1744 not asked yet,
-    /// -600 Mail not running.
+    /// Automation for Mail, which only --no-ui needs. Prompts when macOS can,
+    /// and needs Mail running. The OSStatus: 0 granted, -1743 denied, -1744
+    /// not asked yet, -600 Mail not running.
     func mailAutomationStatus() -> Int
 }
 
-/// What `--check-permissions` found out about Automation for Mail.
 public enum AutomationStatus: Equatable {
     case granted
     /// -1743: denied, or never asked and macOS could not ask.
     case denied
     /// -1744: macOS has not asked yet and would need to.
     case notAsked
-    /// Mail could not be started, so the grant could not be checked.
     case mailDidNotStart(String)
-    /// Mail did not answer within the wait (-600 or -609).
     case mailNotAnswering(Int)
     case failed(Int)
 }
 
-/// The result of `--check-permissions`: what it printed and how it exits.
 public struct PermissionReport: Equatable {
     public let accessibilityGranted: Bool
     public let automation: AutomationStatus
@@ -37,7 +29,6 @@ public struct PermissionReport: Equatable {
 
     public var allGranted: Bool { accessibilityGranted && automation == .granted }
 
-    /// 0 when both grants are in place, 78 (`EX_CONFIG`) otherwise.
     public var exitCode: ExitCode { allGranted ? .ok : .config }
 
     public var text: String {
@@ -118,12 +109,10 @@ public struct PermissionReport: Equatable {
 }
 
 public enum PermissionCheck {
-    /// How long to wait for a just-launched Mail to answer the Automation check.
     static let mailAnswerTimeout: TimeInterval = 10
 
-    /// Checks Accessibility, then starts Mail without activating it if it is
-    /// not running and checks Automation for Mail, which may show macOS's
-    /// prompt. Sends no message.
+    /// Starts Mail if needed and may show macOS's Automation prompt; sends
+    /// no message.
     public static func run(probe: PermissionProbe, workspace: MailWorkspace, clock: Clock, osMajorVersion: Int) -> PermissionReport {
         let accessibility = probe.accessibilityGranted()
         return PermissionReport(
@@ -154,8 +143,6 @@ public enum PermissionCheck {
     }
 }
 
-/// `PermissionProbe` over `AXIsProcessTrusted` and
-/// `AEDeterminePermissionToAutomateTarget`.
 public struct SystemPermissionProbe: PermissionProbe {
     public init() {}
 

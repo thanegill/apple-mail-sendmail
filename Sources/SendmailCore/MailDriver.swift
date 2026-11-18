@@ -1,12 +1,8 @@
 import Foundation
 
 public enum MailDriver {
-    /// `deliver`, then remove `tmp` whether delivery succeeded or threw.
-    ///
-    /// The executable must call this rather than relying on a top-level
-    /// `defer`: its exit paths go through `exit()`, which terminates the
-    /// process without unwinding top-level scope, so such a `defer` never
-    /// runs and the message (eml, body, attachments) would stay on disk.
+    /// The executable must call this, not use a top-level `defer`: its exit
+    /// paths call `exit()`, which never runs one, leaving the message on disk.
     public static func deliverThenCleanUp(
         _ msg: ParsedMessage,
         emlBytes: Data,
@@ -18,18 +14,10 @@ public enum MailDriver {
         try deliver(msg, emlBytes: emlBytes, options: options, tmp: tmp, automation: automation)
     }
 
-    /// Hand the parsed message to Mail.app.
-    ///
-    /// - By default, write `emlBytes` to a temp `.eml` and hand it to
-    ///   `automation.eml`, which opens it in Mail and converts the viewer
-    ///   into a fresh editable compose with Message > Send Again. This is
-    ///   the only path that preserves an HTML body's tables, CSS padding,
-    ///   monospace backgrounds, etc., and the only one on which Mail sends
-    ///   a plain-text body as written: a body set through Apple Events goes
-    ///   out as a quotation (FB11734014).
-    /// - With `options.noUI`, stage the attachments as files and hand a
-    ///   plain-text message to `automation.plain`. A message with an HTML
-    ///   body is refused with `HTMLNeedsUI` before anything is written.
+    /// The .eml path is the only one that keeps an HTML body's layout, and
+    /// the only one on which Mail sends a plain-text body as written: a body
+    /// set through Apple Events goes out as a quotation (FB11734014).
+    /// Attachments ride inside the .eml (verified live 2026-07-09).
     public static func deliver(
         _ msg: ParsedMessage,
         emlBytes: Data,
@@ -63,9 +51,7 @@ public enum MailDriver {
         ))
     }
 
-    /// Throws for a message `deliver` would refuse, so the executable can
-    /// stop before it creates a temp dir: `HTMLNeedsUI` for an HTML body with
-    /// `--no-ui`, and `SendNeedsSubject` for `--send` without a Subject.
+    /// Lets the executable refuse before it creates a temp dir.
     public static func requireDeliverable(_ msg: ParsedMessage, options: Options) throws {
         if options.noUI && hasHTMLBody(msg) {
             throw HTMLNeedsUI()
@@ -75,18 +61,14 @@ public enum MailDriver {
         }
     }
 
-    /// True when the message has a non-empty HTML body, which only the .eml
-    /// path can deliver.
     static func hasHTMLBody(_ msg: ParsedMessage) -> Bool {
         guard let html = msg.htmlBody else { return false }
         return !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Same precedence as `EmlBuilder.applyOverrides`: `-f` (plus `-F`)
-    /// replaces the message's From; otherwise the header From is used as-is,
-    /// and `-F` alone changes nothing. A header From without a domain (cron's
-    /// `root (Cron Daemon)`, an empty group) cannot name a Mail account, so
-    /// it is dropped and no sender is set. An explicit `-f` is never filtered.
+    /// Keep the precedence in step with `EmlBuilder.applyOverrides`. A header
+    /// From without a domain (cron's `root (Cron Daemon)`) cannot name a Mail
+    /// account, so no sender is set; an explicit `-f` is never filtered.
     private static func composeSender(options: Options, headerFrom: ParsedAddress?) -> String? {
         if let address = options.fromAddress {
             return formatMailbox(name: options.fromName, address: address, for: .mailSender)
@@ -103,8 +85,6 @@ public enum MailDriver {
     }
 }
 
-/// `--no-ui` was asked to deliver a message with an HTML body. Only the .eml
-/// path renders HTML, and it works through Mail's windows and menus.
 public struct HTMLNeedsUI: Error, CustomStringConvertible, Equatable {
     public init() {}
 
@@ -113,11 +93,10 @@ public struct HTMLNeedsUI: Error, CustomStringConvertible, Equatable {
     }
 }
 
-/// `--send` was asked for a message whose decoded Subject is empty or only
-/// whitespace. Mail holds such a message for a "no subject, send anyway?"
-/// confirmation: the .eml path's compose shows it as a sheet the binary never
-/// answers, and a `--no-ui` message, which has no window, keeps it invisible
-/// in `outgoing messages` and never sends it, though `send` reports success.
+/// Mail holds a message with no Subject for a "send anyway?" confirmation:
+/// the .eml path's compose shows it as a sheet the binary never answers, and
+/// a `--no-ui` message, which has no window, stays invisible in `outgoing
+/// messages` and is never sent, though `send` reports success.
 public struct SendNeedsSubject: Error, CustomStringConvertible, Equatable {
     public init() {}
 

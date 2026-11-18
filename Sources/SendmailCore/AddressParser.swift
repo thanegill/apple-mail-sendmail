@@ -10,29 +10,18 @@ public struct ParsedAddress {
     }
 }
 
-/// Where a formatted mailbox string ends up. The two destinations differ only
-/// in how a non-ASCII display name is written.
 enum MailboxFormatTarget {
-    /// A header line in the .eml that Mail opens. Non-ASCII display names are
-    /// RFC 2047 encoded so the file stays plain RFC 5322.
     case rfc822Header
-    /// Mail's `sender` property of an outgoing message. Mail encodes headers
-    /// itself on send, so non-ASCII stays literal; pre-encoding it would risk
-    /// Mail treating the encoded-word as literal text.
+    /// Mail encodes headers itself on send, so non-ASCII stays literal;
+    /// pre-encoding it would risk Mail treating the encoded-word as text.
     case mailSender
 }
 
-/// Format a mailbox as either `Name <addr>` (when `name` is non-nil and
-/// non-empty) or bare `addr`. This is the single source of truth for the
-/// rule; it is shared by the plain path's `sender` property, the .eml
-/// `From` header override, and the .eml To/Cc/Bcc serialization so all three
-/// stay in lockstep.
-///
-/// A display name containing anything outside RFC 5322 `atext` and space
-/// (e.g. the comma in `Doe, John`) is written as a quoted-string; unquoted,
-/// a re-parser would split it into several mailboxes. So is one with a run
-/// of spaces or a leading or trailing space, which a re-parser would
-/// otherwise read as single spaces (RFC 5322 3.2.2) or drop.
+/// Shared by the `--no-ui` path's `sender`, the .eml `From` override and the
+/// .eml To/Cc/Bcc, so all three stay in lockstep. A name with anything
+/// outside `atext` and space is quoted, or a re-parser would split it; so
+/// is one with a run of spaces or a leading or trailing space, which a
+/// re-parser would collapse (RFC 5322 3.2.2) or drop.
 func formatMailbox(name: String?, address: String, for target: MailboxFormatTarget) -> String {
     guard let name, !name.isEmpty else { return address }
     return "\(formatDisplayName(name, for: target)) <\(address)>"
@@ -62,11 +51,8 @@ private func displayNameScalarNeedsQuoting(_ scalar: Unicode.Scalar) -> Bool {
 }
 
 public enum AddressParser {
-    /// Split a header value like `"Alice" <a@x>, b@y (Bob), Carol <c@z>` into
-    /// individual addresses, then parse each. Comments in parentheses are
-    /// stripped; quoted-string display names are honored. RFC 5322 groups
-    /// (`Team: a@x, b@y;`) contribute their member mailboxes and the group
-    /// name is dropped, so `undisclosed-recipients:;` yields nothing.
+    /// RFC 5322 groups contribute their members and drop the group name, so
+    /// `undisclosed-recipients:;` yields nothing.
     public static func parse(_ value: String) -> [ParsedAddress] {
         let tokens = split(value)
         return tokens.compactMap { parseOne($0) }
@@ -143,7 +129,6 @@ public enum AddressParser {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return nil }
 
-        // Strip comments in parentheses (not nested in quotes).
         var noComments = ""
         var inQuotes = false
         var quotedPairPending = false
@@ -190,9 +175,7 @@ public enum AddressParser {
                 let decoded = EncodedWord.decode(unquotePhrase(phrase))
                 return ParsedAddress(displayName: decoded.isEmpty ? nil : decoded, address: addr)
             }
-            // Empty angle-bracket pair (e.g. the trailing `<>` in `<a@x> <>`).
-            // Fall back to the token with angle brackets removed as the
-            // address; never emit a ParsedAddress with an empty address.
+            // An empty `<>` (as in `<a@x> <>`): never emit an empty address.
             let stripped = s
                 .replacingOccurrences(of: "<", with: "")
                 .replacingOccurrences(of: ">", with: "")
@@ -203,10 +186,7 @@ public enum AddressParser {
         return ParsedAddress(displayName: nil, address: normalizeObsoleteAddrSpec(s))
     }
 
-    /// Rewrite the obsolete addr-spec forms of RFC 5322 4.4 to the current
-    /// syntax: drop an obs-route (`@node.test:` before the address) and the
-    /// whitespace (comments are already gone) around the dots and the `@` of
-    /// an obs-local-part or obs-domain, so `jdoe@test  . example` becomes
+    /// RFC 5322 4.4 obsolete forms: `@node.test:jdoe@test  . example` ->
     /// `jdoe@test.example`. Quoted local-parts and domain literals are kept.
     private static func normalizeObsoleteAddrSpec(_ spec: String) -> String {
         var remaining = Substring(spec.trimmingCharacters(in: .whitespaces))
@@ -248,12 +228,9 @@ public enum AddressParser {
         return out
     }
 
-    /// Decode an RFC 5322 display-name phrase: drop the delimiters of every
-    /// quoted-string segment and unescape the quoted-pairs inside them, so
-    /// `"Doe, John" Jr` becomes `Doe, John Jr` and `"Smith \"Bob\""` becomes
-    /// `Smith "Bob"`. A run of whitespace between unquoted words (left by
-    /// folding or a removed comment) reads as one space (RFC 5322 3.2.2);
-    /// whitespace inside a quoted-string is kept as written.
+    /// `"Doe, John" Jr` -> `Doe, John Jr`; `"Smith \"Bob\""` -> `Smith "Bob"`.
+    /// Unquoted whitespace runs read as one space (RFC 5322 3.2.2); quoted
+    /// whitespace is kept as written.
     private static func unquotePhrase(_ phrase: String) -> String {
         var out = ""
         var inQuotes = false

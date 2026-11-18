@@ -1,8 +1,6 @@
 import Foundation
 import SendmailCore
 
-/// Records what `MailDriver` hands the .eml path, and whether the `.eml`
-/// existed at that moment.
 final class RecordingEmlDelivery: EmlDelivery {
     struct Call {
         let url: URL
@@ -20,23 +18,17 @@ final class RecordingEmlDelivery: EmlDelivery {
     }
 }
 
-/// The real plain path, sending its Apple Events to `recorder` and running
-/// against a fake Mail that is already running.
 func recordingAutomation(_ recorder: AppleEventRecorder, eml: EmlDelivery = RecordingEmlDelivery()) -> MailAutomation {
     let mail = FakeMail()
     return MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), eml: eml)
 }
 
-/// `Options` that send a plain-text message down the `--no-ui` Apple Event
-/// path.
 func noUIOptions() -> Options {
     var options = Options()
     options.noUI = true
     return options
 }
 
-/// The `sender` the `--no-ui` plain path gives Mail for `msg`, or nil if it
-/// sets none.
 func plainSender(_ msg: ParsedMessage, options: Options) throws -> String? {
     let tmp = try TempDir()
     defer { tmp.cleanup() }
@@ -49,8 +41,6 @@ func plainSender(_ msg: ParsedMessage, options: Options) throws -> String? {
 }
 
 extension MailDriver {
-    /// `deliver` with the plain path's Apple Events going to `recorder`, and
-    /// the .eml path through `eml`.
     static func deliver(
         _ msg: ParsedMessage,
         emlBytes: Data,

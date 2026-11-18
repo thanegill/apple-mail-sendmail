@@ -90,7 +90,7 @@
         </dict>
     </array>
     <key>PayloadDescription</key>
-    <string>Two POP/SMTP Mail accounts that point only at a Mailpit capture server on this machine, for the apple-mail-sendmail live end-to-end tests: e2e-a uses 127.0.0.1 (POP 1110, SMTP 1025); e2e-b uses POP 127.0.0.1:1111 and SMTP e2e-b-smtp.test:1025, a name that /etc/hosts must map to 127.0.0.1 and ::1 only (see the repository README). Install only in a dedicated macOS test user, with Mailpit running.</string>
+    <string>Two POP/SMTP Mail accounts that point only at a Mailpit capture server on this machine, for the apple-mail-sendmail live end-to-end tests: e2e-a uses 127.0.0.1 (POP 1110, SMTP 1025); e2e-b uses POP 127.0.0.1:1111 and SMTP e2e-b-smtp.test:1025, a name that /etc/hosts must map to 127.0.0.1 and ::1 only (see tests/e2e/README.md). Install only in a dedicated macOS test user, with Mailpit running.</string>
     <key>PayloadDisplayName</key>
     <string>apple-mail-sendmail e2e accounts</string>
     <key>PayloadIdentifier</key>

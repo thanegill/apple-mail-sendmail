@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Runs the live end-to-end harness (e2e.sh) inside a throwaway Tart clone of
-# a prepared macOS VM, so its keystrokes never reach the host's desktop. See
-# "Running it in a Tart VM" in tests/e2e/README.md. Packaged as
-# `nix run .#e2e-vm`.
+# Runs e2e.sh in a throwaway Tart clone, so its Mail presses never reach the
+# host's desktop.
 set -euo pipefail
 
 readonly PROGRAM=apple-mail-sendmail-e2e-vm
@@ -20,16 +18,15 @@ readonly NIX_COPY_ATTEMPTS=4
 readonly NIX_DAEMON_DISCONNECTED='Nix daemon disconnected unexpectedly'
 readonly GUEST_MOBILECONFIG=$GUEST_HOME/Desktop/e2e-accounts.mobileconfig
 readonly PROFILE_IDENTIFIER=test.example.apple-mail-sendmail.e2e
-# SMTP, POP3 for e2e-a, the POP3 forwarder for e2e-b, and the API.
+# Must list every port the harness's --serve binds (SMTP, POP3 for e2e-a, the
+# e2e-b POP3 forwarder, the API), or a leftover listener goes undetected.
 readonly MAILPIT_SMTP_PORT=1025
 readonly MAILPIT_PORTS=("$MAILPIT_SMTP_PORT" 1110 1111 8025)
 readonly TCC_PREDICATE='subsystem == "com.apple.TCC"'
 readonly TCC_SUMMARY_PATTERN='tart-guest-agent|osascript|apple-mail-sendmail|kTCCServiceAppleEvents|kTCCServiceAccessibility|kTCCServicePostEvent'
 readonly NIX_UNINSTALL_DOCS=https://nix.dev/manual/nix/stable/installation/uninstall.html
-# Together these exercise every grant a live run uses: the binary's
-# Accessibility presses on the .eml path, for a plain and an HTML message,
-# and its Apple Events to Mail under --no-ui, which need the Automation grant
-# that setup asks for through osascript.
+# Together these exercise every grant a live run uses: Accessibility for the
+# .eml path (plain and HTML) and Automation for Mail under --no-ui.
 readonly APPROVAL_SCENARIOS=(plain-send plain-send-no-ui html-send)
 
 harness_package=${E2E_VM_HARNESS:?E2E_VM_HARNESS must name the harness package}
@@ -237,7 +234,6 @@ end_foreground_job() {
   foreground_pid=""
 }
 
-# Installed by cleanup, which is itself bounded.
 ignore_signals_during_cleanup() {
   trap 'log "still cleaning up (bounded); please wait"' INT TERM
 }
@@ -245,11 +241,10 @@ ignore_signals_during_cleanup() {
 # ---------------------------------------------------------------------------
 # Tart
 
-# Command output is captured before it is parsed, here and throughout:
-# under pipefail, `producer | grep -q` fails when grep exits on the first
-# match and the producer dies of SIGPIPE, and `producer | reader || true`
-# hides a producer that failed. Capturing keeps a match a match and a
-# failed producer a failure.
+# Capture command output before parsing it, throughout: under pipefail,
+# `producer | grep -q` fails (141) when grep exits on the first match and the
+# producer dies of SIGPIPE, and `producer | reader || true` hides a failed
+# producer.
 
 local_vms_json() {
   tart list --source local --format json
@@ -392,9 +387,8 @@ wait_for_ssh() {
 }
 
 # SSH can be up before launchd has the guest's nix-daemon ready, and a copy
-# started then fails with "Nix daemon disconnected unexpectedly". This waits
-# until a client in the guest gets an answer from the daemon; the client's
-# exit status comes back in-band, and SSH failing counts as not ready yet.
+# started then fails with "Nix daemon disconnected unexpectedly". The
+# client's status comes back in-band; SSH failing counts as not ready yet.
 wait_for_guest_nix_daemon() {
   local deadline=$((SECONDS + NIX_DAEMON_WAIT_SECONDS)) output=""
   while true; do
@@ -789,16 +783,11 @@ stage_mobileconfig() {
 }
 
 # Runs as root in the guest (sent with `declare -f`, so POSIX sh only).
-# Reads the file the way the harness's check_smtp_alias does: everything
-# from the first "#" is a comment, a line mentions the alias when any of
-# its names equals it case-insensitively, and each such line is taken as
-# its address and names joined by single spaces. The harness accepts
-# exactly the two mentions "127.0.0.1 alias" and "::1 alias", in any order
-# and with any whitespace. This prints "unchanged" when the file already
-# satisfies that, and "added" after appending whichever of the two is
-# missing as a TAB-separated line. It exits 3, printing the mentions and
-# editing nothing, on any other mention (another address, extra names,
-# different case, a repeat), which is left for a human.
+# Must parse the file exactly as the harness's check_smtp_alias does: from
+# the first "#" is a comment, a line mentions the alias when any of its
+# names equals it case-insensitively, and the only accepted mentions are
+# "127.0.0.1 alias" and "::1 alias". Appends only what is missing; exits 3,
+# editing nothing, on any other mention, which is left for a human.
 ensure_hosts_lines() {
   hosts_alias=$1
   hosts_file=$2
@@ -1057,8 +1046,9 @@ stop_setup_mailpit() {
   serve_ssh_pid=""
 }
 
-# Asks with osascript, which can raise the prompt, and repeats until the
-# event goes through or the user gives up.
+# Only osascript can raise the Automation prompt here: the binary lacks the
+# hardened-runtime Apple Events entitlement, so tccd denies its events (-1743)
+# without one. Do not replace this step with a harness scenario.
 request_automation_access() {
   local target=$1 script=$2 output_log=$3 answer
   while true; do
@@ -1075,11 +1065,9 @@ request_automation_access() {
   done
 }
 
-# The harness exits non-zero unless every selected scenario passed; a pass
-# also needs its summary to say so (the RESULT: line, and a PASS row for
-# each approval scenario rather than FAIL, REFUSED, ABORTED, SKIP or
-# NOT-RUN), so a truncated or misread run never counts. The harness's
-# self_test_summary checks its summary with these same patterns.
+# Exit 0 alone is not enough: the summary must also say so, so a truncated or
+# misread run never counts. The harness's self_test_summary checks its
+# summary with these same patterns; change them together.
 approval_pass_passed() {
   local harness_log=$1 status=$2 scenario
   ((status == 0)) || return 1
