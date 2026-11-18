@@ -100,6 +100,31 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expectEqual(opts.recipients, ["user@x.com"])
     },
 
+    TestCase(name: "dashn_takes_no_value") {
+        let opts = try CLI.parse(["-n", "user@x.com"], env: [:])
+        try expectEqual(opts.recipients, ["user@x.com"])
+        try expect(!opts.readRecipientsFromHeaders)
+    },
+
+    TestCase(name: "dashv_and_dashn_alone_parse") {
+        let verbose = try CLI.parse(["-v"], env: [:])
+        try expect(!verbose.readRecipientsFromHeaders)
+        try expectEqual(verbose.recipients, [])
+        let noAliasing = try CLI.parse(["-n"], env: [:])
+        try expect(!noAliasing.readRecipientsFromHeaders)
+        try expectEqual(noAliasing.recipients, [])
+    },
+
+    TestCase(name: "dashv_and_dashn_do_not_swallow_rest_of_cluster") {
+        // sendmail's getopt string ("...N:nO:...V:vX:") gives -v and -n no
+        // value, so -vt must still set -t.
+        for cluster in ["-vt", "-nt", "-tv", "-tn", "-vti"] {
+            let opts = try CLI.parse([cluster, "user@x.com"], env: [:])
+            try expect(opts.readRecipientsFromHeaders, "\(cluster) dropped -t")
+            try expect(opts.recipients == ["user@x.com"], "\(cluster) recipients: \(opts.recipients)")
+        }
+    },
+
     TestCase(name: "attached_only_flags_still_parse") {
         // -oi and -bm carry attached values only and must not consume argv.
         let opts = try CLI.parse(["-oi", "-bm", "user@x.com"], env: [:])
