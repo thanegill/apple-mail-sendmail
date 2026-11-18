@@ -105,7 +105,7 @@ Swift treats `"\r\n"` as a single `Character` (grapheme cluster). `RFC822Parser.
 
 ### Package.swift macOS floor is `.v13` deliberately
 
-Nixpkgs Swift 5.10 stdlib dylibs are built for macOS 14.0. Lower floors produce linker warnings that escalate to errors during test-bundle handling. `.v13` is the lowest value that links cleanly.
+`.v13` was chosen under nixpkgs Swift 5.10, whose stdlib dylibs were built for macOS 14.0: lower floors produced linker warnings that escalated to errors during test-bundle handling, and `.v13` was the lowest value that linked cleanly. Under the current Swift 6.4 toolchain, `.v12` also builds without linker warnings, so lowering the floor further is a product decision, no longer a toolchain limit.
 
 ### Draft is the product invariant
 
