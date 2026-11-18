@@ -175,6 +175,7 @@ The .eml + Cmd-Shift-D path renders bodies in Mail's WKWebView, which honors any
 - `packages.without-sendmail-symlink` — canonical binary only.
 - `packages.e2e` (also `apps.e2e`, and `checks.e2e-shellcheck` so `nix flake check` shellchecks it) — the live end-to-end harness. Building it only shellchecks `tests/e2e/e2e.sh`; it never runs in `checkPhase`.
 - `packages.e2e-vm` (also `apps.e2e-vm`, and `checks.e2e-vm-shellcheck`) — `tests/e2e/vm.sh`, which runs the harness in a Tart VM. Building it only shellchecks the script.
+- `packages.release` (also `apps.release`, and `checks.release-shellcheck`) — `scripts/release.sh`, which opens a release PR and tags it once merged (see Releases below). Building it only shellchecks the script.
 
 Consumers from other flakes can also call `self.packages.${system}.default.override { withSendmailSymlink = false; }`.
 
@@ -183,3 +184,9 @@ Consumers from other flakes can also call `self.packages.${system}.default.overr
 Tests run in the package's `checkPhase`, not as a separate test derivation; `checks.default` is the package itself, so both `nix build .#default` and `nix flake check` fail when tests fail.
 
 The dev shell includes [Tart](https://tart.run) for the VM-based e2e runs. Nixpkgs marks Tart unfree (FSL-1.1), so `perSystem` sets `_module.args.pkgs` to a nixpkgs import whose `allowUnfreePredicate` admits only `tart`; do not replace that with a blanket `allowUnfree`. The `tart` binding in `flake.nix` overrides the pinned nixpkgs package to 2.42.0 (2.41.1 fixed `tart exec` dropping large output, openai/tart#1347) with `doInstallCheck = false`: on macOS 27, running `tart.app` inside the build tags the bundle with `com.apple.macl`, and Nix then fails to register the output ("clearing flags of path ...: Operation not permitted"), leaving an invalid store path that macOS's app-bundle protection also stops `nix store gc` from deleting unless the Nix daemon has Full Disk Access. Never run a store `.app` during a build. Drop the override once `flake.lock` pins a nixpkgs with Tart 2.41.1 or newer.
+
+## Releases
+
+The version lives only in `PackageVersion.string` in `Sources/SendmailCore/Version.swift`. `CLI.versionText` interpolates it, and `flake.nix` extracts the package version from that line with `builtins.match` (throwing if the line is missing or not `X.Y.Z`), so keep its `public static let string = "X.Y.Z"` shape and never write the version anywhere else. versionCheckHook confirms the built binary's `--version` matches.
+
+Releases are cut locally with `scripts/release.sh`, not by CI. `nix run .#release -- prepare X.Y.Z [--dry-run]` opens the release PR from `release/vX.Y.Z`; after it merges, `nix run .#release -- tag X.Y.Z [--dry-run]` pushes the annotated tag `vX.Y.Z` on the PR's merge commit and creates the GitHub release with notes grouped by `.github/release.yml`. `release/` branch names and the `release` label are reserved for release PRs: never use them for other work, because `tag` finds the commit to tag through the merged `release/vX.Y.Z` PR and the notes leave out `release`-labelled PRs. Policy, steps and failure recovery are in `RELEASING.md`. Never run either mode without `--dry-run` unless the user asks for a release.

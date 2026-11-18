@@ -23,7 +23,7 @@ public enum CLIError: Error {
 }
 
 public enum CLI {
-    public static let versionText = "apple-mail-sendmail 0.1.0"
+    public static let versionText = "apple-mail-sendmail \(PackageVersion.string)"
 
     // Legacy short flags whose value may be attached (-Bmime) OR the next argv
     // (-B 8BITMIME). When the value isn't attached, consume the following argv so

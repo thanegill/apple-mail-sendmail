@@ -12,6 +12,15 @@
 
       perSystem = { config, self', pkgs, system, ... }:
         let
+          versionFile = ./Sources/SendmailCore/Version.swift;
+          versionMatch = builtins.match
+            ''.*public static let string = "([0-9]+[.][0-9]+[.][0-9]+)".*''
+            (builtins.readFile versionFile);
+          version =
+            if versionMatch == null
+            then throw "flake.nix: ${toString versionFile} has no `public static let string = \"X.Y.Z\"` line to read the version from"
+            else builtins.head versionMatch;
+
           # The pinned nixpkgs ships Tart 2.30.6, which predates macOS 27
           # guests (Cirrus Labs' golden-gate images), and `tart exec` before
           # 2.41.1 can drop or truncate large output (openai/tart#1347).
@@ -33,7 +42,7 @@
           makeSendmail = pkgs.lib.makeOverridable ({ withSendmailSymlink ? true }:
             pkgs.swiftPackages.stdenv.mkDerivation {
               pname = "apple-mail-sendmail";
-              version = "0.1.0";
+              inherit version;
               src = pkgs.lib.fileset.toSource {
                 root = ./.;
                 fileset = pkgs.lib.fileset.unions [
@@ -144,6 +153,22 @@
             text = builtins.readFile ./tests/e2e/vm.sh;
             meta.description = "Run the apple-mail-sendmail live end-to-end tests in a disposable Tart macOS VM";
           };
+
+          # git pushes over the system ssh on PATH: nixpkgs' openssh rejects
+          # macOS-only ssh_config options such as UseKeychain.
+          releaseScript = pkgs.writeShellApplication {
+            name = "apple-mail-sendmail-release";
+            runtimeInputs = [
+              pkgs.git
+              pkgs.gh
+              pkgs.nix
+              pkgs.coreutils
+              pkgs.gnused
+              pkgs.gnugrep
+            ];
+            text = builtins.readFile ./scripts/release.sh;
+            meta.description = "Open an apple-mail-sendmail release PR, or tag and publish a merged one";
+          };
         in {
           # Tart is source-available (FSL-1.1), so nixpkgs marks it unfree.
           # Allow that one package rather than setting allowUnfree.
@@ -156,10 +181,12 @@
           packages.without-sendmail-symlink = makeSendmail { withSendmailSymlink = false; };
           packages.e2e = e2eHarness;
           packages.e2e-vm = e2eVm;
+          packages.release = releaseScript;
 
-          # Building the harness shellchecks it; it never runs here.
+          # Building these shellchecks them; they never run here.
           checks.e2e-shellcheck = e2eHarness;
           checks.e2e-vm-shellcheck = e2eVm;
+          checks.release-shellcheck = releaseScript;
 
           # The package's checkPhase runs the unit tests, so `nix flake check`
           # runs them by building it.
@@ -180,6 +207,12 @@
             type = "app";
             program = pkgs.lib.getExe e2eVm;
             meta.description = "Live end-to-end tests for apple-mail-sendmail in a disposable Tart macOS VM (see README)";
+          };
+
+          apps.release = {
+            type = "app";
+            program = pkgs.lib.getExe releaseScript;
+            meta.description = "Release tooling: nix run .#release -- prepare|tag X.Y.Z [--dry-run] (see RELEASING.md)";
           };
 
           devShells.default = pkgs.mkShell {
