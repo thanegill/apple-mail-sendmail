@@ -607,6 +607,42 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         }
     },
 
+    // RFC 2046 section 5.1.5: in multipart/digest a part without Content-Type
+    // is message/rfc822, so the digested messages are not read as body text.
+    TestCase(name: "rfc2046_digest_parts_default_to_message_rfc822") {
+        let input = """
+        Subject: Internet Digest, volume 42
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="---- main boundary ----"
+
+        ------ main boundary ----
+
+        ...Introductory text or table of contents...
+
+        ------ main boundary ----
+        Content-Type: multipart/digest; boundary="---- next message ----"
+
+        ------ next message ----
+
+        From: someone-else
+        Subject: my opinion
+
+        ...body goes here ...
+
+        ------ next message ----
+        Content-Type: text/plain
+
+        typed explicitly
+        ------ next message ------
+
+        ------ main boundary ------
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "...Introductory text or table of contents...\n")
+        try expectEqual(msg.attachments.map(\.contentType), ["message/rfc822"])
+        try expect(String(decoding: msg.attachments[0].data, as: UTF8.self).hasPrefix("From: someone-else\n"))
+    },
+
     TestCase(name: "rfc2231_continuation_gap_stops_joining") {
         try expectEqual(
             try attachmentFilenames(contentDisposition: "attachment; filename*0*=UTF-8''a; filename*2*=c"),

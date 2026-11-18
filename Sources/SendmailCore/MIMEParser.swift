@@ -15,7 +15,7 @@ public enum MIMEParser {
         let mt = mainType.lowercased()
 
         if mt.hasPrefix("multipart/") {
-            walkMultipart(body: raw.body, params: params, into: &msg, depth: 0)
+            walkMultipart(body: raw.body, type: mt, params: params, into: &msg, depth: 0)
             if msg.body.isEmpty {
                 // No text part found in the multipart -- leave body empty rather than dumping raw bytes.
                 msg.body = ""
@@ -35,13 +35,21 @@ public enum MIMEParser {
         return msg
     }
 
-    private static func walkMultipart(body: Data, params: [String: String], into msg: inout ParsedMessage, depth: Int) {
+    private static func walkMultipart(
+        body: Data,
+        type multipartType: String,
+        params: [String: String],
+        into msg: inout ParsedMessage,
+        depth: Int
+    ) {
         guard let boundary = params["boundary"], !boundary.isEmpty else { return }
         if depth > 4 { return }
+        // RFC 2046 5.1.5: a digest's parts default to message/rfc822.
+        let defaultPartType = multipartType == "multipart/digest" ? "message/rfc822" : "text/plain"
 
         for part in splitParts(body, boundary: boundary) {
             guard let sub = try? RFC822Parser.parse(part) else { continue }
-            let ctRaw = sub.value(for: "Content-Type") ?? "text/plain"
+            let ctRaw = sub.value(for: "Content-Type") ?? defaultPartType
             let (mainType, subParams) = RFC822Parser.parseStructured(ctRaw)
             let mt = mainType.lowercased()
             // Lowercase only the disposition type: the filename parameter value
@@ -50,7 +58,7 @@ public enum MIMEParser {
             let dispMain = dispType.lowercased()
 
             if mt.hasPrefix("multipart/") {
-                walkMultipart(body: sub.body, params: subParams, into: &msg, depth: depth + 1)
+                walkMultipart(body: sub.body, type: mt, params: subParams, into: &msg, depth: depth + 1)
                 continue
             }
 

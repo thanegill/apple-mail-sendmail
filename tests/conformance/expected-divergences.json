@@ -1,17 +1,6 @@
 {
   "findings": [
     {
-      "id": "digest-default-type",
-      "class": "ours-bug",
-      "note": "RFC 2046 5.1.5: in multipart/digest a part without Content-Type is message/rfc822, not text/plain. MIMEParser read the digested messages as body text.",
-      "cases": [
-        "cpython/msg_02.txt attachments",
-        "cpython/msg_30.txt attachments",
-        "cpython/msg_34.txt attachments",
-        "mail-parser/rfc-004.eml attachments"
-      ]
-    },
-    {
       "id": "rfc2231-boundary",
       "class": "ours-bug",
       "note": "RFC 2231 applies to every MIME parameter. MIMEParser only resolved the extended forms of name and filename, so boundary*= (and charset*=) were ignored and the multipart came out empty.",
