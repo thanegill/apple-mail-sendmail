@@ -1076,9 +1076,10 @@ has_nul_byte() {
 readonly NO_TERMINAL=(perl -e 'use POSIX (); POSIX::setsid() or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' --)
 
 # Runs the binary in the sandbox, in a new session with stdin from the
-# fixture and stdout/stderr to files, then checks the script it printed.
+# fixture and stdout/stderr to files, then checks what it printed: the HTML
+# path's step plan or the plain path's AppleScript.
 dry_run_scenario() {
-  local args=() script_file="$workdir/logs/${NAME}.dry-run.applescript" status=0 snapshot_file
+  local args=() script_file="$workdir/logs/${NAME}.dry-run.out" status=0 snapshot_file
   DRY_RUN_SENDER=""
   binary_args args
   DRY_RUN_COUNTER=$((DRY_RUN_COUNTER + 1))
@@ -1108,26 +1109,30 @@ is_dry_run_file() {
   [[ $path != *..* && -f $path ]] && is_binary_temp_dir "$(dirname "$path")" "$DRY_RUN_TMP"
 }
 
-# The HTML path's script is fixed apart from the .eml path, so it must equal
-# the template for its mode (tests/e2e/templates) once that path is replaced.
-analyze_html_script() {
-  local script_file=$1 template mode open_lines eml_path normalized_file differences
+# The HTML path prints its step plan, one JSON object per line. The plan is
+# fixed apart from the .eml path, so it must equal the template for its mode
+# (tests/e2e/templates) once that path is replaced. The path may not contain
+# a quote or backslash, so it cannot end its JSON string early.
+readonly OPEN_EML_STEP_RE='^\{"activates":true,"path":"(/[^"\\]*\.eml)","step":"open_eml"\}$'
+
+analyze_html_plan() {
+  local plan_file=$1 template mode open_lines eml_path normalized_file differences
   if [[ $DELIVERY == send ]]; then mode=send; else mode=draft; fi
-  template="$TEMPLATES/edit-draft-$mode.applescript.tmpl"
+  template="$TEMPLATES/html-plan-$mode.jsonl.tmpl"
   if [[ ! -s $template ]]; then
     GUARD_REASONS+=("$NAME: template $template is missing")
     return
   fi
-  open_lines=$(grep -E '^do shell script "open -a Mail " & quoted form of "/[^"\\]*\.eml"$' "$script_file" || true)
-  if [[ $(grep -c . <<<"$open_lines") -ne 1 || -z $open_lines ]]; then
-    GUARD_REASONS+=("$NAME: expected exactly one 'do shell script \"open -a Mail \"' line with a plain .eml path")
+  open_lines=$(grep -F '"open_eml"' "$plan_file" || true)
+  if [[ $(grep -c . <<<"$open_lines") -ne 1 || ! $open_lines =~ $OPEN_EML_STEP_RE ]]; then
+    GUARD_REASONS+=("$NAME: expected exactly one open_eml step with a plain .eml path")
     return
   fi
-  eml_path=$(sed -E 's/^do shell script "open -a Mail " & quoted form of "(.*)"$/\1/' <<<"$open_lines")
-  normalized_file="$script_file.normalized"
-  sed -E 's#^(do shell script "open -a Mail " & quoted form of )"/[^"\\]*\.eml"$#\1"<EML>"#' "$script_file" >"$normalized_file"
+  eml_path=${BASH_REMATCH[1]}
+  normalized_file="$plan_file.normalized"
+  sed -E 's#^(\{"activates":true,"path":)"/[^"\\]*\.eml"(,"step":"open_eml"\})$#\1"<EML>"\2#' "$plan_file" >"$normalized_file"
   if ! differences=$(diff -u "$template" "$normalized_file"); then
-    GUARD_REASONS+=("$NAME: script differs from the $mode template: $(grep -E '^[-+][^-+]' <<<"$differences" | sed -n '1,6p' | paste -sd'|' -)")
+    GUARD_REASONS+=("$NAME: plan differs from the $mode template: $(grep -E '^[-+][^-+]' <<<"$differences" | sed -n '1,6p' | paste -sd'|' -)")
     return
   fi
   if ! is_dry_run_file "$eml_path"; then
@@ -1244,18 +1249,18 @@ analyze_dry_run_script() {
   local script_file=$1 token
   DRY_RUN_SENDER=""
   if [[ ! -f $script_file ]] || has_nul_byte "$script_file"; then
-    GUARD_REASONS+=("$NAME: the dry-run script is missing or contains a NUL byte")
+    GUARD_REASONS+=("$NAME: the dry-run output is missing or contains a NUL byte")
     return 1
   fi
   if [[ $EXPECT_PATH == html ]]; then
-    analyze_html_script "$script_file"
+    analyze_html_plan "$script_file"
   else
     analyze_plain_script "$script_file"
   fi
   while IFS= read -r token; do
     [[ -z $token ]] && continue
     is_allowed_bare_address "$token" ||
-      GUARD_REASONS+=("$NAME: generated AppleScript names $token")
+      GUARD_REASONS+=("$NAME: the dry-run output names $token")
   done < <(grep -oE '[^<>"[:space:],(){}:]+@[^<>"[:space:],(){}]+' "$script_file" || true)
   if [[ -z $DRY_RUN_SENDER ]] && ((${#GUARD_REASONS[@]} == 0)); then
     GUARD_REASONS+=("$NAME: no e2e sender could be established from the dry run")
@@ -2537,7 +2542,8 @@ self_test_dry_run() {
 
   define_scenario draft-later-html-attachment
   SEND_ARGS+=(--send)
-  run_dry_run_case "HTML draft that would click Send" refused
+  run_dry_run_case "HTML draft that would press Send" refused \
+    "plan differs from the draft template"
 
   define_scenario plain-send
   SEND_ARGS=(-t)
@@ -2576,8 +2582,8 @@ self_test_script_analysis() {
   printf 'From: e2e-a@example.test\nTo: a@example.test\nSubject: x\n\nbody\n' >"$workdir/outside.eml"
 
   local html_send html_draft
-  html_send=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/edit-draft-send.applescript.tmpl")
-  html_draft=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/edit-draft-draft.applescript.tmpl")
+  html_send=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/html-plan-send.jsonl.tmpl")
+  html_draft=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/html-plan-draft.jsonl.tmpl")
 
   plain_script() {
     local visible=$1 send_line=$2 sender_property=${3-', sender:"e2e-a@example.test"'}
@@ -2608,29 +2614,46 @@ self_test_script_analysis() {
     fi
   }
 
-  run_analysis_case "HTML send script matching the template" accepted html-send "$html_send"
-  run_analysis_case "HTML draft script matching the template" accepted draft-later-html-attachment "$html_draft"
+  run_analysis_case "HTML send plan matching the template" accepted html-send "$html_send"
+  run_analysis_case "HTML draft plan matching the template" accepted draft-later-html-attachment "$html_draft"
   run_analysis_case "plain send script" accepted plain-send "$(plain_script false send)"
   run_analysis_case "plain draft script" accepted draft-later-plain-attachment "$(plain_script true '')"
   run_analysis_case "plain draft whose subject mentions send" accepted draft-later-plain-attachment \
     "$(plain_script true '' | sed 's/subject:"s"/subject:"please send"/')"
 
-  local send_again_click='click menu item "Send Again" of menu "Message" of menu bar 1'
-  run_analysis_case "HTML send with a keystroke after the Send Again click" refused html-send \
-    "${html_send/"$send_again_click"/"$send_again_click"$'\n''                keystroke "d" using {shift down, command down}'}" \
-    "script differs from the send template"
-  run_analysis_case "HTML draft with perform action AXPress" refused draft-later-html-attachment \
-    "$(sed '0,/^end tell$/s//end tell\ntell application "System Events" to tell process "Mail" to perform action "AXPress" of button 1 of window 1/' <<<"$html_draft")"
-  run_analysis_case "HTML send without the Message > Send click" refused html-send \
-    "$(grep -v 'click menu item "Send"' <<<"$html_send")"
-  run_analysis_case "HTML script with two open -a Mail lines" refused html-send \
-    "$(printf 'do shell script "open -a Mail " & quoted form of "%s"\n%s\n' "$eml" "$html_send")"
-  run_analysis_case "HTML script whose .eml is outside the dry run's temp dir" refused html-send \
-    "${html_send//\"$eml\"/\"$workdir/outside.eml\"}"
-  run_analysis_case "HTML script whose .eml was deleted" refused html-send \
-    "${html_send//\"$eml\"/\"$temp_dir/gone.eml\"}"
-  run_analysis_case "HTML script with no .eml line" refused html-send \
-    "$(grep -v '^do shell script' <<<"$html_send")"
+  local send_again_step full_guard
+  send_again_step=$(grep -F '"item":"Send Again"' <<<"$html_send")
+  full_guard='"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"]'
+  run_analysis_case "HTML send with a second Send Again press" refused html-send \
+    "${html_send/"$send_again_step"/"$send_again_step"$'\n'"$send_again_step"}" \
+    "plan differs from the send template"
+  run_analysis_case "HTML draft with an extra Send press" refused draft-later-html-attachment \
+    "$(sed '$i {"guard":[],"guard_timeout_ms":3000,"item":"Send","menu":"Message","step":"press_menu_item","window":"compose"}' <<<"$html_draft")" \
+    "plan differs from the draft template"
+  run_analysis_case "HTML send without the Message > Send step" refused html-send \
+    "$(grep -vF '"step":"press_until_window_closes"' <<<"$html_send")" \
+    "plan differs from the send template"
+  run_analysis_case "HTML send whose presses skip the key-window guard" refused html-send \
+    "${html_send//"$full_guard"/'"guard":[]'}" \
+    "plan differs from the send template"
+  run_analysis_case "HTML send with unbounded Send presses" refused html-send \
+    "${html_send/'"max_presses":3'/'"max_presses":1000'}" \
+    "plan differs from the send template"
+  run_analysis_case "HTML plan with two open_eml steps" refused html-send \
+    "$(printf '{"activates":true,"path":"%s","step":"open_eml"}\n%s\n' "$eml" "$html_send")" \
+    "expected exactly one open_eml step"
+  run_analysis_case "HTML plan whose .eml path hides an escaped quote" refused html-send \
+    "${html_send//\"$eml\"/\"$temp_dir/x\\\".eml\"}" \
+    "expected exactly one open_eml step"
+  run_analysis_case "HTML plan whose .eml is outside the dry run's temp dir" refused html-send \
+    "${html_send//\"$eml\"/\"$workdir/outside.eml\"}" \
+    "missing or outside this dry run's temp dir"
+  run_analysis_case "HTML plan whose .eml was deleted" refused html-send \
+    "${html_send//\"$eml\"/\"$temp_dir/gone.eml\"}" \
+    "missing or outside this dry run's temp dir"
+  run_analysis_case "HTML plan with no open_eml step" refused html-send \
+    "$(grep -vF '"step":"open_eml"' <<<"$html_send")" \
+    "expected exactly one open_eml step"
 
   run_analysis_case "plain send with a System Events Message > Send click" refused plain-send \
     "$(plain_script false send | sed 's/^        send$/        send\n        tell application "System Events" to tell process "Mail" to click menu item "Send" of menu "Message" of menu bar 1/')"

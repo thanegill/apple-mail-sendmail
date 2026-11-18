@@ -1,0 +1,10 @@
+{"step":"require_accessibility"}
+{"activates":false,"step":"launch_mail","timeout_ms":10000}
+{"settle":true,"snapshot":"before_open","step":"snapshot_windows"}
+{"activates":true,"path":"<EML>","step":"open_eml"}
+{"since":"before_open","step":"wait_for_new_window","timeout_ms":5000,"window":"viewer"}
+{"settle":false,"snapshot":"before_compose","step":"snapshot_windows"}
+{"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":"Send Again","menu":"Message","step":"press_menu_item","window":"viewer"}
+{"since":"before_compose","step":"wait_for_new_window","timeout_ms":5000,"window":"compose"}
+{"gone_timeout_ms":3000,"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":"Send","max_presses":3,"menu":"Message","ready_timeout_ms":10000,"step":"press_until_window_closes","window":"compose"}
+{"step":"close_window","window":"viewer"}

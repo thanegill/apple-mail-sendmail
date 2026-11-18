@@ -28,40 +28,41 @@ private func message(html: Bool) -> ParsedMessage {
     return msg
 }
 
-private func deliver(html: Bool, probe: PermissionProbe, log: ScriptLog, osMajorVersion: Int = 26) throws {
+private func deliver(html: Bool, probe: PermissionProbe, log: ScriptLog, mail: FakeMail = FakeMail(), osMajorVersion: Int = 26) throws {
     let tmp = try TempDir()
     defer { tmp.cleanup() }
-    let appleScript = AppleScriptMailAutomation(
-        staging: tmp,
-        accessibility: probe.permission(osMajorVersion: osMajorVersion),
-        runner: log.run
+    let automation = MailAutomation(
+        plain: AppleScriptPlainDelivery(staging: tmp, runner: log.run),
+        html: AXHTMLDelivery(ax: mail, workspace: mail, clock: mail, accessibility: probe.permission(osMajorVersion: osMajorVersion))
     )
-    let automation = MailAutomation(plain: appleScript, html: appleScript)
     try MailDriver.deliver(message(html: html), emlBytes: Data("Subject: a11y\r\n\r\n<p>rich</p>".utf8), options: Options(), tmp: tmp, automation: automation)
 }
 
 let accessibilityTests = TestSuite(name: "Accessibility", cases: [
-    TestCase(name: "html_path_refuses_before_any_script_runs_when_not_granted") {
+    TestCase(name: "html_path_refuses_before_touching_mail_when_not_granted") {
         let probe = PermissionProbe(granted: false)
         let log = ScriptLog()
+        let mail = FakeMail()
         var thrown: Error?
         do {
-            try deliver(html: true, probe: probe, log: log)
+            try deliver(html: true, probe: probe, log: log, mail: mail)
         } catch {
             thrown = error
         }
         try expect(thrown is AccessibilityNotGranted, "expected AccessibilityNotGranted, got \(String(describing: thrown))")
         try expectEqual(probe.checks, 1)
-        try expect(log.scripts.isEmpty, "no script may run without Accessibility")
+        try expectEqual(mail.axCalls, 0)
+        try expect(mail.openedURLs.isEmpty && log.scripts.isEmpty, "nothing may reach Mail without Accessibility")
     },
 
-    TestCase(name: "html_path_checks_once_then_runs_its_script_when_granted") {
+    TestCase(name: "html_path_checks_once_then_drives_mail_when_granted") {
         let probe = PermissionProbe(granted: true)
         let log = ScriptLog()
-        try deliver(html: true, probe: probe, log: log)
+        let mail = FakeMail()
+        try deliver(html: true, probe: probe, log: log, mail: mail)
         try expectEqual(probe.checks, 1)
-        try expectEqual(log.scripts.count, 1)
-        try expect(log.scripts[0].contains("click menu item \"Send Again\""))
+        try expect(log.scripts.isEmpty)
+        try expectEqual(mail.sendAgainPresses.count, 1)
     },
 
     TestCase(name: "plain_path_never_checks_accessibility") {

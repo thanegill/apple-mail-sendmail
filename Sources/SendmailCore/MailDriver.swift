@@ -18,20 +18,6 @@ public enum MailDriver {
         try deliver(msg, emlBytes: emlBytes, options: options, tmp: tmp, automation: automation)
     }
 
-    /// `deliverThenCleanUp` through `AppleScriptMailAutomation` with
-    /// `runner`; returns the script it ran.
-    @discardableResult
-    public static func deliverThenCleanUp(
-        _ msg: ParsedMessage,
-        emlBytes: Data,
-        options: Options,
-        tmp: TempDir,
-        runner: @escaping ScriptRunner
-    ) throws -> String {
-        defer { tmp.cleanup() }
-        return try deliver(msg, emlBytes: emlBytes, options: options, tmp: tmp, runner: runner)
-    }
-
     /// Hand the parsed message to Mail.app.
     ///
     /// - For messages with an HTML body, write `emlBytes` to a temp `.eml`
@@ -71,27 +57,6 @@ public enum MailDriver {
             attachmentURLs: attachmentURLs,
             send: options.send
         ))
-    }
-
-    /// `deliver` through `AppleScriptMailAutomation` with `runner`, staging
-    /// in `tmp`; returns the script it handed the runner. For a recording
-    /// runner: Accessibility is not checked, since the script never runs.
-    @discardableResult
-    public static func deliver(
-        _ msg: ParsedMessage,
-        emlBytes: Data,
-        options: Options,
-        tmp: TempDir,
-        runner: @escaping ScriptRunner
-    ) throws -> String {
-        var script = ""
-        let appleScript = AppleScriptMailAutomation(staging: tmp, accessibility: .notChecked) { source in
-            script = source
-            try runner(source)
-        }
-        let automation = MailAutomation(plain: appleScript, html: appleScript)
-        try deliver(msg, emlBytes: emlBytes, options: options, tmp: tmp, automation: automation)
-        return script
     }
 
     /// True when the message has a non-empty HTML body. Drives the choice

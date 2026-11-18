@@ -90,16 +90,30 @@ do {
     die("failed to create temp dir: \(error)", code: .tempFail)
 }
 
-let appleScript: AppleScriptMailAutomation
-if env["SENDMAIL_DRY_RUN"] == "1" {
-    appleScript = AppleScriptMailAutomation(staging: tmp, accessibility: .notChecked) { script in
-        FileHandle.standardOutput.write(Data(script.utf8))
-        FileHandle.standardOutput.write(Data("\n".utf8))
-    }
-} else {
-    appleScript = AppleScriptMailAutomation(staging: tmp)
+func printLine(_ line: String) {
+    FileHandle.standardOutput.write(Data((line + "\n").utf8))
 }
-let automation = MailAutomation(plain: appleScript, html: appleScript)
+
+// The dry run prints what a live run would do and touches nothing: no
+// Apple Events, no Accessibility, no Launch Services.
+let automation: MailAutomation
+if env["SENDMAIL_DRY_RUN"] == "1" {
+    automation = MailAutomation(
+        plain: AppleScriptPlainDelivery(staging: tmp, runner: printLine),
+        html: HTMLPlanPrinter(output: printLine)
+    )
+} else {
+    let clock = SystemClock()
+    automation = MailAutomation(
+        plain: AppleScriptPlainDelivery(staging: tmp),
+        html: AXHTMLDelivery(
+            ax: SystemAXClient(),
+            workspace: SystemMailWorkspace(clock: clock),
+            clock: clock,
+            accessibility: .system()
+        )
+    )
+}
 
 // Build the .eml bytes that the edit-draft path will hand to Mail. Keep
 // the original stdin body verbatim (no MIME re-encoding) and apply CLI
@@ -118,15 +132,11 @@ do {
     if f.code == -1743 {
         die("Mail.app automation denied. Grant permission in System Settings → Privacy & Security → Automation. (\(f.message))", code: .config)
     }
-    // System Events reports a missing Accessibility grant this way if it is
-    // revoked after the up-front check.
-    if f.code == -1719 || f.code == 1002 {
-        let osMajorVersion = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-        die("\(AccessibilityNotGranted(osMajorVersion: osMajorVersion)) (\(f.message))", code: .config)
-    }
     die("AppleScript failed (\(f.code)): \(f.message)", code: .osErr)
 } catch let denied as AccessibilityNotGranted {
     die("\(denied)", code: .config)
+} catch let failure as HTMLDeliveryError {
+    die(failure.message, code: .osErr)
 } catch {
     die("delivery failed: \(error)", code: .osErr)
 }
