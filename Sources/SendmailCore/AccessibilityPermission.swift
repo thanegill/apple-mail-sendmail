@@ -1,8 +1,8 @@
 import ApplicationServices
 import Foundation
 
-/// Whether this process may drive another app's UI, which the HTML path
-/// needs and the plain path does not. TCC charges the grant to the
+/// Whether this process may drive another app's UI, which the .eml path
+/// needs and `--no-ui`'s Apple Event path does not. TCC charges the grant to the
 /// responsible process (the terminal, or whatever launched the binary).
 public struct AccessibilityPermission {
     let isGranted: () -> Bool
@@ -40,6 +40,6 @@ public struct AccessibilityNotGranted: Error, CustomStringConvertible {
     }
 
     public var description: String {
-        "Accessibility permission required for HTML messages. Grant it to the app that runs apple-mail-sendmail (for example your terminal) in \(settingsLocation)."
+        "Accessibility permission required: apple-mail-sendmail opens each message in Mail and presses Message > Send Again. Grant it to the app that runs apple-mail-sendmail (for example your terminal) in \(settingsLocation). For a plain-text message where that is not possible, --no-ui sends through Apple Events instead (needs Automation for Mail; Mail then sends the body quoted)."
     }
 }

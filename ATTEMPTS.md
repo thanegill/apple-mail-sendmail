@@ -2,7 +2,7 @@
 
 The empirical record of alternatives probed while building this tool and
 rejected in favor of the `.eml` + Cmd-Shift-D path (see the README's
-"Rich HTML rendering" section). Extracted from the README so that stays
+"How a message reaches Mail" section). Extracted from the README so that stays
 focused; referenced from README.md and CLAUDE.md. Findings are from running
 probes on current macOS Mail (Sequoia/Tahoe, 2026; the sections marked
 2026-11-18 on macOS 27, Mail 16.0 build 3901.200.71.1.16, in a disposable
@@ -300,7 +300,7 @@ Accessibility, and AppleScript added failure modes of its own:
   are usually resolved by title), so key == main had to be read as
   `AXMain` of `AXFocusedWindow`, with an `AXTitle` cross-check.
 
-The AX driver (`AXHTMLDelivery`) does the same steps with AX element
+The AX driver (`AXEmlDelivery`) does the same steps with AX element
 identity (`CFEqual`) and NSWorkspace, sends no Apple Events, and is unit
 tested against a fake Mail rather than by matching script text.
 
@@ -318,3 +318,31 @@ The events are the same ones that script compiled to (see CLAUDE.md, "The
 plain path sends raw Apple Events"), but text now travels as text
 descriptors with nothing to escape, the body needs no file, and the tests
 assert on event classes and parameters rather than on script text.
+
+### Plain text through Mail's dictionary (works, but Mail quotes the body)
+
+Probed 2026-11-18 on macOS 27 (Mail 16.0) against Mailpit. A plain-text
+body handed to an `outgoing message` through the scripting dictionary
+(`make new outgoing message` with Apple Events, `core/crel` of class
+`bcke`, then `content` set with `core/setd`) is sent as a citation:
+`multipart/alternative`, every `text/plain` line prefixed with `> `, and
+the HTML part wrapped in `<blockquote type="cite">`. This is Mail bug
+FB11734014. It happens however the content is set:
+
+- in the `make new outgoing message` properties, at creation;
+- with `set content` after creation;
+- with Mail's `default message format` set to plain text first.
+
+The generated-AppleScript plain path that preceded the raw Apple Events
+had the same defect. The live e2e harness missed it because it only
+checked that the received body *contained* the scenario's marker, which a
+quoted line still does; every scenario now also asserts that the body is
+not quoted.
+
+A `text/plain` `.eml` opened in Mail and sent with Message > Send Again,
+the way the HTML path already worked, arrives as clean `text/plain`,
+byte-faithful. So that became the default path for every message, and
+the Apple Event path stayed only behind `--no-ui`, for headless jobs that
+can grant Automation but cannot bring Mail to the front. The e2e
+scenario `plain-send-no-ui` asserts that its body IS quoted, so it fails
+when Apple fixes the bug.

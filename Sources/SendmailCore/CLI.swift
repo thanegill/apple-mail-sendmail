@@ -17,6 +17,9 @@ public struct Options {
     public var fromAddress: String? = nil
     public var fromName: String? = nil
     public var send: Bool = false
+    /// Drive Mail with Apple Events instead of its windows and menus: plain
+    /// text only, and Mail then sends the body quoted (FB11734014).
+    public var noUI: Bool = false
     public var recipients: [String] = []
 
     public init() {}
@@ -39,6 +42,9 @@ public enum CLI {
         var opts = Options()
         if env["SENDMAIL_SEND"] == "1" {
             opts.send = true
+        }
+        if env["SENDMAIL_NO_UI"] == "1" {
+            opts.noUI = true
         }
 
         var i = 0
@@ -64,6 +70,8 @@ public enum CLI {
                 switch arg {
                 case "--send":
                     opts.send = true
+                case "--no-ui":
+                    opts.noUI = true
                 case "--help":
                     opts.infoRequest = .help
                     return opts
@@ -170,13 +178,15 @@ public enum CLI {
             ("-t",                  "Read recipients from To, Cc, and Bcc headers."),
             ("-f <addr>",           "Set the From address (Mail.app account selector)."),
             ("-F <name>",           "Set the From display name. Applies only with -f."),
-            ("--send",              "Actually deliver the message. Default is draft for review."),
-            ("--check-permissions", "Report whether Accessibility (HTML messages) and Automation for Mail (plain-text messages) are granted, and how to grant them. Starts Mail if needed and may show macOS's Automation prompt; sends nothing and reads no stdin. Exits 0 when both are granted, 78 otherwise."),
+            ("--send",              "Actually deliver the message. Default is draft for review. The message needs a non-empty Subject; without one the binary exits 65 and sends nothing."),
+            ("--no-ui",             "Hand a plain-text message to Mail with Apple Events, without opening or pressing anything in Mail's windows, for cron or launchd jobs where Mail cannot come to the front. Needs Automation for Mail, not Accessibility. Mail sends the body as a quotation (every line prefixed with \"> \"; Mail bug FB11734014). A message with an HTML body is refused (exit 64)."),
+            ("--check-permissions", "Report whether Accessibility (needed by default) and Automation for Mail (needed only with --no-ui) are granted, and how to grant them. Exits 0 when both are granted, 78 otherwise. Starts Mail if needed and may show macOS's Automation prompt; sends nothing and reads no stdin."),
             ("--help",              "Show this help."),
             ("--version",           "Show version."),
         ]
         let environment: [(String, String)] = [
             ("SENDMAIL_SEND=1",     "Equivalent to --send."),
+            ("SENDMAIL_NO_UI=1",    "Equivalent to --no-ui."),
             ("SENDMAIL_DRY_RUN=1",  "Print the steps that would drive Mail, one JSON object per line, instead of running them. Useful for debugging the message pipeline."),
         ]
 
@@ -184,12 +194,14 @@ public enum CLI {
         out += "OVERVIEW: A sendmail-compatible CLI that hands RFC 822 messages to Apple Mail.\n"
         out += "\n"
         out += "  By default, opens a visible compose window for review (does not send).\n"
-        out += "  Pass --send (or set SENDMAIL_SEND=1) to deliver instead. HTML email\n"
-        out += "  bodies are rendered by Mail itself, so the HTML's own CSS (fonts,\n"
-        out += "  colors, tables) is kept; text the CSS does not style falls back to\n"
-        out += "  Mail's Fonts & Colors preferences.\n"
+        out += "  Pass --send (or set SENDMAIL_SEND=1) to deliver instead. Mail opens\n"
+        out += "  the message itself and Message > Send Again turns it into a new\n"
+        out += "  compose, which needs Accessibility. Plain text arrives as written,\n"
+        out += "  and HTML email bodies are rendered by Mail itself, so the HTML's own\n"
+        out += "  CSS (fonts, colors, tables) is kept; text the CSS does not style falls\n"
+        out += "  back to Mail's Fonts & Colors preferences.\n"
         out += "\n"
-        out += "USAGE: \(programName) [-t] [-f <addr>] [-F <name>] [--send] [<recipient> ...]\n"
+        out += "USAGE: \(programName) [-t] [-f <addr>] [-F <name>] [--send] [--no-ui] [<recipient> ...]\n"
         out += "       \(programName) --check-permissions\n"
         out += "\n"
         out += "OPTIONS:\n"

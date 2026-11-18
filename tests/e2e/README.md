@@ -13,8 +13,22 @@ POP accounts on the same host and port, so `e2e-b` fetches through 1111.
 
 Each scenario pipes a fixture through the binary and asserts on
 Mailpit's API: sender, To/Cc and envelope-only Bcc recipients, display
-names, raw headers (no `Resent-*`, no `Bcc:`), the HTML part, and each
-attachment's exact name, size and SHA-256.
+names, raw headers (no `Resent-*`, no `Bcc:`), the HTML part, each
+attachment's exact name, size and SHA-256, and that the body is not sent
+as a quotation.
+
+Every scenario but one runs the binary's default path, which opens the
+message as an `.eml` in Mail and presses Message > Send Again, plain text
+and HTML alike. `plain-send-no-ui` runs the `--no-ui` Apple Event path
+instead. On that path Mail sends the body as a quotation (Mail bug
+FB11734014): every `text/plain` line prefixed with `> ` and the HTML part
+wrapped in `<blockquote type="cite">`. So that scenario asserts the
+quoting *is* there, and fails once Apple fixes the bug, while every other
+scenario fails if a `text/plain` line starts with `> ` (unless the
+fixture's own body has that line) or the HTML part has a
+`<blockquote type="cite">` the fixture does not. Checking only that the
+body contains the scenario's marker, as the harness once did, passes a
+quoted body.
 
 A live run sends real messages from Mail. Run it only in a dedicated
 macOS user or VM that has nothing but the two test accounts (see
@@ -120,8 +134,9 @@ unexpected is a refusal. A scenario that fails a guard is skipped
   its hash and the hash of the fixture that passed the guards.
 - **The dry-run output.** A sandboxed dry run of the binary must print
   exactly the expected steps:
-  - The HTML path prints its step plan, one JSON object per line, from
-    the same code a live run executes. It must equal
+  - The `.eml` path, which every scenario but `plain-send-no-ui` takes,
+    prints its step plan, one JSON object per line, from the same code a
+    live run executes. It must equal
     [`templates/`](templates) for its mode once the `.eml` path is
     replaced, so an extra press, a dropped guard check or a changed
     retry bound is refused. The plan must have exactly one `open_eml`
@@ -131,8 +146,8 @@ unexpected is a refusal. A scenario that fails a guard is skipped
     cleans up.
   - Output or an `.eml` containing a NUL byte is refused before anything
     reads it.
-  - The plain path prints its step plan too, one JSON object per line,
-    read with `jq`. Each line must be exactly `jq`'s compact, key-sorted
+  - The `--no-ui` Apple Event path prints its step plan too, one JSON
+    object per line, read with `jq`. Each line must be exactly `jq`'s compact, key-sorted
     form of itself (so a duplicated key or stray whitespace is refused),
     have exactly its step's keys and value types, and the steps must come
     in order: launch, make the message, set its content, recipients,
@@ -142,6 +157,12 @@ unexpected is a refusal. A scenario that fails a guard is skipped
     or `visible` false and one `send` otherwise; recipients with exactly
     one allowed address each; and attachments that are files in the dry
     run's temp dir.
+  - Each scenario names the path it expects (`EXPECT_PATH`), so a plain
+    message printed on the Apple Event path without `--no-ui`, or on the
+    `.eml` path with it, is refused, and so is an HTML message the binary
+    accepts with `--no-ui` (it must exit 64). The harness unsets
+    `SENDMAIL_SEND`, `SENDMAIL_NO_UI` and, for live runs,
+    `SENDMAIL_DRY_RUN`, so only argv picks the path.
 
 ### Mail's state, checked before every scenario
 
@@ -166,7 +187,7 @@ unexpected is a refusal. A scenario that fails a guard is skipped
   other than its main viewer windows.** Standalone message windows and
   the Settings window also count, because Mail's dictionary cannot tell
   them apart from a compose window. Mail's `outgoing messages` count is
-  logged but not checked: Mail keeps every plain-text message it has
+  logged but not checked: Mail keeps every `--no-ui` message it has
   sent in that list until it is relaunched, so it cannot tell an open
   compose from a sent one. An open compose is a non-viewer window and is
   refused.
@@ -175,7 +196,7 @@ The account preflight runs again before every scenario, so an account
 or rule switched on mid-run stops the run.
 
 **Close every compose window first, and select an empty mailbox.**
-Message > Send Again, which the HTML path presses, acts on Mail's key
+Message > Send Again, which the `.eml` path presses, acts on Mail's key
 window: it is Send Again on a viewer but Send on a compose window. The
 binary presses only after checking that its own viewer or compose is
 Mail's key and main window and that Mail is frontmost, but the check
@@ -316,9 +337,10 @@ In that user, from the repository root:
 4. Grant the terminal you run from **Accessibility** (System Settings
    -> Privacy & Security -> Accessibility; on macOS 27 and later,
    Privacy & Security -> Device Control and Data Access), which the
-   binary's HTML path needs, and allow its **Automation** requests for
-   Mail and System Events on the first run: the binary's plain path
-   needs Mail, and the harness's own AppleScripts need both.
+   binary's default `.eml` path needs, and allow its **Automation**
+   requests for Mail and System Events on the first run: the binary's
+   `--no-ui` path (scenario `plain-send-no-ui`) needs Mail, and the
+   harness's own AppleScripts need both.
 
 Only `e2e-a` is required. Scenarios that send from `e2e-b` are skipped
 when that account is missing. While Mailpit is not running, Mail reports
@@ -326,12 +348,12 @@ the e2e accounts as offline; that is expected.
 
 ## When the binary's dry-run output changes
 
-The HTML-path templates in [`templates/`](templates)
-(`html-plan-{send,draft}.jsonl.tmpl`) are the dry-run step plans of the
+The `.eml`-path templates in [`templates/`](templates)
+(`eml-plan-{send,draft}.jsonl.tmpl`) are the dry-run step plans of the
 binary on the branch the harness lives on, with the `.eml` path replaced
-by `<EML>`. A branch that changes `HTMLPlan` makes every HTML scenario
-refuse, with a "plan differs from the … template" diff, until the
-templates are regenerated from that branch's binary. Review the diff
+by `<EML>`. A branch that changes `EmlPlan` makes every scenario but
+`plain-send-no-ui` refuse, with a "plan differs from the … template"
+diff, until the templates are regenerated from that branch's binary. Review the diff
 before committing it. From the repository root:
 
 ```sh
@@ -341,12 +363,12 @@ for mode in send draft; do
   args=(-t); [ "$mode" = send ] && args+=(--send)
   SENDMAIL_DRY_RUN=1 ./result/bin/apple-mail-sendmail "${args[@]}" </tmp/template.eml |
     sed -E 's#^(\{"activates":true,"path":)"/[^"\\]*\.eml"(,"step":"open_eml"\})$#\1"<EML>"\2#' \
-      >"tests/e2e/templates/html-plan-$mode.jsonl.tmpl"
+      >"tests/e2e/templates/eml-plan-$mode.jsonl.tmpl"
 done
 ```
 
 A binary that keeps its temp files leaves one `sendmail-*` directory per
-mode in its temp dir. The plain path's plan has no template: a change to
+mode in its temp dir. The `--no-ui` path's plan has no template: a change to
 `PlainPlan` needs `analyze_plain_plan` (and its `PLAIN_STEP_JQ` program)
 in [`e2e.sh`](e2e.sh) updated instead.
 
@@ -483,7 +505,9 @@ turn off every rule, check the SMTP server list, and select an empty
 mailbox. It then stops that Mailpit and asks for Automation access with
 `osascript` through `tart exec`, once for Mail and once for System
 Events; click Allow on each prompt, which must name `tart-guest-agent`.
-Next it runs the harness's `plain-send` and `html-send` scenarios through
+Next it runs the harness's `plain-send`, `plain-send-no-ui` and `html-send`
+scenarios (Accessibility for a plain and an HTML message, Automation for
+the `--no-ui` one) through
 `tart exec`, as often as you like. A pass counts only if the harness
 exits 0, its summary ends in `RESULT: success`, and both scenarios' rows
 say PASS. Last, you quit Mail (the script checks that it has) and the VM

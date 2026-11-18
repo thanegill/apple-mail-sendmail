@@ -7,7 +7,22 @@ let failureReportTests = TestSuite(name: "FailureReport", cases: [
     TestCase(name: "automation_denied_keeps_the_automation_wording_and_exits_config") {
         let report = FailureReport(AppleEventError(code: -1743, message: "Not authorized to send Apple events to Mail."))
         try expectEqual(report.exitCode, .config)
-        try expectEqual(report.message, "Mail.app automation denied. Grant permission in System Settings → Privacy & Security → Automation. (Not authorized to send Apple events to Mail.)")
+        try expectEqual(report.message, "Mail.app automation denied. --no-ui drives Mail with Apple Events, which needs Automation for Mail: grant it in System Settings → Privacy & Security → Automation, or run without --no-ui, which needs Accessibility instead. (Not authorized to send Apple events to Mail.)")
+    },
+
+    TestCase(name: "send_without_a_subject_is_a_data_error_that_names_the_way_out") {
+        let report = FailureReport(SendNeedsSubject())
+        try expectEqual(report.exitCode, .dataErr)
+        try expectEqual(report.exitCode.rawValue, 65)
+        try expect(report.message.hasPrefix("--send needs a non-empty Subject: Mail holds a message without one for a confirmation it can't show from here, so it would not be sent."), report.message)
+        try expect(report.message.contains("leave out --send to get a draft"), report.message)
+    },
+
+    TestCase(name: "html_with_no_ui_is_a_usage_error_that_names_the_way_out") {
+        let report = FailureReport(HTMLNeedsUI())
+        try expectEqual(report.exitCode, .usage)
+        try expect(report.message.hasPrefix("--no-ui (or SENDMAIL_NO_UI=1) cannot deliver a message with an HTML body"), report.message)
+        try expect(report.message.contains("Nothing was sent."), report.message)
     },
 
     TestCase(name: "mail_not_running_is_a_temporary_failure_naming_minus_600") {

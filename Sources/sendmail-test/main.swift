@@ -15,7 +15,7 @@ let result = runSuites([
     mimeTests,
     mailDriverTests,
     accessibilityTests,
-    axHTMLDeliveryTests,
+    axEmlDeliveryTests,
     failureReportTests,
     permissionCheckTests,
 ])

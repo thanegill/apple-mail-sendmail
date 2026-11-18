@@ -5,11 +5,11 @@ import Foundation
 /// The two grants `--check-permissions` reads, so tests can answer them
 /// without touching Accessibility or Apple Events.
 public protocol PermissionProbe {
-    /// Whether this process may drive another app's UI, which the HTML path
+    /// Whether this process may drive another app's UI, which the .eml path
     /// needs. Never prompts.
     func accessibilityGranted() -> Bool
-    /// Whether this process may send Apple Events to Mail, which the plain
-    /// path needs, asking the user when macOS can. Mail must be running.
+    /// Whether this process may send Apple Events to Mail, which --no-ui
+    /// needs, asking the user when macOS can. Mail must be running.
     /// Returns the OSStatus: 0 granted, -1743 denied, -1744 not asked yet,
     /// -600 Mail not running.
     func mailAutomationStatus() -> Int
@@ -44,8 +44,8 @@ public struct PermissionReport: Equatable {
         var lines = [
             "apple-mail-sendmail permission check (nothing is sent)",
             "",
-            "  Accessibility, for HTML messages:             \(accessibilityGranted ? "granted" : "NOT GRANTED")",
-            "  Automation for Mail, for plain-text messages: \(automationSummary)",
+            "  Accessibility, for every message:      \(accessibilityGranted ? "granted" : "NOT GRANTED")",
+            "  Automation for Mail, only for --no-ui: \(automationSummary)",
             "",
             "macOS charges both grants to the responsible process, not to this",
             "binary: usually the app it was started from, such as Terminal, iTerm2",
@@ -81,7 +81,7 @@ public struct PermissionReport: Equatable {
         if !accessibilityGranted {
             let pane = AccessibilityNotGranted(osMajorVersion: osMajorVersion).settingsLocation
             fixes += [
-                "- Accessibility, needed for HTML messages: open",
+                "- Accessibility, needed for every message: open",
                 "    \(pane)",
                 "  and turn on the app that runs apple-mail-sendmail, or add it with the",
                 "  + button if it is not listed.",
@@ -92,7 +92,7 @@ public struct PermissionReport: Equatable {
             break
         case .denied, .notAsked:
             fixes += [
-                "- Automation for Mail, needed for plain-text messages: open",
+                "- Automation for Mail, needed only for --no-ui: open",
                 "    System Settings > Privacy & Security > Automation",
                 "  and, under the app that runs apple-mail-sendmail, turn on Mail. An app",
                 "  is listed there only after macOS has asked it, and the list has no +",

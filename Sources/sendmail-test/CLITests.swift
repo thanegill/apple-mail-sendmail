@@ -55,6 +55,43 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expect(opts.send)
     },
 
+    TestCase(name: "no_ui_is_off_by_default") {
+        let opts = try CLI.parse(["-t"], env: ["SENDMAIL_NO_UI": "0", "SENDMAIL_SEND": "1"])
+        try expect(!opts.noUI)
+    },
+
+    TestCase(name: "no_ui_flag") {
+        let opts = try CLI.parse(["-t", "--no-ui", "u@x.com"], env: [:])
+        try expect(opts.noUI)
+        try expect(!opts.send, "--no-ui must not imply --send")
+        try expectEqual(opts.recipients, ["u@x.com"])
+    },
+
+    TestCase(name: "env_var_triggers_no_ui") {
+        let opts = try CLI.parse([], env: ["SENDMAIL_NO_UI": "1"])
+        try expect(opts.noUI)
+        try expect(!opts.send)
+    },
+
+    TestCase(name: "no_ui_misspelled_is_a_usage_error") {
+        try expectUsageError(["--noui"], containing: "unknown option: --noui")
+    },
+
+    TestCase(name: "help_text_says_send_needs_a_subject") {
+        let h = CLI.helpText()
+        let sendRow = h.components(separatedBy: "\n  --no-ui ").first?.components(separatedBy: "\n  --send ").last ?? ""
+        let flattened = sendRow.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        try expect(flattened.contains("needs a non-empty Subject; without one the binary exits 65"), "missing the Subject rule in --send:\n\(h)")
+    },
+
+    TestCase(name: "help_text_documents_no_ui_and_its_quoting") {
+        let h = CLI.helpText()
+        try expect(h.contains("[--no-ui]"), "missing --no-ui in USAGE:\n\(h)")
+        try expect(h.contains("SENDMAIL_NO_UI=1"), "missing SENDMAIL_NO_UI env var")
+        try expect(h.contains("FB11734014"), "--no-ui must warn that Mail quotes the body")
+        try expect(h.contains("(exit 64)"), "--no-ui must say an HTML message is refused")
+    },
+
     TestCase(name: "positional_recipients") {
         let opts = try CLI.parse(["a@x.com", "b@y.com"], env: [:])
         try expectEqual(opts.recipients, ["a@x.com", "b@y.com"])
@@ -252,6 +289,7 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expect(h.contains("-f <addr>"), "missing -f <addr> in OPTIONS")
         try expect(h.contains("-F <name>"), "missing -F <name> in OPTIONS")
         try expect(h.contains("--send"), "missing --send in OPTIONS")
+        try expect(h.contains("\n  --no-ui "), "missing --no-ui in OPTIONS")
         try expect(h.contains("--help"), "missing --help in OPTIONS")
         try expect(h.contains("--version"), "missing --version in OPTIONS")
     },

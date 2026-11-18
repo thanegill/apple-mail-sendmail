@@ -51,6 +51,13 @@ do {
 
 var message = MIMEParser.parse(raw)
 
+do {
+    try MailDriver.requireDeliverable(message, options: options)
+} catch {
+    let report = FailureReport(error)
+    die(report.message, code: report.exitCode)
+}
+
 if options.readRecipientsFromHeaders {
     // -t: recipients come from headers; argv positionals are additive, but
     // deduplicated. We skip any argv address already present among the
@@ -114,25 +121,25 @@ let automation: MailAutomation
 if env["SENDMAIL_DRY_RUN"] == "1" {
     automation = MailAutomation(
         plain: PlainPlanPrinter(output: printLine),
-        html: HTMLPlanPrinter(output: printLine)
+        eml: EmlPlanPrinter(output: printLine)
     )
 } else {
     let clock = SystemClock()
     let workspace = SystemMailWorkspace(clock: clock)
-    let htmlLog = Logger(subsystem: "apple-mail-sendmail", category: "html")
+    let emlLog = Logger(subsystem: "apple-mail-sendmail", category: "eml")
     automation = MailAutomation(
         plain: AppleEventPlainDelivery(events: SystemAppleEventSender(), workspace: workspace, clock: clock),
-        html: AXHTMLDelivery(
+        eml: AXEmlDelivery(
             ax: SystemAXClient(),
             workspace: workspace,
             clock: clock,
             accessibility: .system(),
-            trace: { htmlLog.notice("\($0, privacy: .public)") }
+            trace: { emlLog.notice("\($0, privacy: .public)") }
         )
     )
 }
 
-// Build the .eml bytes that the HTML path will hand to Mail. Keep
+// Build the .eml bytes that the .eml path will hand to Mail. Keep
 // the original stdin body verbatim (no MIME re-encoding) and apply CLI
 // flag-driven header overrides only: finalize To/Cc/Bcc per positional/-t
 // rules and set From from -f/-F. MIMEParser already gave us the final

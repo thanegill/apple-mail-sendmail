@@ -3,7 +3,7 @@ import Foundation
 import SendmailCore
 
 /// A state machine standing in for Mail, its Accessibility tree, Launch
-/// Services and the clock, so `AXHTMLDelivery` runs without a real Mail.
+/// Services and the clock, so `AXEmlDelivery` runs without a real Mail.
 ///
 /// Like Mail, a menu press acts on the key (focused) window, and only while
 /// Mail is frontmost: Send Again on a viewer opens a compose; Send Again or

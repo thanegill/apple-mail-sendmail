@@ -1,9 +1,9 @@
 import ApplicationServices
 import Foundation
 
-/// The HTML path through Accessibility and Launch Services, with no Apple
-/// Events: executes `HTMLPlan.steps`.
-public struct AXHTMLDelivery: HTMLDelivery {
+/// The .eml path through Accessibility and Launch Services, with no Apple
+/// Events: executes `EmlPlan.steps`.
+public struct AXEmlDelivery: EmlDelivery {
     let ax: AXClient
     let workspace: MailWorkspace
     let clock: Clock
@@ -24,11 +24,11 @@ public struct AXHTMLDelivery: HTMLDelivery {
         self.trace = trace
     }
 
-    public func deliverHTML(emlURL: URL, subject: String, send: Bool) throws {
-        try run(HTMLPlan.steps(emlPath: emlURL.path, send: send), subject: subject)
+    public func deliverEml(emlURL: URL, subject: String, send: Bool) throws {
+        try run(EmlPlan.steps(emlPath: emlURL.path, send: send), subject: subject)
     }
 
-    public func run(_ steps: [HTMLStep], subject: String) throws {
+    public func run(_ steps: [EmlStep], subject: String) throws {
         let run = PlanRun(delivery: self, subject: subject)
         for step in steps {
             try run.execute(step)
@@ -45,9 +45,9 @@ private final class PlanRun {
     let subject: String
     var app: UIElement?
     var snapshots: [WindowSnapshot: [UIElement]] = [:]
-    var windows: [HTMLWindow: UIElement] = [:]
+    var windows: [EmlWindow: UIElement] = [:]
 
-    init(delivery: AXHTMLDelivery, subject: String) {
+    init(delivery: AXEmlDelivery, subject: String) {
         ax = delivery.ax
         workspace = delivery.workspace
         clock = delivery.clock
@@ -56,7 +56,7 @@ private final class PlanRun {
         self.subject = subject
     }
 
-    func execute(_ step: HTMLStep) throws {
+    func execute(_ step: EmlStep) throws {
         switch step {
         case .requireAccessibility:
             try accessibility.require()
@@ -103,7 +103,7 @@ private final class PlanRun {
         return app
     }
 
-    func requireWindow(_ window: HTMLWindow) throws -> UIElement {
+    func requireWindow(_ window: EmlWindow) throws -> UIElement {
         guard let element = windows[window] else {
             throw DeliveryError("internal error: the \(window.displayName) window was used before it was found")
         }
@@ -167,7 +167,7 @@ private final class PlanRun {
         return children.contains { ax.attribute(kAXRoleAttribute, of: $0) == .string(kAXSheetRole) }
     }
 
-    func waitForNewWindow(_ window: HTMLWindow, since snapshot: WindowSnapshot, timeout: TimeInterval) throws -> UIElement {
+    func waitForNewWindow(_ window: EmlWindow, since snapshot: WindowSnapshot, timeout: TimeInterval) throws -> UIElement {
         guard let before = snapshots[snapshot] else {
             throw DeliveryError("internal error: no \(snapshot.rawValue) window snapshot")
         }
@@ -254,7 +254,7 @@ private final class PlanRun {
     }
 
     /// nil when every check holds for `target`.
-    func failedCheck(_ check: GuardCheck, target: UIElement, window: HTMLWindow) throws -> String? {
+    func failedCheck(_ check: GuardCheck, target: UIElement, window: EmlWindow) throws -> String? {
         let app = try requireApp()
         switch check {
         case .frontmost:
@@ -273,7 +273,7 @@ private final class PlanRun {
     }
 
     /// nil when `target` passes `check`, or when the check cannot apply.
-    func failedContentCheck(_ check: WindowCheck, target: UIElement, window: HTMLWindow) -> String? {
+    func failedContentCheck(_ check: WindowCheck, target: UIElement, window: EmlWindow) -> String? {
         switch check {
         case .titleMatchesSubject:
             let expected = WindowCheck.normalizedTitle(subject)
@@ -288,7 +288,7 @@ private final class PlanRun {
     /// menu item up again and presses it once. Never presses unverified; on
     /// timeout it throws naming the last failed check.
     func guardedPress(
-        _ item: MenuItemTarget, on target: UIElement, window: HTMLWindow,
+        _ item: MenuItemTarget, on target: UIElement, window: EmlWindow,
         checks: [GuardCheck], verify: [WindowCheck], timeout: TimeInterval
     ) throws -> PressOutcome {
         if verify.contains(.titleMatchesSubject) && WindowCheck.normalizedTitle(subject).isEmpty {
@@ -333,7 +333,7 @@ private final class PlanRun {
         throw DeliveryError("The \(window.displayName) window did not pass the key-window check within \(Int(timeout))s; the \(item.fallbackName) press was not sent. Last failed check: \(lastFailure)")
     }
 
-    func pressTrace(_ item: MenuItemTarget, foundBy: FoundBy, window: HTMLWindow) -> String {
+    func pressTrace(_ item: MenuItemTarget, foundBy: FoundBy, window: EmlWindow) -> String {
         switch foundBy {
         case .shortcut:
             return "pressing \(item.fallbackName) on the \(window.displayName) window, found by its \(item.shortcutName) shortcut"
@@ -347,7 +347,7 @@ private final class PlanRun {
     /// cannot send twice. An AXPress can report kAXErrorCannotComplete even
     /// when it acted, so the press result never decides a retry.
     func pressUntilClosed(
-        _ item: MenuItemTarget, window: HTMLWindow, checks: [GuardCheck], verify: [WindowCheck], guardTimeout: TimeInterval,
+        _ item: MenuItemTarget, window: EmlWindow, checks: [GuardCheck], verify: [WindowCheck], guardTimeout: TimeInterval,
         maxPresses: Int, readyTimeout: TimeInterval, goneTimeout: TimeInterval
     ) throws {
         let target = try requireWindow(window)
@@ -377,8 +377,10 @@ private final class PlanRun {
             let gone = poll(timeout: goneTimeout) { isPresent(target) ? nil : true }
             if gone != nil { return }
             if hasSheet(target) {
+                // Backstop only: MailDriver.requireDeliverable refuses --send
+                // without a Subject before Mail is touched.
                 if WindowCheck.normalizedTitle(subject).isEmpty {
-                    throw DeliveryError("Mail is asking to confirm sending a message with no Subject (a sheet opened on the \(window.displayName) window after the \(item.fallbackName) press); it is not confirmed, and the message was not sent. HTML --send needs a Subject: add a non-empty Subject header, or leave out --send to get a draft")
+                    throw DeliveryError("Mail is asking to confirm sending a message with no Subject (a sheet opened on the \(window.displayName) window after the \(item.fallbackName) press); it is not confirmed, and the message was not sent. --send needs a Subject: add a non-empty Subject header, or leave out --send to get a draft")
                 }
                 throw DeliveryError("A sheet is open on the \(window.displayName) window after the \(item.fallbackName) press; not pressing \(item.fallbackTitle) through it, and the message was not sent")
             }
