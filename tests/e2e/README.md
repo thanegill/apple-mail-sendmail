@@ -21,12 +21,17 @@ macOS user or VM that has nothing but the two test accounts (see
 [One-time setup](#one-time-setup)), or let `nix run .#e2e-vm` run it in a
 disposable Tart VM (see [Running it in a Tart VM](#running-it-in-a-tart-vm)).
 
+CI cannot run the live suite, because GitHub-hosted runners cannot grant
+Accessibility. It runs in the Tart VM before every release, and the
+golden VM is rebuilt after a macOS or Mail update; see
+[`RELEASING.md`](../../RELEASING.md#live-end-to-end-tests).
+
 ## Running it
 
 Run these from the repository root:
 
 ```sh
-nix run .#e2e -- --list          # scenarios and the PRs they depend on
+nix run .#e2e -- --list          # scenarios and what each one checks
 nix run .#e2e -- --check-only    # fixtures, guards, sandboxed dry runs
 nix run .#e2e -- --self-test     # proves the assertions and guards
 nix run .#e2e                    # live run of every scenario
@@ -60,8 +65,8 @@ AppleScript the two modes run; neither talks to Mail or System Events.
 
 ### Results
 
-A live run ends with a table of results, with the reason for each, then
-a `RESULT:` line:
+A live run ends with a table of each scenario's result, with the reasons
+for any that did not pass, then a `RESULT:` line:
 
 - **PASS**
 - **FAIL**
@@ -70,9 +75,9 @@ a `RESULT:` line:
 - **SKIP**: for example, no `e2e-b` account.
 
 The run exits non-zero unless every selected scenario passed.
-`--allow-refused` also accepts REFUSED, for runs against a binary that
-lacks a PR some scenarios need; ABORTED, SKIP and FAIL always fail the
-run. Ctrl-C stops the run at once, including a binary or AppleScript
+`--allow-refused` also accepts REFUSED, for runs against an older binary
+whose dry-run output some scenarios' guards refuse; ABORTED, SKIP and
+FAIL always fail the run. Ctrl-C stops the run at once, including a binary or AppleScript
 that is running.
 
 ### Testing another build
@@ -83,17 +88,6 @@ To test another build, such as a PR branch, pass its binary:
 nix run .#e2e -- --binary "$(nix build --no-link --print-out-paths \
   'github:thanegill/apple-mail-sendmail?ref=<branch>')/bin/apple-mail-sendmail"
 ```
-
-Nine scenarios need an open PR (see `--list`). Against master's binary,
-only three of them are refused by the guards: `bcc-only-plain` (#40),
-`display-names-html` (#39) and `from-header-account-plain` (#38). The
-other six run:
-
-- `bcc-only-html` (#40), `display-names-plain` (#39) and
-  `attachment-filename-plain` (#37) are expected to fail on master.
-- The three #36 scenarios (`plain-attachment-send` and the two
-  `draft-later-*`) are expected to pass on master, since they check that
-  #36's temp-file cleanup does not break attachments.
 
 ### Display names
 

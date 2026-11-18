@@ -1077,7 +1077,8 @@ request_automation_access() {
 # The harness exits non-zero unless every selected scenario passed; a pass
 # also needs its summary to say so (the RESULT: line, and a PASS row for
 # each approval scenario rather than FAIL, REFUSED, ABORTED, SKIP or
-# NOT-RUN), so a truncated or misread run never counts.
+# NOT-RUN), so a truncated or misread run never counts. The harness's
+# self_test_summary checks its summary with these same patterns.
 approval_pass_passed() {
   local harness_log=$1 status=$2 scenario
   ((status == 0)) || return 1
