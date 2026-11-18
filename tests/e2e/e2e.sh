@@ -43,6 +43,7 @@ SENDMAIL_BIN=${E2E_SENDMAIL:-$(command -v apple-mail-sendmail || true)}
 
 readonly SCENARIOS=(
   plain-send
+  plain-send-no-ui
   plain-attachment-send
   html-send
   html-attachment-send
@@ -466,7 +467,8 @@ reset_expectations() {
   FIXTURE="$workdir/fixtures/${NAME}.eml"
   DESCRIPTION=""
   DELIVERY=send
-  EXPECT_PATH=plain
+  EXPECT_PATH=eml
+  EXPECT_QUOTED=false
   SEND_ARGS=(-t)
   EXPECT_FROM_ADDR=""
   EXPECT_FROM_NAME=""
@@ -556,8 +558,8 @@ EOF
   } >"$FIXTURE"
 }
 
-# Attachment names are exact. The plain path attaches the binary's temp file,
-# which it names att-NN-<sanitized name>, so that is the name on the wire.
+# Attachment names are exact. Every scenario but plain-send-no-ui takes the
+# .eml path, where the attachment keeps its own name on the wire.
 
 define_plain_send() {
   DESCRIPTION="plain text, --send: sender account, subject, body"
@@ -573,12 +575,33 @@ ${BODY_MARKER}
 EOF
 }
 
+# The only scenario on the Apple Event path. Mail sends a body set through its
+# dictionary as a quotation (FB11734014), so this one asserts that the quoting
+# IS there: it fails, and needs updating, once Apple fixes the bug.
+define_plain_send_no_ui() {
+  DESCRIPTION="plain text, --no-ui --send (Apple Events): recipients, sender, and Mail quotes the body (FB11734014)"
+  EXPECT_PATH=apple-events
+  EXPECT_QUOTED=true
+  SEND_ARGS=(-t -f "$ACCOUNT_A" --no-ui)
+  EXPECT_FROM_ADDR=$ACCOUNT_A
+  EXPECT_TO=(to-no-ui@example.test)
+  EXPECT_CC=(cc-no-ui@example.test)
+  cat >"$FIXTURE" <<EOF
+From: ${ACCOUNT_A}
+To: to-no-ui@example.test
+Cc: cc-no-ui@example.test
+Subject: ${SUBJECT}
+
+${BODY_MARKER}
+EOF
+}
+
 define_plain_attachment_send() {
   DESCRIPTION="plain text + attachment, --send: attachment arrives intact"
   SEND_ARGS=(-t -f "$ACCOUNT_A")
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_TO=(to-plain-att@example.test)
-  EXPECT_ATTACH=("att-01-e2e-data.bin|$ATTACH_SIZE|$ATTACH_SHA256")
+  EXPECT_ATTACH=("e2e-data.bin|$ATTACH_SIZE|$ATTACH_SHA256")
   write_plain_with_attachment "From: ${ACCOUNT_A}
 To: to-plain-att@example.test
 Subject: ${SUBJECT}" 'attachment; filename="e2e-data.bin"'
@@ -586,7 +609,6 @@ Subject: ${SUBJECT}" 'attachment; filename="e2e-data.bin"'
 
 define_html_send() {
   DESCRIPTION="HTML, --send: HTML part arrives, no Resent-* headers"
-  EXPECT_PATH=html
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_TO=(to-html@example.test)
   EXPECT_HTML="e2e-html-cell"
@@ -597,7 +619,6 @@ Subject: ${SUBJECT}"
 
 define_html_attachment_send() {
   DESCRIPTION="HTML + attachment, --send: both arrive"
-  EXPECT_PATH=html
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_TO=(to-html-att@example.test)
   EXPECT_HTML="e2e-html-cell"
@@ -625,7 +646,6 @@ EOF
 
 define_bcc_only_html() {
   DESCRIPTION="To: undisclosed-recipients:; + Bcc, HTML: Bcc delivered, no Bcc header"
-  EXPECT_PATH=html
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_BCC=(hidden-html@example.test)
   EXPECT_HTML="e2e-html-cell"
@@ -655,7 +675,6 @@ EOF
 
 define_display_names_html() {
   DESCRIPTION="comma and non-ASCII display names in To, Cc and From (header), HTML"
-  EXPECT_PATH=html
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_FROM_NAME="Bäcker, Anna"
   EXPECT_TO=("doe-html@example.test|Doe, John" "juergen-html@example.test|Jürgen Müller")
@@ -685,7 +704,7 @@ define_attachment_filename_plain() {
   SEND_ARGS=(-t -f "$ACCOUNT_A")
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_TO=(to-filename@example.test)
-  EXPECT_ATTACH=("att-01-Report-Q3.BIN|$ATTACH_SIZE|$ATTACH_SHA256")
+  EXPECT_ATTACH=("Report-Q3.BIN|$ATTACH_SIZE|$ATTACH_SHA256")
   write_plain_with_attachment "From: ${ACCOUNT_A}
 To: to-filename@example.test
 Subject: ${SUBJECT}" "attachment; filename*=UTF-8''Report%2DQ3.BIN"
@@ -697,7 +716,7 @@ define_draft_later_plain_attachment() {
   SEND_ARGS=(-t -f "$ACCOUNT_A")
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_TO=(to-draft-plain@example.test)
-  EXPECT_ATTACH=("att-01-e2e-data.bin|$ATTACH_SIZE|$ATTACH_SHA256")
+  EXPECT_ATTACH=("e2e-data.bin|$ATTACH_SIZE|$ATTACH_SHA256")
   write_plain_with_attachment "From: ${ACCOUNT_A}
 To: to-draft-plain@example.test
 Subject: ${SUBJECT}" 'attachment; filename="e2e-data.bin"'
@@ -706,7 +725,6 @@ Subject: ${SUBJECT}" 'attachment; filename="e2e-data.bin"'
 define_draft_later_html_attachment() {
   DESCRIPTION="HTML + attachment as a draft, sent by hand after --draft-wait"
   DELIVERY=draft-later
-  EXPECT_PATH=html
   EXPECT_FROM_ADDR=$ACCOUNT_A
   EXPECT_TO=(to-draft-html@example.test)
   EXPECT_HTML="e2e-html-cell"
@@ -905,7 +923,7 @@ guard_header_block() {
 
 # Mirrors the binary's argv grammar for the flags the scenarios use and
 # refuses everything else: -t, -f ADDR / -fADDR, -F NAME / -FNAME, bundles of
-# those, --send, -- and positional recipients.
+# those, --send, --no-ui, -- and positional recipients.
 guard_argv() {
   local args=("$@") i=0 j arg flag value end_of_options=false
   while ((i < ${#args[@]})); do
@@ -918,7 +936,7 @@ guard_argv() {
     fi
     case $arg in
       --) end_of_options=true ;;
-      --send) ;;
+      --send | --no-ui) ;;
       --*) GUARD_REASONS+=("$NAME: argv option $arg is not allowed") ;;
       *)
         for ((j = 1; j < ${#arg}; j++)); do
@@ -995,7 +1013,7 @@ list_binary_temp_dirs() {
 
 # Queues for deletion only the dirs that this dry run created (absent from
 # the snapshot taken before it ran) and that the printed output names, or
-# that are empty (a plain message without attachments names no file).
+# that are empty (a --no-ui message without attachments names no file).
 collect_dry_run_temp_dirs() {
   local script_file=$1 snapshot_file=$2 dir path printed_dirs=""
   while IFS= read -r path; do
@@ -1032,8 +1050,8 @@ has_nul_byte() {
 readonly NO_TERMINAL=(perl -e 'use POSIX (); POSIX::setsid() or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' --)
 
 # Runs the binary in the sandbox, in a new session with stdin from the
-# fixture and stdout/stderr to files, then checks what it printed: the HTML
-# path's step plan or the plain path's AppleScript.
+# fixture and stdout/stderr to files, then checks what it printed: the .eml
+# path's step plan, or the --no-ui Apple Event path's.
 dry_run_scenario() {
   local args=() script_file="$workdir/logs/${NAME}.dry-run.out" status=0 snapshot_file
   DRY_RUN_SENDER=""
@@ -1043,7 +1061,7 @@ dry_run_scenario() {
   mkdir -p "$DRY_RUN_TMP"
   snapshot_file="$DRY_RUN_TMP.before"
   list_binary_temp_dirs "$DRY_RUN_TMP" >"$snapshot_file"
-  run_bounded 60 env -u SENDMAIL_SEND SENDMAIL_DRY_RUN=1 TMPDIR="$DRY_RUN_TMP/" \
+  run_bounded 60 env -u SENDMAIL_SEND -u SENDMAIL_NO_UI SENDMAIL_DRY_RUN=1 TMPDIR="$DRY_RUN_TMP/" \
     "${NO_TERMINAL[@]}" "${SANDBOX[@]}" -D "BINARY=$SENDMAIL_BIN" -D "TEMP_DIR=$DRY_RUN_TMP" "$SENDMAIL_BIN" "${args[@]}" \
     <"$FIXTURE" >"$script_file" 2>"$workdir/logs/${NAME}.dry-run.stderr" || status=$?
   collect_dry_run_temp_dirs "$script_file" "$snapshot_file"
@@ -1065,16 +1083,17 @@ is_dry_run_file() {
   [[ $path != *..* && -f $path ]] && is_binary_temp_dir "$(dirname "$path")" "$DRY_RUN_TMP"
 }
 
-# The HTML path prints its step plan, one JSON object per line. The plan is
-# fixed apart from the .eml path, so it must equal the template for its mode
-# (tests/e2e/templates) once that path is replaced. The path may not contain
-# a quote or backslash, so it cannot end its JSON string early.
+# The .eml path, which every message but a --no-ui one takes, prints its step
+# plan, one JSON object per line. The plan is fixed apart from the .eml path,
+# so it must equal the template for its mode (tests/e2e/templates) once that
+# path is replaced. The path may not contain a quote or backslash, so it
+# cannot end its JSON string early.
 readonly OPEN_EML_STEP_RE='^\{"activates":true,"path":"(/[^"\\]*\.eml)","step":"open_eml"\}$'
 
-analyze_html_plan() {
+analyze_eml_plan() {
   local plan_file=$1 template mode open_lines eml_path normalized_file differences
   if [[ $DELIVERY == send ]]; then mode=send; else mode=draft; fi
-  template="$TEMPLATES/html-plan-$mode.jsonl.tmpl"
+  template="$TEMPLATES/eml-plan-$mode.jsonl.tmpl"
   if [[ ! -s $template ]]; then
     GUARD_REASONS+=("$NAME: template $template is missing")
     return
@@ -1104,8 +1123,8 @@ analyze_html_plan() {
   DRY_RUN_SENDER=$HEADER_FROM_ADDRESS
 }
 
-# The plain path prints its step plan, one JSON object per line, in this
-# order: launch_mail, make_message, set_content, add_recipient per recipient,
+# The --no-ui Apple Event path prints its PlainPlan, one JSON object per
+# line, in this order: launch_mail, make_message, set_content, add_recipient per recipient,
 # add_attachment per attachment, then send only for --send. Each line must be
 # exactly jq's compact, key-sorted form of itself, so a duplicated key (jq
 # keeps the last) or stray whitespace cannot make jq and the binary read a
@@ -1200,11 +1219,11 @@ analyze_dry_run_script() {
     GUARD_REASONS+=("$NAME: the dry-run output is missing or contains a NUL byte")
     return 1
   fi
-  if [[ $EXPECT_PATH == html ]]; then
-    analyze_html_plan "$script_file"
-  else
-    analyze_plain_plan "$script_file"
-  fi
+  case $EXPECT_PATH in
+    eml) analyze_eml_plan "$script_file" ;;
+    apple-events) analyze_plain_plan "$script_file" ;;
+    *) GUARD_REASONS+=("$NAME: unknown expected path ${EXPECT_PATH:-none}") ;;
+  esac
   while IFS= read -r token; do
     [[ -z $token ]] && continue
     is_allowed_bare_address "$token" ||
@@ -1395,7 +1414,7 @@ validate_mail_windows() {
   IFS= read -r MAIL_OUTBOX_COUNT || true
   IFS= read -r MAIL_SELECTED_COUNT || true
   # The outgoing-message count is recorded but not checked: Mail keeps every
-  # plain-text message it has sent in `outgoing messages` until it is
+  # --no-ui message it has sent in `outgoing messages` until it is
   # relaunched, so a nonzero count does not mean a compose is open. A real
   # compose window is a non-viewer window and is refused below; an invisible
   # outgoing message has no window for a keystroke to reach and cannot be
@@ -1778,6 +1797,44 @@ sender_headers() {
   awk 'found { print } /^Received: .*\(Mailpit\) with SMTP/ { found = 1 }' <<<"$all_headers"
 }
 
+# Mail sends a body set through its scripting dictionary as a quotation
+# (FB11734014): every text/plain line prefixed with "> " and the HTML part
+# wrapped in <blockquote type="cite">. A body that merely contains the marker
+# would pass the text check, so the quoting is checked on its own. Lines the
+# fixture's own body starts with "> " are allowed through.
+readonly CITE_BLOCKQUOTE_RE='<blockquote[^>]*type=["'"'"']?cite'
+readonly QUOTED_LINE_RE='^>( |$)'
+
+fixture_quoted_lines() {
+  awk 'in_body && /^> / { sub(/\r$/, ""); print } /^\r?$/ { in_body = 1 }' "$FIXTURE"
+}
+
+check_quoting() {
+  local text=${1//$'\r'/} html=$2 quoted_lines fixture_lines line unexpected=()
+  quoted_lines=$(grep -E "$QUOTED_LINE_RE" <<<"$text" || true)
+  if [[ $EXPECT_QUOTED == true ]]; then
+    grep -F -- "$BODY_MARKER" <<<"$quoted_lines" >/dev/null ||
+      fail_check "text body is not quoted: no line starting with \"> \" holds the marker (has Apple fixed FB11734014? then update $NAME)"
+    if grep -F -- "$BODY_MARKER" <<<"$text" | grep -vE "$QUOTED_LINE_RE" >/dev/null; then
+      fail_check "text body has the marker on a line that is not quoted"
+    fi
+    if [[ -n $html ]] && ! grep -iE "$CITE_BLOCKQUOTE_RE" <<<"$html" >/dev/null; then
+      fail_check "HTML part does not wrap the body in <blockquote type=\"cite\"> (has Apple fixed FB11734014? then update $NAME)"
+    fi
+    return
+  fi
+  fixture_lines=$(fixture_quoted_lines)
+  while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    grep -xF -- "$line" <<<"$fixture_lines" >/dev/null || unexpected+=("$line")
+  done <<<"$quoted_lines"
+  ((${#unexpected[@]} == 0)) ||
+    fail_check "text body is quoted (Mail bug FB11734014): ${#unexpected[@]} line(s) start with \"> \" that the fixture does not have, the first: \"${unexpected[0]:0:80}\""
+  if grep -iE "$CITE_BLOCKQUOTE_RE" <<<"$html" >/dev/null && ! grep -iE "$CITE_BLOCKQUOTE_RE" "$FIXTURE" >/dev/null; then
+    fail_check "HTML part wraps the body in <blockquote type=\"cite\"> (Mail bug FB11734014)"
+  fi
+}
+
 check_message() {
   local id=$1 detail="$workdir/messages/$1.json" raw="$workdir/messages/$1.eml" headers
   if ! "${CURL[@]}" -fsS --max-time 10 "$API/message/$id" >"$detail" || ! jq -e '.ID' "$detail" >/dev/null 2>&1; then
@@ -1811,19 +1868,16 @@ check_message() {
     fail_check "wire headers include a Bcc header: $(grep -iE '^Bcc[[:blank:]]*:' <<<"$headers")"
 
   local body_text body_html
-  if [[ -n $EXPECT_TEXT ]]; then
-    if ! body_text=$(jq -r '.Text // ""' "$detail"); then
-      fail_check "could not read the text body of message $id"
-    elif ! grep -qF -- "$EXPECT_TEXT" <<<"$body_text"; then
+  if ! body_text=$(jq -r '.Text // ""' "$detail") || ! body_html=$(jq -r '.HTML // ""' "$detail"); then
+    fail_check "could not read the text or HTML body of message $id"
+  else
+    if [[ -n $EXPECT_TEXT ]] && ! grep -qF -- "$EXPECT_TEXT" <<<"$body_text"; then
       fail_check "text body does not contain \"$EXPECT_TEXT\""
     fi
-  fi
-  if [[ -n $EXPECT_HTML ]]; then
-    if ! body_html=$(jq -r '.HTML // ""' "$detail"); then
-      fail_check "could not read the HTML part of message $id"
-    elif ! grep -qF -- "$EXPECT_HTML" <<<"$body_html"; then
+    if [[ -n $EXPECT_HTML ]] && ! grep -qF -- "$EXPECT_HTML" <<<"$body_html"; then
       fail_check "HTML part missing or does not contain \"$EXPECT_HTML\""
     fi
+    check_quoting "$body_text" "$body_html"
   fi
 
   local actual_attachments entry want_name want_size want_sha found name size sha
@@ -2009,7 +2063,7 @@ run_live_scenario() {
   # From here on Mail may hold a message of ours, so cleanup drains its
   # Outbox before stopping Mailpit. A refusal before this point must not.
   mail_touched=true
-  run_bounded 120 env -u SENDMAIL_SEND -u SENDMAIL_DRY_RUN "$SENDMAIL_BIN" "${args[@]}" <"$(checked_fixture "$name")" \
+  run_bounded 120 env -u SENDMAIL_SEND -u SENDMAIL_NO_UI -u SENDMAIL_DRY_RUN "$SENDMAIL_BIN" "${args[@]}" <"$(checked_fixture "$name")" \
     >"$workdir/logs/$name.stdout" 2>"$workdir/logs/$name.stderr" || status=$?
   if ((status != 0)); then
     reasons+=("binary exited $status: $(tail -n 1 "$workdir/logs/$name.stderr")")
@@ -2161,6 +2215,23 @@ write_wire_message() {
   ' "$FIXTURE" >"$1"
 }
 
+# Rewrites the wire file's body the way Mail sends a --no-ui message: a
+# multipart/alternative whose text part is the fixture body with every line
+# quoted and whose HTML part wraps it in <blockquote type="cite">, or with
+# cite=no, does not.
+quote_wire_body() {
+  local wire=$1 cite=$2 html_body
+  html_body="<p>${BODY_MARKER}</p>"
+  [[ $cite == yes ]] && html_body="<blockquote type=\"cite\">${html_body}</blockquote>"
+  {
+    awk '/^\r?$/ { exit } !/^(MIME-Version|Content-Type|Content-Transfer-Encoding):/ { print }' "$wire"
+    printf 'MIME-Version: 1.0\nContent-Type: multipart/alternative; boundary="cite-b"\n\n--cite-b\nContent-Type: text/plain; charset=utf-8\n\n'
+    awk 'in_body { print "> " $0 } /^\r?$/ { in_body = 1 }' "$wire"
+    printf -- '--cite-b\nContent-Type: text/html; charset=utf-8\n\n<html><body>%s</body></html>\n--cite-b--\n' "$html_body"
+  } >"$wire.quoted"
+  mv "$wire.quoted" "$wire"
+}
+
 inject() {
   local file=$1 mail_from=$2
   shift 2
@@ -2188,9 +2259,16 @@ inject_variant() {
   local recipients=() rcpt
   mapfile -t recipients < <(expected_envelope_recipients)
   write_wire_message "$wire"
+  if [[ $EXPECT_QUOTED == true ]]; then
+    case $variant in
+      body-unquoted) ;;
+      html-cite-dropped) quote_wire_body "$wire" no ;;
+      *) quote_wire_body "$wire" yes ;;
+    esac
+  fi
 
   case $variant in
-    correct) ;;
+    correct | body-unquoted | html-cite-dropped) ;;
     missing) return 0 ;;
     duplicate) copies=2 ;;
     resent-header) sed -i "1i Resent-From: ${EXPECT_FROM_ADDR}" "$wire" ;;
@@ -2224,6 +2302,8 @@ inject_variant() {
       ((${#recipients[@]} > 0)) || recipients=(someone-else@example.test)
       ;;
     body-changed) sed -i "s/${BODY_MARKER}/changed body/g" "$wire" ;;
+    body-quoted) sed -i "s/^${BODY_MARKER}\$/> &/" "$wire" ;;
+    html-cite-wrapped) sed -i 's#<html><body>#&<blockquote type="cite">#; s#</body></html>#</blockquote>&#' "$wire" ;;
     html-dropped) sed -i 's#^Content-Type: text/html#Content-Type: text/plain#' "$wire" ;;
     attachment-corrupted)
       local flipped
@@ -2259,6 +2339,12 @@ variants_for_scenario() {
   [[ ${EXPECT_TO[*]} == *"|"* ]] && printf '%s\n' names-unquoted names-dropped
   ((${#EXPECT_BCC[@]} > 0)) && printf '%s\n' bcc-header-kept bcc-undelivered
   [[ -n $EXPECT_HTML ]] && printf '%s\n' html-dropped
+  if [[ $EXPECT_QUOTED == true ]]; then
+    printf '%s\n' body-unquoted html-cite-dropped
+  else
+    printf '%s\n' body-quoted
+    [[ -n $EXPECT_HTML ]] && printf '%s\n' html-cite-wrapped
+  fi
   ((${#EXPECT_ATTACH[@]} > 0)) && printf '%s\n' attachment-corrupted attachment-truncated attachment-renamed attachment-name-prefix-dropped attachment-dropped
   return 0
 }
@@ -2306,6 +2392,18 @@ self_test_assertions() {
   }
   check_with_failing_fetch "message JSON fetch fails" "/message/$message_id"
   check_with_failing_fetch "raw source fetch fails" "/message/$message_id/raw"
+
+  printf 'a fixture body that quotes a line itself\n'
+  local variant expected actual
+  for variant in correct body-quoted; do
+    define_scenario plain-send
+    printf '> e2e quoted by the fixture %s\n' "$RUN_ID" >>"$FIXTURE"
+    clear_mailpit
+    inject_variant "$variant"
+    if [[ $variant == correct ]]; then expected=PASS; else expected=FAIL; fi
+    if check_delivery 2; then actual=PASS; else actual=FAIL; fi
+    self_test_expect "$expected" "fixture's own \"> \" line, $variant" "$actual" "${FAILURES[@]}"
+  done
 }
 
 run_guard_case() {
@@ -2462,40 +2560,63 @@ self_test_dry_run() {
     fi
   }
 
-  define_scenario plain-send
-  run_dry_run_case "plain-send as defined" accepted
+  local name
+  for name in plain-send plain-send-no-ui html-send draft-later-html-attachment draft-later-plain-attachment plain-attachment-send; do
+    define_scenario "$name"
+    run_dry_run_case "$name as defined" accepted
+  done
 
   define_scenario html-send
-  run_dry_run_case "html-send as defined" accepted
-
-  define_scenario draft-later-html-attachment
-  run_dry_run_case "draft-later-html-attachment as defined" accepted
-
-  define_scenario draft-later-plain-attachment
-  run_dry_run_case "draft-later-plain-attachment as defined" accepted
-
-  define_scenario html-send
-  EXPECT_PATH=plain
-  run_dry_run_case "HTML fixture expected on the plain path" refused
+  EXPECT_PATH=apple-events
+  run_dry_run_case "HTML fixture expected on the Apple Event path" refused \
+    "is not an allowed step"
 
   define_scenario plain-send
-  EXPECT_PATH=html
-  run_dry_run_case "plain fixture expected on the HTML path" refused
+  EXPECT_PATH=apple-events
+  run_dry_run_case "plain fixture without --no-ui expected on the Apple Event path" refused \
+    "is not an allowed step"
+
+  define_scenario plain-send-no-ui
+  EXPECT_PATH=eml
+  run_dry_run_case "--no-ui plain fixture expected on the .eml path" refused \
+    "expected exactly one open_eml step"
+
+  define_scenario plain-send-no-ui
+  SEND_ARGS=(-t -f "$ACCOUNT_A")
+  run_dry_run_case "Apple Event scenario run without --no-ui" refused \
+    "is not an allowed step"
+
+  define_scenario html-send
+  SEND_ARGS+=(--no-ui)
+  run_dry_run_case "HTML fixture with --no-ui (the binary must refuse it)" refused \
+    "dry run exited 64"
 
   define_scenario draft-later-plain-attachment
   SEND_ARGS+=(--send)
-  run_dry_run_case "plain draft that would be sent" refused
+  run_dry_run_case "plain draft that would press Send" refused \
+    "plan differs from the draft template"
 
   define_scenario draft-later-html-attachment
   SEND_ARGS+=(--send)
   run_dry_run_case "HTML draft that would press Send" refused \
     "plan differs from the draft template"
 
+  define_scenario plain-send-no-ui
+  DELIVERY=draft-later
+  SEND_ARGS+=(--send)
+  run_dry_run_case "--no-ui draft that would be sent" refused \
+    "do not match"
+
+  define_scenario plain-send-no-ui
+  SEND_ARGS=(-t --no-ui)
+  sed -i '/^From:/d' "$FIXTURE"
+  run_dry_run_case "--no-ui with no -f and no From (no sender set)" refused \
+    "plain-text plan sets no sender"
+
   define_scenario plain-send
   SEND_ARGS=(-t)
   sed -i '/^From:/d' "$FIXTURE"
-  run_dry_run_case "plain path with no -f and no From (no sender set)" refused \
-    "plain-text plan sets no sender"
+  run_dry_run_case "plain .eml with no -f and no From (no sender)" refused
 
   define_scenario plain-send
   sed -i '/^To:/d' "$FIXTURE"
@@ -2507,10 +2628,15 @@ self_test_dry_run() {
 
   define_scenario plain-send
   sed -i 's/^To: .*/To: real@gmail.com/' "$FIXTURE"
-  run_dry_run_case "plain script with a real recipient" refused
+  run_dry_run_case "plain .eml with a real To (header guard on the .eml)" refused
+
+  define_scenario plain-send-no-ui
+  sed -i 's/^To: .*/To: real@gmail.com/' "$FIXTURE"
+  run_dry_run_case "--no-ui plan with a real recipient" refused \
+    "adds recipient"
 }
 
-# Crafted scripts, built from the real templates and MailDriver's plain-text
+# Crafted scripts, built from the real templates and the --no-ui PlainPlan
 # shape, prove each branch of the script analysis, including the bypasses a
 # reviewer found against the earlier blocklist.
 self_test_script_analysis() {
@@ -2526,8 +2652,8 @@ self_test_script_analysis() {
   printf 'From: e2e-a@example.test\nTo: a@example.test\nSubject: x\n\nbody\n' >"$workdir/outside.eml"
 
   local html_send html_draft
-  html_send=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/html-plan-send.jsonl.tmpl")
-  html_draft=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/html-plan-draft.jsonl.tmpl")
+  html_send=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/eml-plan-send.jsonl.tmpl")
+  html_draft=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/eml-plan-draft.jsonl.tmpl")
 
   plain_plan() {
     local visible=$1 send_step=$2 sender_json=${3-'"e2e-a@example.test"'}
@@ -2541,9 +2667,12 @@ self_test_script_analysis() {
     [[ -z $send_step ]] || printf '{"step":"send"}\n'
   }
 
+  # SCENARIO:draft runs a send scenario as a draft, for plain-send-no-ui,
+  # the only scenario on the Apple Event path.
   run_analysis_case() {
-    local label=$1 wanted=$2 scenario=$3 wanted_reason=${5-} script_file="$workdir/logs/crafted.out"
+    local label=$1 wanted=$2 scenario=${3%:draft} wanted_reason=${5-} script_file="$workdir/logs/crafted.out"
     define_scenario "$scenario"
+    [[ $3 == *:draft ]] && DELIVERY=draft-later
     DRY_RUN_TMP=$crafted_root
     printf '%s\n' "$4" >"$script_file"
     GUARD_REASONS=()
@@ -2556,9 +2685,15 @@ self_test_script_analysis() {
 
   run_analysis_case "HTML send plan matching the template" accepted html-send "$html_send"
   run_analysis_case "HTML draft plan matching the template" accepted draft-later-html-attachment "$html_draft"
-  run_analysis_case "plain send plan" accepted plain-send "$(plain_plan false send)"
-  run_analysis_case "plain draft plan" accepted draft-later-plain-attachment "$(plain_plan true '')"
-  run_analysis_case "plain draft whose subject mentions send" accepted draft-later-plain-attachment \
+  run_analysis_case "plain send matching the .eml send template" accepted plain-send "$html_send"
+  run_analysis_case "plain draft matching the .eml draft template" accepted draft-later-plain-attachment "$html_draft"
+  run_analysis_case "plain send printing the Apple Event plan" refused plain-send "$(plain_plan false send)" \
+    "expected exactly one open_eml step"
+  run_analysis_case "--no-ui send printing the .eml plan" refused plain-send-no-ui "$html_send" \
+    "is not an allowed step"
+  run_analysis_case "--no-ui send plan" accepted plain-send-no-ui "$(plain_plan false send)"
+  run_analysis_case "--no-ui draft plan" accepted plain-send-no-ui:draft "$(plain_plan true '')"
+  run_analysis_case "--no-ui draft whose subject mentions send" accepted plain-send-no-ui:draft \
     "$(plain_plan true '' | sed 's/"subject":"s"/"subject":"please send"/')"
 
   local send_again_step full_guard
@@ -2607,59 +2742,59 @@ self_test_script_analysis() {
     "$(grep -vF '"step":"open_eml"' <<<"$html_send")" \
     "expected exactly one open_eml step"
 
-  run_analysis_case "plain send with an extra Message > Send press step" refused plain-send \
+  run_analysis_case "--no-ui send with an extra Message > Send press step" refused plain-send-no-ui \
     "$(plain_plan false send; printf '%s\n' '{"guard":[],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"step":"press_menu_item","verify":["title_matches_subject"],"window":"compose"}')" \
     "is not an allowed step"
   # The subject string hides a second sender behind escaped quotes; a naive
   # scan would take e2e-a for the sender while jq reads the real one.
   local escaped_make_line
   escaped_make_line='{"sender":"me@gmail.com","step":"make_message","subject":"x\",\"sender\":\"e2e-a@example.test","visible":true}'
-  run_analysis_case "plain draft hiding a sender behind an escaped quote" refused draft-later-plain-attachment \
+  run_analysis_case "--no-ui draft hiding a sender behind an escaped quote" refused plain-send-no-ui:draft \
     "$(plain_plan true '' '' "$escaped_make_line")" \
     "is not exactly one e2e account"
-  run_analysis_case "plain recipient postmaster" refused plain-send \
+  run_analysis_case "--no-ui recipient postmaster" refused plain-send-no-ui \
     "$(plain_plan false send | sed 's/"address":"a@example.test"/"address":"postmaster"/')" \
     "adds recipient \"postmaster\""
-  run_analysis_case "plain plan with a duplicated sender key" refused plain-send \
+  run_analysis_case "--no-ui plan with a duplicated sender key" refused plain-send-no-ui \
     "$(plain_plan false send '"e2e-a@example.test","sender":"me@gmail.com"')" \
     "is not in canonical form"
-  run_analysis_case "plain plan with whitespace in a line" refused plain-send \
+  run_analysis_case "--no-ui plan with whitespace in a line" refused plain-send-no-ui \
     "$(plain_plan false send | sed 's/^{"step":"send"}$/{ "step":"send"}/')" \
     "is not in canonical form"
-  run_analysis_case "plain plan with a keystroke step" refused plain-send \
+  run_analysis_case "--no-ui plan with a keystroke step" refused plain-send-no-ui \
     "$(plain_plan false send | sed 's/^{"step":"set_content","text":"body"}$/&\n{"key":"d","step":"keystroke"}/')" \
     "is not an allowed step"
-  run_analysis_case "plain recipient step with an extra key" refused plain-send \
+  run_analysis_case "--no-ui recipient step with an extra key" refused plain-send-no-ui \
     "$(plain_plan false send | sed 's/"step":"add_recipient"}/"step":"add_recipient","via":"x"}/')" \
     "is not an allowed step"
-  run_analysis_case "plain --send plan that is visible" refused plain-send "$(plain_plan true send)" \
+  run_analysis_case "--no-ui --send plan that is visible" refused plain-send-no-ui "$(plain_plan true send)" \
     "expected visible false"
-  run_analysis_case "plain --send plan without a send step" refused plain-send "$(plain_plan false '')" \
+  run_analysis_case "--no-ui --send plan without a send step" refused plain-send-no-ui "$(plain_plan false '')" \
     "do not match"
-  run_analysis_case "plain draft plan with a send step" refused draft-later-plain-attachment "$(plain_plan true send)" \
+  run_analysis_case "--no-ui draft plan with a send step" refused plain-send-no-ui:draft "$(plain_plan true send)" \
     "do not match"
-  run_analysis_case "plain draft plan that is invisible" refused draft-later-plain-attachment "$(plain_plan false '')" \
+  run_analysis_case "--no-ui draft plan that is invisible" refused plain-send-no-ui:draft "$(plain_plan false '')" \
     "expected visible true"
-  run_analysis_case "plain plan without a sender" refused plain-send "$(plain_plan false send null)" \
+  run_analysis_case "--no-ui plan without a sender" refused plain-send-no-ui "$(plain_plan false send null)" \
     "plain-text plan sets no sender"
-  run_analysis_case "plain plan with a real sender" refused plain-send \
+  run_analysis_case "--no-ui plan with a real sender" refused plain-send-no-ui \
     "$(plain_plan false send '"Me <me@gmail.com>"')" \
     "is not exactly one e2e account"
-  run_analysis_case "plain sender naming two addresses" refused plain-send \
+  run_analysis_case "--no-ui sender naming two addresses" refused plain-send-no-ui \
     "$(plain_plan false send '"e2e-a@example.test <me@gmail.com>"')" \
     "is not exactly one e2e account"
-  run_analysis_case "plain plan with an unterminated string" refused plain-send \
+  run_analysis_case "--no-ui plan with an unterminated string" refused plain-send-no-ui \
     "$(plain_plan false send | sed 's/"subject":"s"/"subject":"s/')" \
     "is not valid JSON"
-  run_analysis_case "recipient with a \\t escape (decoded to a real tab)" refused plain-send \
+  run_analysis_case "recipient with a \\t escape (decoded to a real tab)" refused plain-send-no-ui \
     "$(plain_plan false send | sed 's/"address":"a@example.test"/"address":"a@example.test\\t"/')" \
     "adds recipient"
-  run_analysis_case "recipient with a \\n escape (line break)" refused plain-send \
+  run_analysis_case "recipient with a \\n escape (line break)" refused plain-send-no-ui \
     "$(plain_plan false send | sed 's/"address":"a@example.test"/"address":"a@example.test\\nreal@gmail.com"/')" \
     "adds recipient"
-  run_analysis_case "subject with a \\t escape" accepted plain-send \
+  run_analysis_case "subject with a \\t escape" accepted plain-send-no-ui \
     "$(plain_plan false send | sed 's/"subject":"s"/"subject":"a\\tb"/')"
-  run_analysis_case "plain plan attaching a file outside the temp dir" refused plain-send \
+  run_analysis_case "--no-ui plan attaching a file outside the temp dir" refused plain-send-no-ui \
     "$(plain_plan false send | sed "s#$attachment#$workdir/outside.eml#")" \
     "not a file in this dry run's temp dir"
 
@@ -2669,7 +2804,7 @@ self_test_script_analysis() {
     printf '{"step":"send"}\0\n'
     plain_plan false send | tail -n +3
   } >"$nul_script"
-  define_scenario plain-send
+  define_scenario plain-send-no-ui
   DRY_RUN_TMP=$crafted_root
   GUARD_REASONS=()
   if analyze_dry_run_script "$nul_script"; then
@@ -3212,6 +3347,18 @@ self_test_summary() {
     outcome=readable
   fi
   self_test_expect readable "one failed: its row is not read as a PASS" "$outcome"
+  outcome=unreadable
+  summary_text=$(
+    allow_refused=false
+    selected=(plain-send plain-send-no-ui)
+    RESULT=([plain-send]=FAIL [plain-send-no-ui]=PASS)
+    print_summary
+  ) || true
+  if ! grep -Eq '^plain-send[[:space:]]+PASS([[:space:]]|$)' <<<"$summary_text" &&
+    grep -Eq '^plain-send-no-ui[[:space:]]+PASS([[:space:]]|$)' <<<"$summary_text"; then
+    outcome=readable
+  fi
+  self_test_expect readable "plain-send-no-ui's PASS is not read as plain-send's" "$outcome"
 }
 
 # Exercises run_supervised directly, with a `sleep` standing in for the

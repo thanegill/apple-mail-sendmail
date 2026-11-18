@@ -26,10 +26,11 @@ readonly MAILPIT_PORTS=("$MAILPIT_SMTP_PORT" 1110 1111 8025)
 readonly TCC_PREDICATE='subsystem == "com.apple.TCC"'
 readonly TCC_SUMMARY_PATTERN='tart-guest-agent|osascript|apple-mail-sendmail|kTCCServiceAppleEvents|kTCCServiceAccessibility|kTCCServicePostEvent'
 readonly NIX_UNINSTALL_DOCS=https://nix.dev/manual/nix/stable/installation/uninstall.html
-# Together these make every kind of Apple Event and keystroke a live run
-# sends: osascript and the binary to Mail, the binary to System Events, and
-# the Accessibility-gated keystroke.
-readonly APPROVAL_SCENARIOS=(plain-send html-send)
+# Together these exercise every grant a live run uses: the binary's
+# Accessibility presses on the .eml path, for a plain and an HTML message,
+# and its Apple Events to Mail under --no-ui, which need the Automation grant
+# that setup asks for through osascript.
+readonly APPROVAL_SCENARIOS=(plain-send plain-send-no-ui html-send)
 
 harness_package=${E2E_VM_HARNESS:?E2E_VM_HARNESS must name the harness package}
 harness_exe=${E2E_VM_HARNESS_EXE:?E2E_VM_HARNESS_EXE must name the harness executable}
@@ -1002,9 +1003,9 @@ print_automation_steps() {
 
 ==============================================================================
 Automation access. macOS shows the Automation prompt only when osascript
-asks; the binary's own Apple Events are denied (-1743) without one. So this
-step asks with osascript, once for Mail and once for System Events, and the
-grant then covers the binary too. In the VM:
+asks; the binary's own Apple Events (sent only with --no-ui) are denied
+(-1743) without one. So this step asks with osascript, once for Mail and
+once for System Events, and the grant then covers the binary too. In the VM:
 
  7. Each prompt must name "tart-guest-agent" (wants to control "Mail", then
     "System Events"): click Allow. If a prompt names anything else
