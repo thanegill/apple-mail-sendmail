@@ -36,7 +36,7 @@ public enum MailDriver {
     ) throws {
         if shouldUseEditDraft(msg) {
             let emlURL = try tmp.write(emlBytes, name: "compose-\(UUID().uuidString).eml")
-            try automation.html.deliverHTML(emlURL: emlURL, send: options.send)
+            try automation.html.deliverHTML(emlURL: emlURL, subject: msg.subject, send: options.send)
             return
         }
 

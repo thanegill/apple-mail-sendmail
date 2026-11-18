@@ -4,7 +4,7 @@
 {"activates":true,"path":"<EML>","step":"open_eml"}
 {"since":"before_open","step":"wait_for_new_window","timeout_ms":5000,"window":"viewer"}
 {"settle":false,"snapshot":"before_compose","step":"snapshot_windows"}
-{"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send Again","shortcut":"shift-cmd-D"},"step":"press_menu_item","window":"viewer"}
+{"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send Again","shortcut":"shift-cmd-D"},"step":"press_menu_item","verify":["title_matches_subject"],"window":"viewer"}
 {"since":"before_compose","step":"wait_for_new_window","timeout_ms":5000,"window":"compose"}
-{"gone_timeout_ms":3000,"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"max_presses":3,"ready_timeout_ms":10000,"step":"press_until_window_closes","window":"compose"}
+{"gone_timeout_ms":3000,"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"max_presses":3,"ready_timeout_ms":10000,"step":"press_until_window_closes","verify":["title_matches_subject"],"window":"compose"}
 {"step":"close_window","window":"viewer"}

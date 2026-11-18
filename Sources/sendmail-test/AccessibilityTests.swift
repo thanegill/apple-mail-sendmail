@@ -59,6 +59,7 @@ let accessibilityTests = TestSuite(name: "Accessibility", cases: [
         let probe = PermissionProbe(granted: true)
         let log = EventLog()
         let mail = FakeMail()
+        mail.messageTitle = "a11y"
         try deliver(html: true, probe: probe, log: log, mail: mail)
         try expectEqual(probe.checks, 1)
         try expect(log.scripts.isEmpty)

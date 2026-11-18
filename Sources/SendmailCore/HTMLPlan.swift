@@ -75,6 +75,23 @@ public struct MenuItemTarget: Equatable {
     public var fallbackName: String { "\(fallbackMenu) > \(fallbackTitle)" }
 }
 
+/// A check that the window found by the diff shows this message, run with
+/// the guard before every press, so a stray window that took its place in
+/// the diff is refused rather than pressed.
+public enum WindowCheck: String, CaseIterable {
+    /// The window's AXTitle equals the message's decoded Subject, both with
+    /// runs of whitespace collapsed to one space and the ends trimmed, and
+    /// compared exactly (case included). Skipped when the Subject is empty,
+    /// since Mail then shows a localized placeholder title.
+    case titleMatchesSubject = "title_matches_subject"
+
+    /// `text` with every run of whitespace (newlines and tabs included)
+    /// collapsed to one space and the ends trimmed.
+    public static func normalizedTitle(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+}
+
 /// One step of the HTML path. `HTMLPlan.steps` builds the list, the AX
 /// driver executes it, and the dry run prints it, so the printed plan is
 /// what a live run does.
@@ -91,15 +108,15 @@ public enum HTMLStep: Equatable {
     /// Wait for exactly one new standard window since the snapshot. Two or
     /// more at once fail closed.
     case waitForNewWindow(HTMLWindow, since: WindowSnapshot, timeoutMs: Int)
-    /// Raise the window, run the guard until it passes or times out, then
-    /// press the menu item once. Never retried.
-    case pressMenuItem(MenuItemTarget, window: HTMLWindow, guardChecks: [GuardCheck], guardTimeoutMs: Int)
+    /// Raise the window, run the guard and `verify` until they pass or time
+    /// out, then press the menu item once. Never retried.
+    case pressMenuItem(MenuItemTarget, window: HTMLWindow, guardChecks: [GuardCheck], verify: [WindowCheck], guardTimeoutMs: Int)
     /// Press the menu item up to `maxPresses` times, each after waiting for
-    /// it to be enabled and running the guard, until the window closes.
-    /// Whether to press again is decided only by whether the window is
-    /// still open with no sheet, never by what the press returned.
+    /// it to be enabled and running the guard and `verify`, until the
+    /// window closes. Whether to press again is decided only by whether the
+    /// window is still open with no sheet, never by what the press returned.
     case pressUntilWindowCloses(
-        MenuItemTarget, window: HTMLWindow, guardChecks: [GuardCheck], guardTimeoutMs: Int,
+        MenuItemTarget, window: HTMLWindow, guardChecks: [GuardCheck], verify: [WindowCheck], guardTimeoutMs: Int,
         maxPresses: Int, readyTimeoutMs: Int, goneTimeoutMs: Int
     )
     case closeWindow(HTMLWindow)
@@ -110,6 +127,7 @@ public enum HTMLPlan {
 
     public static func steps(emlPath: String, send: Bool) -> [HTMLStep] {
         let guardChecks = GuardCheck.allCases
+        let verify = WindowCheck.allCases
         var steps: [HTMLStep] = [
             .requireAccessibility,
             .launchMail(timeoutMs: 10_000),
@@ -117,12 +135,12 @@ public enum HTMLPlan {
             .openEml(path: emlPath),
             .waitForNewWindow(.viewer, since: .beforeOpen, timeoutMs: 5_000),
             .snapshotWindows(.beforeCompose, settle: false),
-            .pressMenuItem(.sendAgain, window: .viewer, guardChecks: guardChecks, guardTimeoutMs: 3_000),
+            .pressMenuItem(.sendAgain, window: .viewer, guardChecks: guardChecks, verify: verify, guardTimeoutMs: 3_000),
             .waitForNewWindow(.compose, since: .beforeCompose, timeoutMs: 5_000),
         ]
         if send {
             steps.append(.pressUntilWindowCloses(
-                .send, window: .compose, guardChecks: guardChecks, guardTimeoutMs: 3_000,
+                .send, window: .compose, guardChecks: guardChecks, verify: verify, guardTimeoutMs: 3_000,
                 maxPresses: maxSendPresses, readyTimeoutMs: 10_000, goneTimeoutMs: 3_000
             ))
         }
@@ -147,15 +165,15 @@ public enum HTMLPlan {
             return ["step": "open_eml", "path": path, "activates": true]
         case let .waitForNewWindow(window, since, timeoutMs):
             return ["step": "wait_for_new_window", "window": window.rawValue, "since": since.rawValue, "timeout_ms": timeoutMs]
-        case let .pressMenuItem(target, window, guardChecks, guardTimeoutMs):
+        case let .pressMenuItem(target, window, guardChecks, verify, guardTimeoutMs):
             return [
                 "step": "press_menu_item", "item": itemFields(target), "window": window.rawValue,
-                "guard": guardChecks.map(\.rawValue), "guard_timeout_ms": guardTimeoutMs,
+                "guard": guardChecks.map(\.rawValue), "verify": verify.map(\.rawValue), "guard_timeout_ms": guardTimeoutMs,
             ]
-        case let .pressUntilWindowCloses(target, window, guardChecks, guardTimeoutMs, maxPresses, readyTimeoutMs, goneTimeoutMs):
+        case let .pressUntilWindowCloses(target, window, guardChecks, verify, guardTimeoutMs, maxPresses, readyTimeoutMs, goneTimeoutMs):
             return [
                 "step": "press_until_window_closes", "item": itemFields(target), "window": window.rawValue,
-                "guard": guardChecks.map(\.rawValue), "guard_timeout_ms": guardTimeoutMs,
+                "guard": guardChecks.map(\.rawValue), "verify": verify.map(\.rawValue), "guard_timeout_ms": guardTimeoutMs,
                 "max_presses": maxPresses, "ready_timeout_ms": readyTimeoutMs, "gone_timeout_ms": goneTimeoutMs,
             ]
         case let .closeWindow(window):
@@ -184,7 +202,7 @@ public struct HTMLPlanPrinter: HTMLDelivery {
         self.output = output
     }
 
-    public func deliverHTML(emlURL: URL, send: Bool) throws {
+    public func deliverHTML(emlURL: URL, subject: String, send: Bool) throws {
         for line in HTMLPlan.jsonLines(HTMLPlan.steps(emlPath: emlURL.path, send: send)) {
             output(line)
         }

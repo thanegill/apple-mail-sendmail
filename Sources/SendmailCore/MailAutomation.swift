@@ -44,8 +44,10 @@ public protocol PlainDelivery {
 
 /// Opens the `.eml` at `emlURL` in Mail and turns it into a new compose
 /// with Message > Send Again; with `send`, also sends that compose.
+/// `subject` is the message's decoded Subject, which Mail shows as the
+/// viewer's and the compose's title.
 public protocol HTMLDelivery {
-    func deliverHTML(emlURL: URL, send: Bool) throws
+    func deliverHTML(emlURL: URL, subject: String, send: Bool) throws
 }
 
 /// How the binary drives Mail.app, one implementation per path. `MailDriver`

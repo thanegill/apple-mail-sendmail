@@ -6,6 +6,7 @@ import SendmailCore
 final class RecordingHTMLDelivery: HTMLDelivery {
     struct Call {
         let url: URL
+        let subject: String
         let send: Bool
         let emlExisted: Bool
     }
@@ -13,8 +14,8 @@ final class RecordingHTMLDelivery: HTMLDelivery {
     private(set) var calls: [Call] = []
     var onDeliver: ((URL) throws -> Void)?
 
-    func deliverHTML(emlURL: URL, send: Bool) throws {
-        calls.append(Call(url: emlURL, send: send, emlExisted: FileManager.default.fileExists(atPath: emlURL.path)))
+    func deliverHTML(emlURL: URL, subject: String, send: Bool) throws {
+        calls.append(Call(url: emlURL, subject: subject, send: send, emlExisted: FileManager.default.fileExists(atPath: emlURL.path)))
         try onDeliver?(emlURL)
     }
 }

@@ -11,7 +11,8 @@ public struct AXHTMLDelivery: HTMLDelivery {
     let trace: (String) -> Void
 
     /// `trace` receives one line per notable decision, such as how a menu
-    /// item was found; it must not write to the caller's stdout or stderr.
+    /// item was found or skipping a window check; it must not write to the
+    /// caller's stdout or stderr.
     public init(
         ax: AXClient, workspace: MailWorkspace, clock: Clock, accessibility: AccessibilityPermission,
         trace: @escaping (String) -> Void = { _ in }
@@ -23,12 +24,12 @@ public struct AXHTMLDelivery: HTMLDelivery {
         self.trace = trace
     }
 
-    public func deliverHTML(emlURL: URL, send: Bool) throws {
-        try run(HTMLPlan.steps(emlPath: emlURL.path, send: send))
+    public func deliverHTML(emlURL: URL, subject: String, send: Bool) throws {
+        try run(HTMLPlan.steps(emlPath: emlURL.path, send: send), subject: subject)
     }
 
-    public func run(_ steps: [HTMLStep]) throws {
-        let run = PlanRun(delivery: self)
+    public func run(_ steps: [HTMLStep], subject: String) throws {
+        let run = PlanRun(delivery: self, subject: subject)
         for step in steps {
             try run.execute(step)
         }
@@ -41,16 +42,18 @@ private final class PlanRun {
     let clock: Clock
     let accessibility: AccessibilityPermission
     let trace: (String) -> Void
+    let subject: String
     var app: UIElement?
     var snapshots: [WindowSnapshot: [UIElement]] = [:]
     var windows: [HTMLWindow: UIElement] = [:]
 
-    init(delivery: AXHTMLDelivery) {
+    init(delivery: AXHTMLDelivery, subject: String) {
         ax = delivery.ax
         workspace = delivery.workspace
         clock = delivery.clock
         accessibility = delivery.accessibility
         trace = delivery.trace
+        self.subject = subject
     }
 
     func execute(_ step: HTMLStep) throws {
@@ -65,17 +68,17 @@ private final class PlanRun {
             try workspace.open(URL(fileURLWithPath: path), timeout: 15)
         case let .waitForNewWindow(window, since, timeoutMs):
             windows[window] = try waitForNewWindow(window, since: since, timeout: seconds(timeoutMs))
-        case let .pressMenuItem(item, window, guardChecks, guardTimeoutMs):
+        case let .pressMenuItem(item, window, guardChecks, verify, guardTimeoutMs):
             let target = try requireWindow(window)
-            switch try guardedPress(item, on: target, window: window, checks: guardChecks, timeout: seconds(guardTimeoutMs)) {
+            switch try guardedPress(item, on: target, window: window, checks: guardChecks, verify: verify, timeout: seconds(guardTimeoutMs)) {
             case .pressed:
                 break
             case .targetGone:
                 throw DeliveryError("The \(window.displayName) window closed before the \(item.fallbackName) press")
             }
-        case let .pressUntilWindowCloses(item, window, guardChecks, guardTimeoutMs, maxPresses, readyTimeoutMs, goneTimeoutMs):
+        case let .pressUntilWindowCloses(item, window, guardChecks, verify, guardTimeoutMs, maxPresses, readyTimeoutMs, goneTimeoutMs):
             try pressUntilClosed(
-                item, window: window, checks: guardChecks, guardTimeout: seconds(guardTimeoutMs),
+                item, window: window, checks: guardChecks, verify: verify, guardTimeout: seconds(guardTimeoutMs),
                 maxPresses: maxPresses, readyTimeout: seconds(readyTimeoutMs), goneTimeout: seconds(goneTimeoutMs)
             )
         case let .closeWindow(window):
@@ -269,15 +272,31 @@ private final class PlanRun {
         }
     }
 
+    /// nil when `target` passes `check`, or when the check cannot apply.
+    func failedContentCheck(_ check: WindowCheck, target: UIElement, window: HTMLWindow) -> String? {
+        switch check {
+        case .titleMatchesSubject:
+            let expected = WindowCheck.normalizedTitle(subject)
+            guard !expected.isEmpty else { return nil }
+            let shown = title(target)
+            if let shown, WindowCheck.normalizedTitle(shown) == expected { return nil }
+            return "the \(window.displayName) window's title (AXTitle) is \(shown.map { String(reflecting: $0) } ?? "unreadable"), but the message's Subject is \(String(reflecting: subject))"
+        }
+    }
+
     /// Raises `target` and re-runs every check until all hold, then looks the
     /// menu item up again and presses it once. Never presses unverified; on
     /// timeout it throws naming the last failed check.
     func guardedPress(
         _ item: MenuItemTarget, on target: UIElement, window: HTMLWindow,
-        checks: [GuardCheck], timeout: TimeInterval
+        checks: [GuardCheck], verify: [WindowCheck], timeout: TimeInterval
     ) throws -> PressOutcome {
+        if verify.contains(.titleMatchesSubject) && WindowCheck.normalizedTitle(subject).isEmpty {
+            trace("the message has no Subject, so Mail titles the \(window.displayName) window with a localized placeholder; its title is not checked, and the window diff alone identifies it")
+        }
         let deadline = clock.now + timeout
         var lastFailure = "no check ran"
+        var lastFailureIsContents = false
         repeat {
             try raise(target)
             clock.sleep(0.15)
@@ -286,6 +305,14 @@ private final class PlanRun {
             for check in checks {
                 failure = try failedCheck(check, target: target, window: window)
                 if failure != nil { break }
+            }
+            lastFailureIsContents = false
+            if failure == nil {
+                for check in verify {
+                    failure = failedContentCheck(check, target: target, window: window)
+                    if failure != nil { break }
+                }
+                lastFailureIsContents = failure != nil
             }
             if failure == nil {
                 if let resolved = try resolve(item) {
@@ -300,6 +327,9 @@ private final class PlanRun {
             }
             lastFailure = failure ?? lastFailure
         } while clock.now < deadline
+        if lastFailureIsContents {
+            throw DeliveryError("The \(window.displayName) window does not show this message, so it may be a stray window and not ours; the \(item.fallbackName) press was not sent: \(lastFailure)")
+        }
         throw DeliveryError("The \(window.displayName) window did not pass the key-window check within \(Int(timeout))s; the \(item.fallbackName) press was not sent. Last failed check: \(lastFailure)")
     }
 
@@ -317,7 +347,7 @@ private final class PlanRun {
     /// cannot send twice. An AXPress can report kAXErrorCannotComplete even
     /// when it acted, so the press result never decides a retry.
     func pressUntilClosed(
-        _ item: MenuItemTarget, window: HTMLWindow, checks: [GuardCheck], guardTimeout: TimeInterval,
+        _ item: MenuItemTarget, window: HTMLWindow, checks: [GuardCheck], verify: [WindowCheck], guardTimeout: TimeInterval,
         maxPresses: Int, readyTimeout: TimeInterval, goneTimeout: TimeInterval
     ) throws {
         let target = try requireWindow(window)
@@ -336,7 +366,7 @@ private final class PlanRun {
                 if presses > 0 && !isPresent(target) { return }
                 throw DeliveryError("Mail's \(item.fallbackName) menu item (\(item.shortcutName)) did not become available within \(Int(readyTimeout))s; the \(window.displayName) was not sent")
             }
-            switch try guardedPress(item, on: target, window: window, checks: checks, timeout: guardTimeout) {
+            switch try guardedPress(item, on: target, window: window, checks: checks, verify: verify, timeout: guardTimeout) {
             case .targetGone:
                 if presses > 0 { return }
                 throw DeliveryError("The \(window.displayName) window closed before the \(item.fallbackName) press")
@@ -347,6 +377,9 @@ private final class PlanRun {
             let gone = poll(timeout: goneTimeout) { isPresent(target) ? nil : true }
             if gone != nil { return }
             if hasSheet(target) {
+                if WindowCheck.normalizedTitle(subject).isEmpty {
+                    throw DeliveryError("Mail is asking to confirm sending a message with no Subject (a sheet opened on the \(window.displayName) window after the \(item.fallbackName) press); it is not confirmed, and the message was not sent. HTML --send needs a Subject: add a non-empty Subject header, or leave out --send to get a draft")
+                }
                 throw DeliveryError("A sheet is open on the \(window.displayName) window after the \(item.fallbackName) press; not pressing \(item.fallbackTitle) through it, and the message was not sent")
             }
         }
