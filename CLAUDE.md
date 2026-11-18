@@ -32,7 +32,7 @@ SENDMAIL_DRY_RUN=1 ./result/bin/apple-mail-sendmail -t < msg.eml
 `SENDMAIL_DRY_RUN=1` makes the binary print the generated AppleScript to
 stdout instead of executing it. Useful when iterating on `MailDriver`.
 
-The live end-to-end harness (`nix run .#e2e`, which drives Mail.app and must not be run without the user's go-ahead) has its own guidance in `tests/e2e/CLAUDE.md`.
+The live end-to-end harness (`nix run .#e2e`, which drives Mail.app and must not be run without the user's go-ahead) and its Tart VM wrapper (`nix run .#e2e-vm`) have their own guidance in `tests/e2e/CLAUDE.md`.
 
 ## Architecture
 
@@ -142,6 +142,7 @@ The .eml + Cmd-Shift-D path renders bodies in Mail's WKWebView, which honors any
 - `packages.default` — installs `apple-mail-sendmail` plus a `sendmail` symlink.
 - `packages.without-sendmail-symlink` — canonical binary only.
 - `packages.e2e` (also `apps.e2e`, and `checks.e2e-shellcheck` so `nix flake check` shellchecks it) — the live end-to-end harness. Building it only shellchecks `tests/e2e/e2e.sh`; it never runs in `checkPhase`.
+- `packages.e2e-vm` (also `apps.e2e-vm`, and `checks.e2e-vm-shellcheck`) — `tests/e2e/vm.sh`, which runs the harness in a Tart VM. Building it only shellchecks the script.
 
 Consumers from other flakes can also call `self.packages.${system}.default.override { withSendmailSymlink = false; }`.
 

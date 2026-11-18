@@ -68,6 +68,18 @@
               };
             });
 
+          # The harness's own files, without its docs or the VM wrapper, so
+          # editing tests/e2e/README.md, tests/e2e/CLAUDE.md or
+          # tests/e2e/vm.sh does not change the harness's store path.
+          e2eResources = pkgs.lib.fileset.toSource {
+            root = ./tests/e2e;
+            fileset = pkgs.lib.fileset.difference ./tests/e2e (pkgs.lib.fileset.unions [
+              ./tests/e2e/README.md
+              ./tests/e2e/CLAUDE.md
+              ./tests/e2e/vm.sh
+            ]);
+          };
+
           # Live end-to-end harness. Building it only shellchecks the script;
           # running it drives Mail.app, so it is never part of checkPhase.
           e2eHarness = pkgs.writeShellApplication {
@@ -86,20 +98,38 @@
               pkgs.dnsutils
             ];
             runtimeEnv = {
-              # The harness's own files, without its docs, so editing
-              # tests/e2e/README.md or tests/e2e/CLAUDE.md does not change
-              # this path.
-              E2E_RESOURCES = "${pkgs.lib.fileset.toSource {
-                root = ./tests/e2e;
-                fileset = pkgs.lib.fileset.difference ./tests/e2e (pkgs.lib.fileset.unions [
-                  ./tests/e2e/README.md
-                  ./tests/e2e/CLAUDE.md
-                ]);
-              }}";
+              E2E_RESOURCES = "${e2eResources}";
               E2E_SENDMAIL = pkgs.lib.getExe self'.packages.default;
             };
             text = builtins.readFile ./tests/e2e/e2e.sh;
             meta.description = "Live end-to-end tests for apple-mail-sendmail against a local Mailpit";
+          };
+
+          # Runs e2eHarness inside a throwaway Tart clone of a prepared macOS
+          # VM. Building it only shellchecks the script.
+          e2eVm = pkgs.writeShellApplication {
+            name = "apple-mail-sendmail-e2e-vm";
+            runtimeInputs = [
+              tart
+              pkgs.openssh
+              pkgs.jq
+              pkgs.perl
+              pkgs.coreutils
+              pkgs.gnugrep
+              pkgs.gnused
+              pkgs.gnutar
+            ];
+            runtimeEnv = {
+              E2E_VM_HARNESS = e2eHarness;
+              E2E_VM_HARNESS_EXE = pkgs.lib.getExe e2eHarness;
+              E2E_VM_RESOURCES = "${e2eResources}";
+              E2E_VM_NIX_INSTALLER = pkgs.fetchurl {
+                url = "https://releases.nixos.org/nix/nix-2.35.6/install";
+                hash = "sha256-b3vyBu+1TNSUH7J0kw28dP38FvywZ1fvJhyNfWnP1g4=";
+              };
+            };
+            text = builtins.readFile ./tests/e2e/vm.sh;
+            meta.description = "Run the apple-mail-sendmail live end-to-end tests in a disposable Tart macOS VM";
           };
         in {
           # Tart is source-available (FSL-1.1), so nixpkgs marks it unfree.
@@ -112,9 +142,11 @@
           packages.default = makeSendmail { };
           packages.without-sendmail-symlink = makeSendmail { withSendmailSymlink = false; };
           packages.e2e = e2eHarness;
+          packages.e2e-vm = e2eVm;
 
           # Building the harness shellchecks it; it never runs here.
           checks.e2e-shellcheck = e2eHarness;
+          checks.e2e-vm-shellcheck = e2eVm;
 
           # The package's checkPhase runs the unit tests, so `nix flake check`
           # runs them by building it.
@@ -129,6 +161,12 @@
             type = "app";
             program = pkgs.lib.getExe e2eHarness;
             meta.description = "Live end-to-end tests for apple-mail-sendmail (drives Mail.app; see README)";
+          };
+
+          apps.e2e-vm = {
+            type = "app";
+            program = pkgs.lib.getExe e2eVm;
+            meta.description = "Live end-to-end tests for apple-mail-sendmail in a disposable Tart macOS VM (see README)";
           };
 
           devShells.default = pkgs.mkShell {
