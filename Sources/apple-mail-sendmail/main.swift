@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SendmailCore
 
 let argv0 = CommandLine.arguments.first ?? "apple-mail-sendmail"
@@ -105,13 +106,15 @@ if env["SENDMAIL_DRY_RUN"] == "1" {
 } else {
     let clock = SystemClock()
     let workspace = SystemMailWorkspace(clock: clock)
+    let htmlLog = Logger(subsystem: "apple-mail-sendmail", category: "html")
     automation = MailAutomation(
         plain: AppleEventPlainDelivery(events: SystemAppleEventSender(), workspace: workspace, clock: clock),
         html: AXHTMLDelivery(
             ax: SystemAXClient(),
             workspace: workspace,
             clock: clock,
-            accessibility: .system()
+            accessibility: .system(),
+            trace: { htmlLog.notice("\($0, privacy: .public)") }
         )
     )
 }

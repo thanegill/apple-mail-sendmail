@@ -8,7 +8,13 @@ private final class PermissionCounter {
     var checks = 0
 }
 
-private func delivery(_ mail: FakeMail, granted: Bool = true, counter: PermissionCounter = PermissionCounter()) -> AXHTMLDelivery {
+private final class TraceLog {
+    var lines: [String] = []
+}
+
+private func delivery(
+    _ mail: FakeMail, granted: Bool = true, counter: PermissionCounter = PermissionCounter(), trace: TraceLog = TraceLog()
+) -> AXHTMLDelivery {
     AXHTMLDelivery(
         ax: mail,
         workspace: mail,
@@ -16,14 +22,15 @@ private func delivery(_ mail: FakeMail, granted: Bool = true, counter: Permissio
         accessibility: AccessibilityPermission(osMajorVersion: 27) {
             counter.checks += 1
             return granted
-        }
+        },
+        trace: { trace.lines.append($0) }
     )
 }
 
 /// Runs the HTML path against `mail` and returns the error it threw, if any.
-private func runHTML(_ mail: FakeMail, send: Bool, granted: Bool = true) -> Error? {
+private func runHTML(_ mail: FakeMail, send: Bool, granted: Bool = true, trace: TraceLog = TraceLog()) -> Error? {
     do {
-        try delivery(mail, granted: granted).deliverHTML(emlURL: emlURL, send: send)
+        try delivery(mail, granted: granted, trace: trace).deliverHTML(emlURL: emlURL, send: send)
         return nil
     } catch {
         return error
@@ -173,7 +180,7 @@ let axHTMLDeliveryTests = TestSuite(name: "AXHTMLDelivery", cases: [
         for send in [false, true] {
             for step in HTMLPlan.steps(emlPath: emlURL.path, send: send) {
                 switch step {
-                case let .pressMenuItem(_, _, _, checks, _), let .pressUntilWindowCloses(_, _, _, checks, _, _, _, _):
+                case let .pressMenuItem(_, _, checks, _), let .pressUntilWindowCloses(_, _, checks, _, _, _, _):
                     try expectEqual(checks, GuardCheck.allCases)
                 default:
                     continue
@@ -187,6 +194,92 @@ let axHTMLDeliveryTests = TestSuite(name: "AXHTMLDelivery", cases: [
         mail.composeClosedByUserAfter = 0.05
         try expectFailure(runHTML(mail, send: true), containing: "The compose window closed before the Message > Send press")
         try expect(mail.sendPresses.isEmpty)
+    },
+
+    // MARK: Finding menu items by shortcut
+
+    TestCase(name: "english_menus_find_both_items_by_their_shortcut") {
+        let mail = FakeMail()
+        let trace = TraceLog()
+        try expectSuccess(runHTML(mail, send: true, trace: trace))
+        try expectEqual(trace.lines, [
+            "pressing Message > Send Again on the eml viewer window, found by its shift-cmd-D shortcut",
+            "pressing Message > Send on the compose window, found by its shift-cmd-D shortcut",
+        ])
+    },
+
+    TestCase(name: "localized_menus_with_the_same_shortcuts_draft_and_send") {
+        for send in [false, true] {
+            let mail = FakeMail()
+            mail.menus = FakeMail.germanMenus
+            try expectSuccess(runHTML(mail, send: send))
+            var wanted = [FakeMail.Press(item: "Send Again", keyWindow: mail.viewerID)]
+            if send { wanted.append(FakeMail.Press(item: "Send", keyWindow: mail.composeID)) }
+            try expectEqual(mail.presses, wanted)
+            try expectEqual(mail.sentWindows, send ? [mail.composeID!] : [])
+        }
+    },
+
+    TestCase(name: "two_enabled_items_with_the_shortcut_fail_closed_without_pressing") {
+        let mail = FakeMail()
+        mail.menus.insert(FakeMail.Menu(title: "Format", items: [
+            FakeMail.MenuEntry(title: "Stray", commandCharacter: "D", modifiers: 1),
+        ]), at: 1)
+        try expectFailure(runHTML(mail, send: true), containing: "Mail has 2 enabled menu items with the shift-cmd-D shortcut; refusing to guess which one is Message > Send Again, and nothing was pressed")
+        try expect(mail.presses.isEmpty, "nothing may be pressed when the shortcut is ambiguous: \(mail.presses)")
+    },
+
+    TestCase(name: "no_item_with_the_shortcut_falls_back_to_the_english_title") {
+        let mail = FakeMail()
+        mail.menus = FakeMail.withoutShortcuts(FakeMail.englishMenus)
+        let trace = TraceLog()
+        try expectSuccess(runHTML(mail, send: true, trace: trace))
+        try expectEqual(mail.sentWindows, [mail.composeID!])
+        try expectEqual(trace.lines, [
+            "pressing Message > Send Again on the eml viewer window, found by its English title (no enabled item has the shift-cmd-D shortcut)",
+            "pressing Message > Send on the compose window, found by its English title (no enabled item has the shift-cmd-D shortcut)",
+        ])
+    },
+
+    TestCase(name: "localized_menus_without_the_shortcut_fail_closed_without_pressing") {
+        let mail = FakeMail()
+        mail.menus = FakeMail.withoutShortcuts(FakeMail.germanMenus)
+        try expectFailure(runHTML(mail, send: false), containing: "Last failed check: no enabled menu item has the shift-cmd-D shortcut, and Mail's Message > Send Again menu item was not found by title")
+        try expect(mail.presses.isEmpty)
+    },
+
+    TestCase(name: "disabled_item_with_the_shortcut_is_ignored") {
+        let mail = FakeMail()
+        mail.menus.insert(FakeMail.Menu(title: "Format", items: [
+            FakeMail.MenuEntry(title: "Stray", commandCharacter: "D", modifiers: 1, disabled: true),
+        ]), at: 1)
+        let trace = TraceLog()
+        try expectSuccess(runHTML(mail, send: true, trace: trace))
+        try expectEqual(mail.presses.map(\.item), ["Send Again", "Send"])
+        try expect(trace.lines.allSatisfy { $0.hasSuffix("found by its shift-cmd-D shortcut") }, "\(trace.lines)")
+    },
+
+    TestCase(name: "dictation_d_with_other_modifiers_is_not_the_shortcut") {
+        let mail = FakeMail()
+        mail.menus = FakeMail.germanMenus
+        mail.menus[2].items.removeAll { $0.action == .sendAgain }
+        mail.menus[2].items.append(FakeMail.MenuEntry(title: "Erneut senden", action: .sendAgain))
+        try expectFailure(runHTML(mail, send: false), containing: "no enabled menu item has the shift-cmd-D shortcut")
+        try expect(mail.presses.isEmpty, "Start Dictation (D, modifiers 24) must never be pressed: \(mail.presses)")
+    },
+
+    TestCase(name: "plan_finds_both_presses_by_shift_cmd_d_with_the_english_title_as_fallback") {
+        let targets = HTMLPlan.steps(emlPath: emlURL.path, send: true).compactMap { step -> MenuItemTarget? in
+            switch step {
+            case let .pressMenuItem(item, _, _, _), let .pressUntilWindowCloses(item, _, _, _, _, _, _):
+                return item
+            default:
+                return nil
+            }
+        }
+        try expectEqual(targets, [.sendAgain, .send])
+        try expectEqual(targets.map(\.shortcutName), ["shift-cmd-D", "shift-cmd-D"])
+        try expectEqual(targets.map(\.fallbackName), ["Message > Send Again", "Message > Send"])
     },
 
     // MARK: Send retry
@@ -235,7 +328,7 @@ let axHTMLDeliveryTests = TestSuite(name: "AXHTMLDelivery", cases: [
     TestCase(name: "send_menu_item_never_enabled_fails_after_10s_without_pressing") {
         let mail = FakeMail()
         mail.sendNeverEnabled = true
-        try expectFailure(runHTML(mail, send: true), containing: "Mail's Message > Send menu item did not become available within 10s; the compose was not sent")
+        try expectFailure(runHTML(mail, send: true), containing: "Mail's Message > Send menu item (shift-cmd-D) did not become available within 10s; the compose was not sent")
         try expect(mail.sendPresses.isEmpty)
     },
 
@@ -288,9 +381,9 @@ private let draftPlanLines = [
     #"{"activates":true,"path":"/tmp/x/compose-1.eml","step":"open_eml"}"#,
     #"{"since":"before_open","step":"wait_for_new_window","timeout_ms":5000,"window":"viewer"}"#,
     #"{"settle":false,"snapshot":"before_compose","step":"snapshot_windows"}"#,
-    #"{"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":"Send Again","menu":"Message","step":"press_menu_item","window":"viewer"}"#,
+    #"{"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send Again","shortcut":"shift-cmd-D"},"step":"press_menu_item","window":"viewer"}"#,
     #"{"since":"before_compose","step":"wait_for_new_window","timeout_ms":5000,"window":"compose"}"#,
     #"{"step":"close_window","window":"viewer"}"#,
 ]
 
-private let sendPlanLine = #"{"gone_timeout_ms":3000,"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":"Send","max_presses":3,"menu":"Message","ready_timeout_ms":10000,"step":"press_until_window_closes","window":"compose"}"#
+private let sendPlanLine = #"{"gone_timeout_ms":3000,"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"max_presses":3,"ready_timeout_ms":10000,"step":"press_until_window_closes","window":"compose"}"#

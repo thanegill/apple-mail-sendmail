@@ -2562,14 +2562,20 @@ self_test_script_analysis() {
     "$(plain_plan true '' | sed 's/"subject":"s"/"subject":"please send"/')"
 
   local send_again_step full_guard
-  send_again_step=$(grep -F '"item":"Send Again"' <<<"$html_send")
+  send_again_step=$(grep -F '"fallback_title":"Send Again"' <<<"$html_send")
   full_guard='"guard":["frontmost","focused_window","main_window","standard_window","no_sheet"]'
   run_analysis_case "HTML send with a second Send Again press" refused html-send \
     "${html_send/"$send_again_step"/"$send_again_step"$'\n'"$send_again_step"}" \
     "plan differs from the send template"
   run_analysis_case "HTML draft with an extra Send press" refused draft-later-html-attachment \
-    "$(sed '$i {"guard":[],"guard_timeout_ms":3000,"item":"Send","menu":"Message","step":"press_menu_item","window":"compose"}' <<<"$html_draft")" \
+    "$(sed '$i {"guard":[],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"step":"press_menu_item","window":"compose"}' <<<"$html_draft")" \
     "plan differs from the draft template"
+  run_analysis_case "HTML send that finds Send Again by title only" refused html-send \
+    "${html_send/',"shortcut":"shift-cmd-D"},"step":"press_menu_item"'/'},"step":"press_menu_item"'}" \
+    "plan differs from the send template"
+  run_analysis_case "HTML send whose Send Again shortcut drops Shift" refused html-send \
+    "${html_send/'"shortcut":"shift-cmd-D"},"step":"press_menu_item"'/'"shortcut":"cmd-D"},"step":"press_menu_item"'}" \
+    "plan differs from the send template"
   run_analysis_case "HTML send without the Message > Send step" refused html-send \
     "$(grep -vF '"step":"press_until_window_closes"' <<<"$html_send")" \
     "plan differs from the send template"
@@ -2596,7 +2602,7 @@ self_test_script_analysis() {
     "expected exactly one open_eml step"
 
   run_analysis_case "plain send with an extra Message > Send press step" refused plain-send \
-    "$(plain_plan false send; printf '%s\n' '{"guard":[],"guard_timeout_ms":3000,"item":"Send","menu":"Message","step":"press_menu_item","window":"compose"}')" \
+    "$(plain_plan false send; printf '%s\n' '{"guard":[],"guard_timeout_ms":3000,"item":{"fallback_menu":"Message","fallback_title":"Send","shortcut":"shift-cmd-D"},"step":"press_menu_item","window":"compose"}')" \
     "is not an allowed step"
   # The subject string hides a second sender behind escaped quotes; a naive
   # scan would take e2e-a for the sender while jq reads the real one.

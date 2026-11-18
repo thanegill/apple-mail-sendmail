@@ -7,8 +7,10 @@ import SendmailCore
 ///
 /// Like Mail, a menu press acts on the key (focused) window, and only while
 /// Mail is frontmost: Send Again on a viewer opens a compose; Send Again or
-/// Send on a compose sends it. Time advances only when the code under test
-/// sleeps.
+/// Send on a compose sends it. Send Again is enabled only while a viewer is
+/// key and Send only while a compose is, so the two never share the
+/// shift-cmd-D shortcut while both are enabled. Time advances only when the
+/// code under test sleeps.
 final class FakeMail: AXClient, MailWorkspace, Clock {
     enum Node: Hashable {
         case app
@@ -16,9 +18,57 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
         case closeButton(Int)
         case sheet(Int)
         case menuBar
-        case menuBarItem(String)
-        case menu(String)
-        case menuItem(menu: String, item: String)
+        case menuBarItem(Int)
+        case menu(Int)
+        case menuItem(menu: Int, item: Int)
+    }
+
+    enum MenuAction: String {
+        case sendAgain = "Send Again"
+        case send = "Send"
+    }
+
+    struct MenuEntry {
+        var title: String
+        var commandCharacter: String?
+        var modifiers: Int?
+        /// What a press does; nil for an item that does nothing here.
+        var action: MenuAction?
+        var disabled = false
+    }
+
+    struct Menu {
+        var title: String
+        var items: [MenuEntry]
+    }
+
+    /// Live (macOS 27, English Mail): Send Again is "D" with modifiers 1,
+    /// and Start Dictation "D" with modifiers 24.
+    static let englishMenus = [
+        Menu(title: "Mail", items: []),
+        Menu(title: "Edit", items: [MenuEntry(title: "Start Dictation", commandCharacter: "D", modifiers: 24)]),
+        Menu(title: "Message", items: [
+            MenuEntry(title: "Send", commandCharacter: "D", modifiers: 1, action: .send),
+            MenuEntry(title: "Send Again", commandCharacter: "D", modifiers: 1, action: .sendAgain),
+        ]),
+    ]
+
+    static let germanMenus = [
+        Menu(title: "Mail", items: []),
+        Menu(title: "Bearbeiten", items: [MenuEntry(title: "Diktat starten", commandCharacter: "D", modifiers: 24)]),
+        Menu(title: "Nachricht", items: [
+            MenuEntry(title: "Senden", commandCharacter: "D", modifiers: 1, action: .send),
+            MenuEntry(title: "Erneut senden", commandCharacter: "D", modifiers: 1, action: .sendAgain),
+        ]),
+    ]
+
+    /// `menus` with every shortcut removed.
+    static func withoutShortcuts(_ menus: [Menu]) -> [Menu] {
+        menus.map { menu in
+            Menu(title: menu.title, items: menu.items.map {
+                MenuEntry(title: $0.title, action: $0.action, disabled: $0.disabled)
+            })
+        }
     }
 
     enum Kind {
@@ -70,6 +120,7 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
     var sendNeverEnabled = false
     /// How long after an accepted Send the compose window closes.
     var sendCloseDelay: TimeInterval = 0.5
+    var menus = englishMenus
 
     // MARK: State
 
@@ -203,31 +254,38 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
         case .closeButton:
             return nil
         case .menuBar:
-            return name == kAXChildrenAttribute ? .elements(["Mail", "Message"].map { UIElement(Node.menuBarItem($0)) }) : nil
-        case let .menuBarItem(title):
+            return name == kAXChildrenAttribute ? .elements(menus.indices.map { UIElement(Node.menuBarItem($0)) }) : nil
+        case let .menuBarItem(menu):
             switch name {
-            case kAXTitleAttribute: return .string(title)
-            case kAXChildrenAttribute: return .elements([UIElement(Node.menu(title))])
+            case kAXTitleAttribute: return .string(menus[menu].title)
+            case kAXChildrenAttribute: return .elements([UIElement(Node.menu(menu))])
             default: return nil
             }
-        case let .menu(title):
+        case let .menu(menu):
             guard name == kAXChildrenAttribute else { return nil }
             // With another app frontmost, Mail hides Message > Send Again.
-            guard title == "Message", frontmost else { return .elements([]) }
-            return .elements(["Send", "Send Again"].map { UIElement(Node.menuItem(menu: title, item: $0)) })
-        case let .menuItem(_, item):
+            let visible = menus[menu].items.indices.filter { frontmost || menus[menu].items[$0].action == nil }
+            return .elements(visible.map { UIElement(Node.menuItem(menu: menu, item: $0)) })
+        case let .menuItem(menu, item):
+            let entry = menus[menu].items[item]
             switch name {
-            case kAXTitleAttribute: return .string(item)
-            case kAXEnabledAttribute: return .bool(isEnabled(item))
+            case kAXTitleAttribute: return .string(entry.title)
+            case kAXEnabledAttribute: return .bool(isEnabled(entry))
+            case kAXMenuItemCmdCharAttribute: return entry.commandCharacter.map { .string($0) }
+            case kAXMenuItemCmdModifiersAttribute: return entry.commandCharacter == nil ? nil : .int(entry.modifiers ?? 0)
             default: return nil
             }
         }
     }
 
-    private func isEnabled(_ item: String) -> Bool {
-        guard item == "Send" else { return true }
-        guard !sendNeverEnabled, let focused, let window = window(focused) else { return false }
-        return window.kind == .compose
+    private func isEnabled(_ entry: MenuEntry) -> Bool {
+        guard !entry.disabled else { return false }
+        guard let action = entry.action else { return true }
+        guard let focused, let window = window(focused) else { return false }
+        switch action {
+        case .sendAgain: return window.kind == .viewer
+        case .send: return !sendNeverEnabled && window.kind == .compose
+        }
     }
 
     func setAttribute(_ name: String, of element: UIElement, to value: Bool) -> AXError {
@@ -260,18 +318,20 @@ final class FakeMail: AXClient, MailWorkspace, Clock {
             closedByButton.append(id)
             windows.removeAll { $0.id == id }
             return .success
-        case (.menuItem(_, let item), kAXPressAction):
-            return press(item)
+        case let (.menuItem(menu, item), kAXPressAction):
+            return press(menus[menu].items[item])
         default:
             return .actionUnsupported
         }
     }
 
-    private func press(_ item: String) -> AXError {
-        presses.append(Press(item: item, keyWindow: focused))
-        guard frontmost, let focused, let target = window(focused) else { return .success }
-        switch (item, target.kind) {
-        case ("Send Again", .viewer):
+    /// Records the press under the action's English name, whatever the
+    /// item's title, so a localized press counts as Send or Send Again.
+    private func press(_ entry: MenuEntry) -> AXError {
+        presses.append(Press(item: entry.action?.rawValue ?? entry.title, keyWindow: focused))
+        guard frontmost, let focused, let target = window(focused), let action = entry.action else { return .success }
+        switch (action, target.kind) {
+        case (.sendAgain, .viewer):
             guard composeAppears else { return .success }
             after(composeDelay) {
                 let id = self.takeID()

@@ -30,6 +30,51 @@ public enum GuardCheck: String, CaseIterable {
     case noSheet = "no_sheet"
 }
 
+/// A Mail menu item, found by its keyboard shortcut, which stays the same
+/// when Mail runs in another language, or else by its English title.
+///
+/// The driver looks through the items of every top-level menu for an
+/// enabled one whose `kAXMenuItemCmdChar` is `commandCharacter` and whose
+/// `kAXMenuItemCmdModifiers` is exactly `modifiers`. One such item is
+/// pressed; two or more fail closed; none falls back to `fallbackTitle` in
+/// the menu titled `fallbackMenu`.
+public struct MenuItemTarget: Equatable {
+    /// `kAXMenuItemCmdModifiers` is a bit set with Command implied: Shift
+    /// adds 1, Option 2, Control 4, and 8 means no Command.
+    public static let shiftModifier = 1
+
+    public let commandCharacter: String
+    public let modifiers: Int
+    public let fallbackMenu: String
+    public let fallbackTitle: String
+
+    public init(commandCharacter: String, modifiers: Int, fallbackMenu: String, fallbackTitle: String) {
+        self.commandCharacter = commandCharacter
+        self.modifiers = modifiers
+        self.fallbackMenu = fallbackMenu
+        self.fallbackTitle = fallbackTitle
+    }
+
+    /// Message > Send Again on a viewer; live (macOS 27, English Mail) its
+    /// shortcut is cmd-char "D" with modifiers 1.
+    public static let sendAgain = MenuItemTarget(commandCharacter: "D", modifiers: shiftModifier, fallbackMenu: "Message", fallbackTitle: "Send Again")
+    /// Message > Send on a compose, expected to carry the same shortcut.
+    public static let send = MenuItemTarget(commandCharacter: "D", modifiers: shiftModifier, fallbackMenu: "Message", fallbackTitle: "Send")
+
+    /// "shift-cmd-D".
+    public var shortcutName: String {
+        var parts: [String] = []
+        if modifiers & 4 != 0 { parts.append("ctrl") }
+        if modifiers & 2 != 0 { parts.append("opt") }
+        if modifiers & 1 != 0 { parts.append("shift") }
+        if modifiers & 8 == 0 { parts.append("cmd") }
+        return (parts + [commandCharacter]).joined(separator: "-")
+    }
+
+    /// "Message > Send Again".
+    public var fallbackName: String { "\(fallbackMenu) > \(fallbackTitle)" }
+}
+
 /// One step of the HTML path. `HTMLPlan.steps` builds the list, the AX
 /// driver executes it, and the dry run prints it, so the printed plan is
 /// what a live run does.
@@ -48,13 +93,13 @@ public enum HTMLStep: Equatable {
     case waitForNewWindow(HTMLWindow, since: WindowSnapshot, timeoutMs: Int)
     /// Raise the window, run the guard until it passes or times out, then
     /// press the menu item once. Never retried.
-    case pressMenuItem(menu: String, item: String, window: HTMLWindow, guardChecks: [GuardCheck], guardTimeoutMs: Int)
+    case pressMenuItem(MenuItemTarget, window: HTMLWindow, guardChecks: [GuardCheck], guardTimeoutMs: Int)
     /// Press the menu item up to `maxPresses` times, each after waiting for
     /// it to be enabled and running the guard, until the window closes.
     /// Whether to press again is decided only by whether the window is
     /// still open with no sheet, never by what the press returned.
     case pressUntilWindowCloses(
-        menu: String, item: String, window: HTMLWindow, guardChecks: [GuardCheck], guardTimeoutMs: Int,
+        MenuItemTarget, window: HTMLWindow, guardChecks: [GuardCheck], guardTimeoutMs: Int,
         maxPresses: Int, readyTimeoutMs: Int, goneTimeoutMs: Int
     )
     case closeWindow(HTMLWindow)
@@ -72,12 +117,12 @@ public enum HTMLPlan {
             .openEml(path: emlPath),
             .waitForNewWindow(.viewer, since: .beforeOpen, timeoutMs: 5_000),
             .snapshotWindows(.beforeCompose, settle: false),
-            .pressMenuItem(menu: "Message", item: "Send Again", window: .viewer, guardChecks: guardChecks, guardTimeoutMs: 3_000),
+            .pressMenuItem(.sendAgain, window: .viewer, guardChecks: guardChecks, guardTimeoutMs: 3_000),
             .waitForNewWindow(.compose, since: .beforeCompose, timeoutMs: 5_000),
         ]
         if send {
             steps.append(.pressUntilWindowCloses(
-                menu: "Message", item: "Send", window: .compose, guardChecks: guardChecks, guardTimeoutMs: 3_000,
+                .send, window: .compose, guardChecks: guardChecks, guardTimeoutMs: 3_000,
                 maxPresses: maxSendPresses, readyTimeoutMs: 10_000, goneTimeoutMs: 3_000
             ))
         }
@@ -102,20 +147,24 @@ public enum HTMLPlan {
             return ["step": "open_eml", "path": path, "activates": true]
         case let .waitForNewWindow(window, since, timeoutMs):
             return ["step": "wait_for_new_window", "window": window.rawValue, "since": since.rawValue, "timeout_ms": timeoutMs]
-        case let .pressMenuItem(menu, item, window, guardChecks, guardTimeoutMs):
+        case let .pressMenuItem(target, window, guardChecks, guardTimeoutMs):
             return [
-                "step": "press_menu_item", "menu": menu, "item": item, "window": window.rawValue,
+                "step": "press_menu_item", "item": itemFields(target), "window": window.rawValue,
                 "guard": guardChecks.map(\.rawValue), "guard_timeout_ms": guardTimeoutMs,
             ]
-        case let .pressUntilWindowCloses(menu, item, window, guardChecks, guardTimeoutMs, maxPresses, readyTimeoutMs, goneTimeoutMs):
+        case let .pressUntilWindowCloses(target, window, guardChecks, guardTimeoutMs, maxPresses, readyTimeoutMs, goneTimeoutMs):
             return [
-                "step": "press_until_window_closes", "menu": menu, "item": item, "window": window.rawValue,
+                "step": "press_until_window_closes", "item": itemFields(target), "window": window.rawValue,
                 "guard": guardChecks.map(\.rawValue), "guard_timeout_ms": guardTimeoutMs,
                 "max_presses": maxPresses, "ready_timeout_ms": readyTimeoutMs, "gone_timeout_ms": goneTimeoutMs,
             ]
         case let .closeWindow(window):
             return ["step": "close_window", "window": window.rawValue]
         }
+    }
+
+    static func itemFields(_ target: MenuItemTarget) -> [String: Any] {
+        ["shortcut": target.shortcutName, "fallback_menu": target.fallbackMenu, "fallback_title": target.fallbackTitle]
     }
 }
 
