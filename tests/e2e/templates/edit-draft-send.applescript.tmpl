@@ -19,73 +19,208 @@ do shell script "open -a Mail " & quoted form of "<EML>"
 set viewerID to missing value
 set deadline to (current date) + 5
 repeat while (current date) < deadline and viewerID is missing value
-    tell application "Mail"
-        set winIDs to id of every window
-        repeat with wid in winIDs
-            if beforeOpenIDs does not contain (contents of wid) then
-                set viewerID to (contents of wid)
-                exit repeat
-            end if
-        end repeat
-    end tell
-    if viewerID is missing value then delay 0.1
+    set viewerIDCandidates to {}
+    tell application "Mail" to set winIDs to id of every window
+    repeat with wid in winIDs
+        if beforeOpenIDs does not contain (contents of wid) then
+            set candidateID to (contents of wid)
+            try
+                tell application "Mail" to set candidateName to name of (first window whose id is candidateID)
+                if candidateName is not "Save Panel Accessory View" then set end of viewerIDCandidates to candidateID
+            end try
+        end if
+    end repeat
+    if (count of viewerIDCandidates) > 1 then error "Mail opened more than one new window while waiting for the eml viewer; refusing to guess which is ours (found " & (count of viewerIDCandidates) & ")"
+    if (count of viewerIDCandidates) is 1 then
+        set viewerID to item 1 of viewerIDCandidates
+    else
+        delay 0.1
+    end if
 end repeat
 if viewerID is missing value then error "Mail did not open a viewer for the eml within 5s"
 
 tell application "Mail" to set beforeComposeIDs to id of every window
 tell application "Mail" to activate
-tell application "System Events"
-    tell process "Mail"
-        set frontmost to true
-        set fdeadline to (current date) + 3
-        repeat until frontmost or (current date) > fdeadline
-            delay 0.05
-        end repeat
-        delay 0.3
-        keystroke "d" using {shift down, command down}
+tell application "System Events" to set frontmost of process "Mail" to true
+try
+    tell application "Mail" to set index of (first window whose id is viewerID) to 1
+on error errMsg number errNum
+    error "The eml viewer window (id " & viewerID & ") closed before the Send Again menu click: " & errMsg number errNum
+end try
+delay 0.3
+set viewerIDActed to false
+set viewerIDFailedCheck to "no check ran"
+set fdeadline to (current date) + 3
+repeat until viewerIDActed or (current date) > fdeadline
+    tell application "System Events"
+        tell process "Mail"
+            try
+                tell application "Mail"
+                    set frontWindowID to id of window 1
+                    set targetName to name of (first window whose id is viewerID)
+                end tell
+            on error errMsg number errNum
+                error "The eml viewer window (id " & viewerID & ") closed before the Send Again menu click: " & errMsg number errNum
+            end try
+            set viewerIDFailedCheck to ""
+            try
+                if not frontmost then
+                    set viewerIDFailedCheck to "Mail is not the frontmost app"
+                else if frontWindowID is not viewerID then
+                    set viewerIDFailedCheck to "Mail's window 1 is not the eml viewer window"
+                else
+                    set keyWindow to value of attribute "AXFocusedWindow"
+                    set mainWindow to value of attribute "AXMainWindow"
+                    if value of attribute "AXMain" of keyWindow is not true then
+                        set viewerIDFailedCheck to "the key window (AXFocusedWindow) is not the main window (AXMainWindow); a panel or sheet holds key"
+                    else if value of attribute "AXSubrole" of mainWindow is not "AXStandardWindow" then
+                        set viewerIDFailedCheck to "the main window (AXMainWindow) is not an AXStandardWindow"
+                    else if (count of sheets of mainWindow) is not 0 then
+                        set viewerIDFailedCheck to "the main window (AXMainWindow) has a sheet open"
+                    else if value of attribute "AXTitle" of mainWindow is not targetName then
+                        set viewerIDFailedCheck to "the main window's AXTitle does not match the eml viewer window's name"
+                    end if
+                end if
+            on error errMsg
+                set viewerIDFailedCheck to "Mail's accessibility attributes could not be read: " & errMsg
+            end try
+            if viewerIDFailedCheck is "" then
+                click menu item "Send Again" of menu "Message" of menu bar 1
+                set viewerIDActed to true
+            end if
+        end tell
     end tell
-end tell
+    if not viewerIDActed then
+        tell application "System Events" to set frontmost of process "Mail" to true
+        try
+            tell application "Mail" to set index of (first window whose id is viewerID) to 1
+        on error errMsg number errNum
+            error "The eml viewer window (id " & viewerID & ") closed before the Send Again menu click: " & errMsg number errNum
+        end try
+        delay 0.1
+    end if
+end repeat
+if not viewerIDActed then error "The eml viewer window did not pass the key-window check within 3s; the Send Again menu click was not sent. Last failed check: " & viewerIDFailedCheck
 
 set composeID to missing value
 set deadline to (current date) + 5
 repeat while (current date) < deadline and composeID is missing value
-    tell application "Mail"
-        set winIDs to id of every window
-        repeat with wid in winIDs
-            if beforeComposeIDs does not contain (contents of wid) then
-                set composeID to (contents of wid)
-                exit repeat
-            end if
-        end repeat
-    end tell
-    if composeID is missing value then delay 0.1
-end repeat
-if composeID is missing value then error "Compose window did not appear after Send Again within 5s"
-
-tell application "Mail" to activate
-tell application "System Events"
-    tell process "Mail"
-        set frontmost to true
-        set fdeadline to (current date) + 3
-        repeat until frontmost or (current date) > fdeadline
-            delay 0.05
-        end repeat
-        delay 0.3
-        click menu item "Send" of menu "Message" of menu bar 1
-    end tell
-end tell
-
-set composeIDGone to false
-set deadline to (current date) + 5
-repeat while (current date) < deadline and composeIDGone is false
-    tell application "Mail" to set currentIDs to id of every window
-    if currentIDs does not contain composeID then
-        set composeIDGone to true
+    set composeIDCandidates to {}
+    tell application "Mail" to set winIDs to id of every window
+    repeat with wid in winIDs
+        if beforeComposeIDs does not contain (contents of wid) then
+            set candidateID to (contents of wid)
+            try
+                tell application "Mail" to set candidateName to name of (first window whose id is candidateID)
+                if candidateName is not "Save Panel Accessory View" then set end of composeIDCandidates to candidateID
+            end try
+        end if
+    end repeat
+    if (count of composeIDCandidates) > 1 then error "Mail opened more than one new window while waiting for the compose; refusing to guess which is ours (found " & (count of composeIDCandidates) & ")"
+    if (count of composeIDCandidates) is 1 then
+        set composeID to item 1 of composeIDCandidates
     else
         delay 0.1
     end if
 end repeat
-if composeIDGone is false then error "Send did not complete: the compose window is still open after 5s"
+if composeID is missing value then error "Compose window did not appear after Send Again within 5s"
+
+set composeIDGone to false
+set composeSendClicks to 0
+repeat while composeIDGone is false and composeSendClicks < 3
+    set sendMenuReady to false
+    set sdeadline to (current date) + 10
+    repeat until sendMenuReady or (current date) > sdeadline
+        try
+            tell application "System Events" to tell process "Mail" to set sendMenuReady to (enabled of menu item "Send" of menu "Message" of menu bar 1 is true)
+        end try
+        if not sendMenuReady then delay 0.2
+    end repeat
+    if not sendMenuReady then error "Mail's Message > Send menu item did not become available within 10s; the compose was not sent"
+    tell application "Mail" to activate
+    tell application "System Events" to set frontmost of process "Mail" to true
+    try
+        tell application "Mail" to set index of (first window whose id is composeID) to 1
+    on error errMsg number errNum
+        error "The compose window (id " & composeID & ") closed before the Send menu click: " & errMsg number errNum
+    end try
+    delay 0.3
+    set composeIDActed to false
+    set composeIDFailedCheck to "no check ran"
+    set fdeadline to (current date) + 3
+    repeat until composeIDActed or (current date) > fdeadline
+        tell application "System Events"
+            tell process "Mail"
+                try
+                    tell application "Mail"
+                        set frontWindowID to id of window 1
+                        set targetName to name of (first window whose id is composeID)
+                    end tell
+                on error errMsg number errNum
+                    error "The compose window (id " & composeID & ") closed before the Send menu click: " & errMsg number errNum
+                end try
+                set composeIDFailedCheck to ""
+                try
+                    if not frontmost then
+                        set composeIDFailedCheck to "Mail is not the frontmost app"
+                    else if frontWindowID is not composeID then
+                        set composeIDFailedCheck to "Mail's window 1 is not the compose window"
+                    else
+                        set keyWindow to value of attribute "AXFocusedWindow"
+                        set mainWindow to value of attribute "AXMainWindow"
+                        if value of attribute "AXMain" of keyWindow is not true then
+                            set composeIDFailedCheck to "the key window (AXFocusedWindow) is not the main window (AXMainWindow); a panel or sheet holds key"
+                        else if value of attribute "AXSubrole" of mainWindow is not "AXStandardWindow" then
+                            set composeIDFailedCheck to "the main window (AXMainWindow) is not an AXStandardWindow"
+                        else if (count of sheets of mainWindow) is not 0 then
+                            set composeIDFailedCheck to "the main window (AXMainWindow) has a sheet open"
+                        else if value of attribute "AXTitle" of mainWindow is not targetName then
+                            set composeIDFailedCheck to "the main window's AXTitle does not match the compose window's name"
+                        end if
+                    end if
+                on error errMsg
+                    set composeIDFailedCheck to "Mail's accessibility attributes could not be read: " & errMsg
+                end try
+                if composeIDFailedCheck is "" then
+                    click menu item "Send" of menu "Message" of menu bar 1
+                    set composeIDActed to true
+                end if
+            end tell
+        end tell
+        if not composeIDActed then
+            tell application "System Events" to set frontmost of process "Mail" to true
+            try
+                tell application "Mail" to set index of (first window whose id is composeID) to 1
+            on error errMsg number errNum
+                error "The compose window (id " & composeID & ") closed before the Send menu click: " & errMsg number errNum
+            end try
+            delay 0.1
+        end if
+    end repeat
+    if not composeIDActed then error "The compose window did not pass the key-window check within 3s; the Send menu click was not sent. Last failed check: " & composeIDFailedCheck
+    set composeSendClicks to composeSendClicks + 1
+    set composeIDGone to false
+    set deadline to (current date) + 3
+    repeat while (current date) < deadline and composeIDGone is false
+        tell application "Mail" to set currentIDs to id of every window
+        if currentIDs does not contain composeID then
+            set composeIDGone to true
+        else
+            delay 0.1
+        end if
+    end repeat
+    if composeIDGone is false then
+        set composeSheetCount to 0
+        try
+            tell application "Mail" to set frontWindowID to id of window 1
+            if frontWindowID is composeID then
+                tell application "System Events" to tell process "Mail" to set composeSheetCount to count of sheets of (value of attribute "AXMainWindow")
+            end if
+        end try
+        if composeSheetCount > 0 then error "A sheet is open on the compose window after the Send menu click; not clicking Send through it, and the message was not sent"
+    end if
+end repeat
+if composeIDGone is false then error "Send did not complete: the compose window is still open after 3 Send menu clicks"
 
 tell application "Mail"
     try
