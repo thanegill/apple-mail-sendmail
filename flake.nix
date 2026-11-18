@@ -19,7 +19,13 @@
             pkgs.swiftPackages.stdenv.mkDerivation {
               pname = "apple-mail-sendmail";
               version = "0.1.0";
-              src = ./.;
+              src = pkgs.lib.fileset.toSource {
+                root = ./.;
+                fileset = pkgs.lib.fileset.unions [
+                  ./Package.swift
+                  ./Sources
+                ];
+              };
               nativeBuildInputs = [ pkgs.swift pkgs.swiftpm ];
 
               installPhase = ''
@@ -49,6 +55,10 @@
         in {
           packages.default = makeSendmail { };
           packages.without-sendmail-symlink = makeSendmail { withSendmailSymlink = false; };
+
+          # The package's checkPhase runs the unit tests, so `nix flake check`
+          # runs them by building it.
+          checks.default = self'.packages.default;
 
           apps.default = {
             type = "app";

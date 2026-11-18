@@ -135,7 +135,7 @@ The .eml + Cmd-Shift-D path renders bodies in Mail's WKWebView, which honors any
 
 ## Packaging
 
-`flake.nix` uses flake-parts. The package factory is wrapped in `pkgs.lib.makeOverridable` and takes `withSendmailSymlink ? true`. Two named packages:
+`flake.nix` uses flake-parts. The package factory is wrapped in `pkgs.lib.makeOverridable` and takes `withSendmailSymlink ? true`. Its `src` is a `lib.fileset` of `Package.swift` and `Sources/` only, so editing docs does not rebuild the Swift binary or rerun its tests. Two named packages:
 
 - `packages.default` — installs `apple-mail-sendmail` plus a `sendmail` symlink.
 - `packages.without-sendmail-symlink` — canonical binary only.
@@ -144,4 +144,4 @@ Consumers from other flakes can also call `self.packages.${system}.default.overr
 
 `meta.mainProgram = "apple-mail-sendmail"`, so `nix run` always invokes the canonical name even though both names are on `PATH` in the `default` package.
 
-Tests run in the package's `checkPhase`, not as a separate `checks.tests` derivation; this means `nix build .#default` is what fails when tests fail.
+Tests run in the package's `checkPhase`, not as a separate test derivation; `checks.default` is the package itself, so both `nix build .#default` and `nix flake check` fail when tests fail.
