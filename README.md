@@ -282,6 +282,14 @@ swift run sendmail-test
 Tests also run automatically as part of `nix build .#default`
 (in the package's `checkPhase`) and `nix flake check`.
 
+### End-to-end tests
+
+The unit tests only check the generated AppleScript. A separate
+harness, `nix run .#e2e`, runs the real binary against Mail.app in a
+dedicated test user or VM and checks what Mail sends to a local Mailpit
+capture server. Its setup, safety rules and scenarios are in
+[`tests/e2e/README.md`](tests/e2e/README.md).
+
 ## Layout
 
 ```
@@ -293,5 +301,7 @@ Tests also run automatically as part of `nix build .#default`
 │   ├── SendmailCore/         (library)
 │   ├── apple-mail-sendmail/  (thin executable entry)
 │   └── sendmail-test/        (test runner + assertion harness)
+├── tests/
+│   └── e2e/                  (live end-to-end harness, `nix run .#e2e`)
 └── README.md
 ```

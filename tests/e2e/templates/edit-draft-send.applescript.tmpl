@@ -1,0 +1,94 @@
+use scripting additions
+
+try
+    tell application "System Events" to get name of menu bar 1 of process "Finder"
+on error errMsg number errNum
+    if errNum is -1719 or errNum is 1002 then
+        error "Accessibility permission required. Grant apple-mail-sendmail Accessibility in System Settings > Privacy & Security > Accessibility." number errNum
+    else
+        error errMsg number errNum
+    end if
+end try
+
+tell application "Mail" to launch
+delay 0.5
+tell application "Mail" to set beforeOpenIDs to id of every window
+
+do shell script "open -a Mail " & quoted form of "<EML>"
+
+set viewerID to missing value
+set deadline to (current date) + 5
+repeat while (current date) < deadline and viewerID is missing value
+    tell application "Mail"
+        set winIDs to id of every window
+        repeat with wid in winIDs
+            if beforeOpenIDs does not contain (contents of wid) then
+                set viewerID to (contents of wid)
+                exit repeat
+            end if
+        end repeat
+    end tell
+    if viewerID is missing value then delay 0.1
+end repeat
+if viewerID is missing value then error "Mail did not open a viewer for the eml within 5s"
+
+tell application "Mail" to set beforeComposeIDs to id of every window
+tell application "Mail" to activate
+tell application "System Events"
+    tell process "Mail"
+        set frontmost to true
+        set fdeadline to (current date) + 3
+        repeat until frontmost or (current date) > fdeadline
+            delay 0.05
+        end repeat
+        delay 0.3
+        keystroke "d" using {shift down, command down}
+    end tell
+end tell
+
+set composeID to missing value
+set deadline to (current date) + 5
+repeat while (current date) < deadline and composeID is missing value
+    tell application "Mail"
+        set winIDs to id of every window
+        repeat with wid in winIDs
+            if beforeComposeIDs does not contain (contents of wid) then
+                set composeID to (contents of wid)
+                exit repeat
+            end if
+        end repeat
+    end tell
+    if composeID is missing value then delay 0.1
+end repeat
+if composeID is missing value then error "Compose window did not appear after Send Again within 5s"
+
+tell application "Mail" to activate
+tell application "System Events"
+    tell process "Mail"
+        set frontmost to true
+        set fdeadline to (current date) + 3
+        repeat until frontmost or (current date) > fdeadline
+            delay 0.05
+        end repeat
+        delay 0.3
+        click menu item "Send" of menu "Message" of menu bar 1
+    end tell
+end tell
+
+set composeIDGone to false
+set deadline to (current date) + 5
+repeat while (current date) < deadline and composeIDGone is false
+    tell application "Mail" to set currentIDs to id of every window
+    if currentIDs does not contain composeID then
+        set composeIDGone to true
+    else
+        delay 0.1
+    end if
+end repeat
+if composeIDGone is false then error "Send did not complete: the compose window is still open after 5s"
+
+tell application "Mail"
+    try
+        close (first window whose id is viewerID) saving no
+    end try
+end tell
