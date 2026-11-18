@@ -83,8 +83,9 @@ public enum RFC822Parser {
         return String(decoding: data, as: UTF8.self)
     }
 
-    /// Unfold RFC 822 headers: a line beginning with WSP is a continuation of the
-    /// previous logical line. Empty lines are skipped.
+    /// Unfold RFC 5322 headers: a line beginning with WSP is a continuation of
+    /// the previous logical line, joined by dropping only the line break (the
+    /// WSP stays, RFC 5322 2.2.3). Empty lines are skipped.
     private static func unfold(_ s: String) -> [String] {
         // Normalize line endings so the grapheme cluster "\r\n" doesn't hide LF
         // from the splitter (in Swift, "\r\n" is a single Character).
@@ -95,7 +96,7 @@ public enum RFC822Parser {
             if stripped.isEmpty { continue }
             if let first = stripped.first, first == " " || first == "\t" {
                 if !lines.isEmpty {
-                    lines[lines.count - 1] += " " + stripped.drop(while: { $0 == " " || $0 == "\t" })
+                    lines[lines.count - 1] += stripped
                 }
                 continue
             }

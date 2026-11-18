@@ -1,15 +1,6 @@
 {
   "findings": [
     {
-      "id": "unfold-collapses-wsp",
-      "class": "ours-bug",
-      "note": "RFC 5322 2.2.3: unfolding removes only the CRLF, keeping the folding WSP. RFC822Parser replaced the fold and all leading WSP of the continuation line with one space, so a tab-folded Subject lost its tab.",
-      "cases": [
-        "cpython/msg_27.txt subject",
-        "local/folded-subject-tab.eml subject"
-      ]
-    },
-    {
       "id": "part-trailing-line-endings",
       "class": "ours-bug",
       "note": "RFC 2046 5.1.1: only the CRLF immediately before a boundary delimiter belongs to the delimiter. MIMEParser.splitParts trimmed every trailing CR/LF of a part, truncating text attachments and blank lines at the end of a body part.",

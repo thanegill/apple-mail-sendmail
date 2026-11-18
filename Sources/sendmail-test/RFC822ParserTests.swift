@@ -25,9 +25,18 @@ let rfc822Tests = TestSuite(name: "RFC822Parser", cases: [
     },
 
     TestCase(name: "folded_header") {
-        let input = "Subject: line one\n  continuation line\n\nbody\n"
+        let input = "Subject: line one\n continuation line\n\nbody\n"
         let raw = try RFC822Parser.parse(Data(input.utf8))
         try expectEqual(raw.value(for: "subject"), "line one continuation line")
+    },
+
+    // RFC 5322 2.2.3: unfolding removes only the CRLF; the WSP that starts the
+    // continuation line stays, whether it is a tab or several spaces.
+    TestCase(name: "unfolding_keeps_folding_whitespace") {
+        let input = "Subject: line one\r\n\tafter a tab\r\nX-Spaced: a\r\n   b\r\n\r\nbody\r\n"
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        try expectEqual(raw.value(for: "subject"), "line one\tafter a tab")
+        try expectEqual(raw.value(for: "x-spaced"), "a   b")
     },
 
     TestCase(name: "multiple_To_headers_collected") {
