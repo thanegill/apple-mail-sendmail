@@ -85,8 +85,8 @@ public enum CLI {
                 case "t":
                     opts.readRecipientsFromHeaders = true
                     j += 1
-                case "i":
-                    j += 1 // no-op: ignore lone dot in body
+                case "i", "v", "n":
+                    j += 1 // no-op: ignore lone dot in body, verbose, no aliasing
                 case "f":
                     let rest = String(chars[(j + 1)...])
                     if !rest.isEmpty {
@@ -127,14 +127,13 @@ public enum CLI {
                         throw CLIError.usage("bad hop count: \(hopCount)")
                     }
                     j = chars.count
-                case "o", "b", "O", "q", "v", "N", "R", "X", "M", "n", "B", "C":
+                case "o", "b", "O", "q", "N", "R", "X", "M", "B", "C":
                     // Legacy flags accepted for sendmail compatibility. Some take a
                     // value that in standard sendmail may be SPACE-SEPARATED from the
                     // flag (e.g. -B 8BITMIME, -N never, -R hdrs, -X logfile, -C cf); if the
                     // value isn't attached to this token, it's the next argv. Consume
                     // it so it isn't misparsed as a positional recipient.
                     //
-                    // No-value flags (-v verbose, -n no-aliasing) never consume argv.
                     // Attached-only flags (-oi, -bm, -q30m, -Mx=y) just swallow the
                     // rest of this token.
                     let rest = String(chars[(j + 1)...])
