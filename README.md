@@ -75,6 +75,38 @@ terminal (or whichever process invokes the binary):
   Device Control and Data Access**. Without it the binary exits with
   status 78 (`EX_CONFIG`) before touching Mail, and names that pane.
 
+### Checking the grants
+
+```sh
+apple-mail-sendmail --check-permissions
+```
+
+reports, without sending anything or reading stdin, whether
+Accessibility and Automation for Mail are granted, and how to grant
+whichever is missing. It starts Mail if it is not running (without
+bringing it to the front) and asks macOS for Automation, which shows
+the prompt when macOS can. It exits 0 when both are granted and 78
+(`EX_CONFIG`) otherwise.
+
+macOS charges both grants to the *responsible process*, not to the
+binary: usually the app it was started from, such as Terminal, iTerm2
+or an editor's terminal. Under cron, launchd, SSH or a remote agent it
+is that launcher or the binary itself. There is no public API that
+names it, so the check explains the rule rather than naming the app.
+
+**Before the first run from cron, launchd or another non-interactive
+launcher**, run `apple-mail-sendmail --check-permissions` once from
+Terminal, or grant the launching app the listed permissions. The
+binary cannot raise its own Automation prompt when its responsible
+process is not an app that can show one: plain-text messages then fail
+with -1743 (exit 78) and no prompt appears. This was verified under a
+VM guest agent, with or without an `Info.plist` embedded in the
+binary. Plain-text messages need Automation for Mail; HTML messages
+need only Accessibility. A grant belongs to the responsible process it
+was made for, so a grant made from Terminal covers runs from Terminal
+and the scripts it starts, not a launcher that is its own responsible
+process.
+
 ## Usage
 
 ### Draft mode (default)
@@ -224,7 +256,8 @@ Tradeoffs:
 
 Set `SENDMAIL_DRY_RUN=1` to print what the binary would do and skip
 every call to Mail.app: the steps of whichever path the message takes,
-one JSON object per line. Useful for debugging.
+one JSON object per line. Useful for debugging. `--check-permissions`
+refuses to run under it (exit 64), since it starts Mail and may prompt.
 
 ```sh
 SENDMAIL_DRY_RUN=1 apple-mail-sendmail -t < msg.eml
@@ -238,6 +271,7 @@ SENDMAIL_DRY_RUN=1 apple-mail-sendmail -t < msg.eml
 | `-f <addr>`      | Set the From address (default: the message's `From:`)    |
 | `-F <name>`      | Set the From display name; applies only with `-f`        |
 | `--send`         | Actually deliver (default: draft for review)             |
+| `--check-permissions` | Report the Accessibility and Automation grants and how to fix them; sends nothing (see [Checking the grants](#checking-the-grants)) |
 | `--help`         | Print usage                                              |
 | `--version`      | Print version                                            |
 
@@ -258,13 +292,13 @@ Following `sysexits.h`:
 
 | Code | Meaning                                                       |
 |-----:|---------------------------------------------------------------|
-|    0 | Message handed to Mail.app successfully                       |
+|    0 | Message handed to Mail.app successfully; with `--check-permissions`, both grants in place |
 |   64 | Usage error (unknown flag, malformed argv)                    |
 |   65 | Data error (unparseable message)                              |
 |   67 | No recipients resolved                                        |
 |   71 | Driving Mail failed (an Apple Event or an HTML-path step)     |
 |   75 | Temporary failure: no temp file, or Mail not running (EX_TEMPFAIL) |
-|   78 | Automation or Accessibility permission denied                 |
+|   78 | Automation or Accessibility permission denied (or, with `--check-permissions`, not confirmed) |
 
 ## Alternatives considered
 
