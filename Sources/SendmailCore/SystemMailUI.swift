@@ -91,7 +91,7 @@ public struct SystemMailWorkspace: MailWorkspace {
 
     func mailURL() throws -> URL {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: mailBundleID) else {
-            throw HTMLDeliveryError("Launch Services cannot find Mail (\(mailBundleID))")
+            throw DeliveryError("Launch Services cannot find Mail (\(mailBundleID))")
         }
         return url
     }
@@ -104,10 +104,10 @@ public struct SystemMailWorkspace: MailWorkspace {
         try start { box.finish($0) }
         let deadline = clock.now + timeout
         while !box.isFinished {
-            if clock.now >= deadline { throw HTMLDeliveryError("\(what) did not complete within \(Int(timeout))s") }
+            if clock.now >= deadline { throw DeliveryError("\(what) did not complete within \(Int(timeout))s") }
             clock.sleep(0.05)
         }
-        if let error = box.error { throw HTMLDeliveryError("\(what) failed: \(error.localizedDescription)") }
+        if let error = box.error { throw DeliveryError("\(what) failed: \(error.localizedDescription)") }
     }
 }
 

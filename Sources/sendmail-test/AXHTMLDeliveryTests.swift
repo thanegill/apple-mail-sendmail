@@ -31,8 +31,8 @@ private func runHTML(_ mail: FakeMail, send: Bool, granted: Bool = true) -> Erro
 }
 
 private func expectFailure(_ error: Error?, containing text: String, file: StaticString = #file, line: UInt = #line) throws {
-    guard let error = error as? HTMLDeliveryError else {
-        throw TestFailure(message: "expected an HTMLDeliveryError containing \"\(text)\", got \(String(describing: error))", file: file, line: line)
+    guard let error = error as? DeliveryError else {
+        throw TestFailure(message: "expected an DeliveryError containing \"\(text)\", got \(String(describing: error))", file: file, line: line)
     }
     try expect(error.message.contains(text), "expected \"\(text)\" in: \(error.message)", file: file, line: line)
 }

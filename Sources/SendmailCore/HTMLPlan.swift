@@ -85,16 +85,9 @@ public enum HTMLPlan {
         return steps
     }
 
-    /// One compact JSON object per step, keys sorted, slashes unescaped, so
-    /// the e2e harness can compare it line by line with its templates.
+    /// One JSON object per step (`planJSONLine`).
     public static func jsonLines(_ steps: [HTMLStep]) -> [String] {
-        steps.map { step in
-            let data = (try? JSONSerialization.data(
-                withJSONObject: fields(step),
-                options: [.sortedKeys, .withoutEscapingSlashes]
-            )) ?? Data()
-            return String(decoding: data, as: UTF8.self)
-        }
+        steps.map { planJSONLine(fields($0)) }
     }
 
     static func fields(_ step: HTMLStep) -> [String: Any] {
@@ -124,6 +117,13 @@ public enum HTMLPlan {
             return ["step": "close_window", "window": window.rawValue]
         }
     }
+}
+
+/// One compact JSON object, keys sorted, slashes unescaped, so the e2e
+/// harness can compare dry-run plans line by line with its templates.
+func planJSONLine(_ fields: [String: Any]) -> String {
+    let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
+    return String(decoding: data, as: UTF8.self)
 }
 
 /// The dry run's HTML delivery: prints the plan, one JSON object per line,

@@ -135,7 +135,7 @@ do {
     die("AppleScript failed (\(f.code)): \(f.message)", code: .osErr)
 } catch let denied as AccessibilityNotGranted {
     die("\(denied)", code: .config)
-} catch let failure as HTMLDeliveryError {
+} catch let failure as DeliveryError {
     die(failure.message, code: .osErr)
 } catch {
     die("delivery failed: \(error)", code: .osErr)
