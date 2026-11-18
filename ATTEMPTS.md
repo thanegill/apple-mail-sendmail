@@ -4,7 +4,9 @@ The empirical record of alternatives probed while building this tool and
 rejected in favor of the `.eml` + Cmd-Shift-D path (see the README's
 "Rich HTML rendering" section). Extracted from the README so that stays
 focused; referenced from README.md and CLAUDE.md. Findings are from running
-probes on current macOS Mail (Sequoia/Tahoe, 2026), not just reading docs.
+probes on current macOS Mail (Sequoia/Tahoe, 2026; the sections marked
+2026-11-18 on macOS 27, Mail 16.0 build 3901.200.71.1.16, in a disposable
+VM with POP accounts and a Mailpit SMTP capture), not just reading docs.
 
 ### Architecture-level dead-ends
 
@@ -19,7 +21,9 @@ probes on current macOS Mail (Sequoia/Tahoe, 2026), not just reading docs.
   `tell application "Mail" to open POSIX file "foo.eml"` produces a
   read-only viewer, not a compose window. `import mail` accepts only
   `.mbox` bundles and lands messages as immutable `message` objects,
-  not editable `outgoing message` objects. Writing `.emlx` files into
+  not editable `outgoing message` objects (an imported message moved
+  into Drafts can be opened as a compose through the UI; see the
+  Drafts-mailbox section below). Writing `.emlx` files into
   `~/Library/Mail/.../Drafts.mbox/` is undocumented and version-fragile.
 - **`import mail` + `redirect` to inject HTML content.** Probed in
   detail in 2026. `import Mail mailbox at <Apple-format .mbox>`
@@ -31,16 +35,72 @@ probes on current macOS Mail (Sequoia/Tahoe, 2026), not just reading docs.
   source verbatim. Recipients see `To: <placeholder>` plus
   `Resent-To: <real>` — most clients render this as a "Redirected
   by" banner. Wrong shape for a sendmail-style transport.
-- **`import mail` + move to Drafts + `open`.** Probed in 2026.
-  Moving the imported message into a Drafts mailbox and `open`-ing
-  it produces a read-only viewer, not an editable compose. Apple's
-  draft state is gated on internal metadata that Mail only sets
-  when ITS OWN compose flow created the message — mbox status
-  headers (`X-Status`, `X-Mozilla-Status`), `.emlx` trailer
-  `flags=64` (RFC 3501 `\Draft`), and the
+- **`import mail` + move to Drafts + AppleScript `open`.** Probed in
+  2026. AppleScript `open <message>` on an imported message moved into
+  a Drafts mailbox produces a read-only viewer (titled
+  `<subject> — Drafts`), not an editable compose. mbox status headers
+  (`X-Status`, `X-Mozilla-Status`), `.emlx` trailer `flags=64`
+  (RFC 3501 `\Draft`), and the
   `X-Uniform-Type-Identifier: com.apple.mail-draft` header all
-  survive but are informational-only and don't flip the message
-  into editable state.
+  survive import but don't change what `open` returns. Opening the
+  same message through the UI is a different story; see the next
+  section.
+
+### Drafts mailbox + UI open (works, rejected)
+
+Probed 2026-11-18. A foreign HTML message moved into the sending
+account's own Drafts mailbox opens as an **editable** compose (titled
+just the subject) when opened by double-click, by Return, or by
+`File > Open Message`. Only AppleScript `open` gives the viewer.
+
+- **Getting it there.** `import Mail mailbox at` an Apple `.mbox`
+  bundle (a directory containing a file named `mbox`; a plain mbox
+  file is ignored), then `move` the message into
+  `mailbox "Drafts" of account <sender>`. The app-level
+  `drafts mailbox` property is the unified "All Drafts" view, and a
+  move into it does nothing.
+- **Selecting it.** `set selected messages of message viewer 1`
+  silently does nothing. Selecting through System Events works: the
+  `AXTable` whose description is "messages", the row matched by its
+  subject text, `set selected to true`. Mail's `selected messages`
+  then follows.
+- **Fidelity.** Full: classes from a `<style>` block, inline styles,
+  table borders and padding, `<pre>` background, a div's 24px padding.
+- **Wire.** `Message > Send` produced a clean message: a new
+  `Message-Id`, no `Resent-*` headers, the `X-Uniform-Type-Identifier`
+  header dropped. `Bcc:` was stripped and the Bcc recipient still
+  received it. An attachment was kept. The draft left Drafts.
+- **Not scriptable.** The compose is not in `outgoing messages`, so
+  everything must be baked into the imported message, as with Send
+  Again.
+- **Untested:** IMAP server-side Drafts (the earlier IMAP probe used
+  AppleScript `open`).
+- **Rejected because** every `import Mail mailbox` leaves a stray
+  "Import" / "Import-N" mailbox under On My Mac in the user's sidebar,
+  which a sendmail transport must not do. It also needs UI row
+  selection plus a menu click for `--send`, so it saves nothing over
+  Send Again on permissions.
+
+### Services: `Mail/New Email With Selection`
+
+Probed 2026-11-18 via `NSPerformService("Mail/New Email With
+Selection", pasteboard)`. Not viable.
+
+- **Only Web Archive matches.** Mail's Info.plist declares the send
+  types as the literal constant NAMES `NSPasteboardTypeRTFD`,
+  `NSPasteboardTypeRTF` and `NSPasteboardTypeString`, which resolve to
+  unusable `dyn.*` UTIs, so plain-text and RTF pasteboards are rejected
+  with "service expects types". Only `com.apple.webarchive` ("Apple Web
+  Archive pasteboard type") matches.
+- **Body unreliable.** A Web Archive body sometimes rendered well
+  (classes, inline styles, borders and backgrounds kept; the div
+  padding lost) but was empty in about 3 of 4 runs.
+- **No handle.** The compose is not in `outgoing messages`, and
+  AppleScript `close ... saving no` on it produced "Unable to Load
+  Window" sheets.
+- **Headers by UI only.** Typed keystrokes landed in the wrong field.
+  Setting the To text field's AX value did create a recipient token.
+- **Send did not send.** Clicking `Message > Send` had no effect.
 
 ### `outgoing message` `content` property dead-ends
 
@@ -147,15 +207,39 @@ populated from query params (verified empirically). But:
 - **CGEventPost from the AppleScript-ObjC bridge.** The opaque
   `CGEventSource` pointer can't be passed back into
   `CGEventCreateMouseEvent` through AppleScript — the bridge can't
-  marshal the opaque-pointer type. Workable only from native Swift,
-  which then still needs the Accessibility grant.
+  marshal the opaque-pointer type. JXA's ObjC bridge can do it with a
+  null event source (next bullet); either way it needs the
+  Accessibility grant.
+- **CGEvent click + HTML paste into a scripted compose (2026-11-18).**
+  `make new outgoing message`, then a real CGEvent click into the
+  body's `AXWebArea` posted from the JXA ObjC bridge with a null event
+  source (this does focus the body), an HTML / Web Archive general
+  pasteboard, Cmd+V, then dictionary `send`. Full fidelity on the
+  wire, and the message stays a scriptable `outgoing message`
+  (recipients via the dictionary). Reading `content` right after the
+  paste returned only whitespace, although the sent message had the
+  full HTML. Rejected: adding an attachment through the dictionary,
+  before OR after the paste, lost the HTML body (the known
+  attachment-wipes-rich-body bug, see NSSharingService above); it also
+  overwrites the user's clipboard, and Cmd+V needs Accessibility and
+  focus.
 - **Pasteboard + Cmd+V.** With an `NSAttributedString` on
   `NSPasteboard` and a Cmd+V keystroke, the paste does fire but lands
-  in whatever has focus (typically not the compose body — see above).
+  in whatever has focus (typically not the compose body — see above,
+  unless a CGEvent click focused it).
 - **System Events Tab keystrokes to traverse to the body.** 5 Tabs
   cycle through the header fields (To, Cc, Bcc, Reply-To, Subject)
   but never descend into the `AXWebArea`. The body is not in Tab's
   focus chain.
+
+### Mail UI observations (2026-11-18)
+
+- **`Message > Send Again`** is the ⇧⌘D item when Mail is frontmost.
+  With another app frontmost it is missing from a menu scan, and
+  clicking it by name reports success but does nothing.
+- **AX window attributes.** `AXDocument` is missing value on every
+  Mail window, `.eml` viewers included; `AXFocusedWindow` and
+  `AXMainWindow` are readable.
 
 ### The RTF-read approach (worked, then superseded)
 
