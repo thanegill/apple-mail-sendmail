@@ -8,12 +8,19 @@ public struct AXHTMLDelivery: HTMLDelivery {
     let workspace: MailWorkspace
     let clock: Clock
     let accessibility: AccessibilityPermission
+    let trace: (String) -> Void
 
-    public init(ax: AXClient, workspace: MailWorkspace, clock: Clock, accessibility: AccessibilityPermission) {
+    /// `trace` receives one line per notable decision, such as how a menu
+    /// item was found; it must not write to the caller's stdout or stderr.
+    public init(
+        ax: AXClient, workspace: MailWorkspace, clock: Clock, accessibility: AccessibilityPermission,
+        trace: @escaping (String) -> Void = { _ in }
+    ) {
         self.ax = ax
         self.workspace = workspace
         self.clock = clock
         self.accessibility = accessibility
+        self.trace = trace
     }
 
     public func deliverHTML(emlURL: URL, send: Bool) throws {
@@ -33,6 +40,7 @@ private final class PlanRun {
     let workspace: MailWorkspace
     let clock: Clock
     let accessibility: AccessibilityPermission
+    let trace: (String) -> Void
     var app: UIElement?
     var snapshots: [WindowSnapshot: [UIElement]] = [:]
     var windows: [HTMLWindow: UIElement] = [:]
@@ -42,6 +50,7 @@ private final class PlanRun {
         workspace = delivery.workspace
         clock = delivery.clock
         accessibility = delivery.accessibility
+        trace = delivery.trace
     }
 
     func execute(_ step: HTMLStep) throws {
@@ -56,17 +65,17 @@ private final class PlanRun {
             try workspace.open(URL(fileURLWithPath: path), timeout: 15)
         case let .waitForNewWindow(window, since, timeoutMs):
             windows[window] = try waitForNewWindow(window, since: since, timeout: seconds(timeoutMs))
-        case let .pressMenuItem(menu, item, window, guardChecks, guardTimeoutMs):
+        case let .pressMenuItem(item, window, guardChecks, guardTimeoutMs):
             let target = try requireWindow(window)
-            switch try guardedPress(menu: menu, item: item, on: target, window: window, checks: guardChecks, timeout: seconds(guardTimeoutMs)) {
+            switch try guardedPress(item, on: target, window: window, checks: guardChecks, timeout: seconds(guardTimeoutMs)) {
             case .pressed:
                 break
             case .targetGone:
-                throw DeliveryError("The \(window.displayName) window closed before the \(menu) > \(item) press")
+                throw DeliveryError("The \(window.displayName) window closed before the \(item.fallbackName) press")
             }
-        case let .pressUntilWindowCloses(menu, item, window, guardChecks, guardTimeoutMs, maxPresses, readyTimeoutMs, goneTimeoutMs):
+        case let .pressUntilWindowCloses(item, window, guardChecks, guardTimeoutMs, maxPresses, readyTimeoutMs, goneTimeoutMs):
             try pressUntilClosed(
-                menu: menu, item: item, window: window, checks: guardChecks, guardTimeout: seconds(guardTimeoutMs),
+                item, window: window, checks: guardChecks, guardTimeout: seconds(guardTimeoutMs),
                 maxPresses: maxPresses, readyTimeout: seconds(readyTimeoutMs), goneTimeout: seconds(goneTimeoutMs)
             )
         case let .closeWindow(window):
@@ -188,19 +197,44 @@ private final class PlanRun {
         return title
     }
 
-    /// Looked up afresh on every call: menu bar item `menu`, its menu, then
-    /// the item titled `item`.
-    func menuItem(menu: String, item: String) -> UIElement? {
-        guard let app,
-              case let .element(menuBar)? = ax.attribute(kAXMenuBarAttribute, of: app),
-              let barItem = children(menuBar).first(where: { title($0) == menu }),
-              let menuElement = children(barItem).first
-        else { return nil }
-        return children(menuElement).first { title($0) == item }
+    /// Each top-level menu-bar item's title and the items of its menu, read
+    /// afresh on every call.
+    func topLevelMenus() -> [(title: String?, items: [UIElement])] {
+        guard let app, case let .element(menuBar)? = ax.attribute(kAXMenuBarAttribute, of: app) else { return [] }
+        return children(menuBar).map { barItem in
+            (title(barItem), children(barItem).first.map(children) ?? [])
+        }
     }
 
     func isEnabled(_ element: UIElement) -> Bool {
         ax.attribute(kAXEnabledAttribute, of: element) == .bool(true)
+    }
+
+    func hasShortcut(_ element: UIElement, of item: MenuItemTarget) -> Bool {
+        ax.attribute(kAXMenuItemCmdCharAttribute, of: element) == .string(item.commandCharacter)
+            && ax.attribute(kAXMenuItemCmdModifiersAttribute, of: element) == .int(item.modifiers)
+    }
+
+    enum FoundBy: Equatable {
+        case shortcut
+        case title
+    }
+
+    /// The menu item to press for `item`: the only enabled item with its
+    /// shortcut in any top-level menu, else the item with its fallback title
+    /// (enabled or not), else nil. Throws when several enabled items share
+    /// the shortcut, since pressing any of them is a guess.
+    func resolve(_ item: MenuItemTarget) throws -> (element: UIElement, foundBy: FoundBy)? {
+        let menus = topLevelMenus()
+        let byShortcut = menus.flatMap(\.items).filter { hasShortcut($0, of: item) && isEnabled($0) }
+        if byShortcut.count > 1 {
+            throw DeliveryError("Mail has \(byShortcut.count) enabled menu items with the \(item.shortcutName) shortcut; refusing to guess which one is \(item.fallbackName), and nothing was pressed")
+        }
+        if let only = byShortcut.first { return (only, .shortcut) }
+        guard let menu = menus.first(where: { $0.title == item.fallbackMenu }),
+              let element = menu.items.first(where: { title($0) == item.fallbackTitle })
+        else { return nil }
+        return (element, .title)
     }
 
     // MARK: - Guarded press
@@ -239,7 +273,7 @@ private final class PlanRun {
     /// menu item up again and presses it once. Never presses unverified; on
     /// timeout it throws naming the last failed check.
     func guardedPress(
-        menu: String, item: String, on target: UIElement, window: HTMLWindow,
+        _ item: MenuItemTarget, on target: UIElement, window: HTMLWindow,
         checks: [GuardCheck], timeout: TimeInterval
     ) throws -> PressOutcome {
         let deadline = clock.now + timeout
@@ -254,18 +288,28 @@ private final class PlanRun {
                 if failure != nil { break }
             }
             if failure == nil {
-                if let menuItem = menuItem(menu: menu, item: item) {
-                    if isEnabled(menuItem) {
-                        return .pressed(ax.performAction(kAXPressAction, on: menuItem))
+                if let resolved = try resolve(item) {
+                    if isEnabled(resolved.element) {
+                        trace(pressTrace(item, foundBy: resolved.foundBy, window: window))
+                        return .pressed(ax.performAction(kAXPressAction, on: resolved.element))
                     }
-                    failure = "Mail's \(menu) > \(item) menu item is disabled"
+                    failure = "Mail's \(item.fallbackName) menu item is disabled"
                 } else {
-                    failure = "Mail's \(menu) > \(item) menu item was not found"
+                    failure = "no enabled menu item has the \(item.shortcutName) shortcut, and Mail's \(item.fallbackName) menu item was not found by title"
                 }
             }
             lastFailure = failure ?? lastFailure
         } while clock.now < deadline
-        throw DeliveryError("The \(window.displayName) window did not pass the key-window check within \(Int(timeout))s; the \(menu) > \(item) press was not sent. Last failed check: \(lastFailure)")
+        throw DeliveryError("The \(window.displayName) window did not pass the key-window check within \(Int(timeout))s; the \(item.fallbackName) press was not sent. Last failed check: \(lastFailure)")
+    }
+
+    func pressTrace(_ item: MenuItemTarget, foundBy: FoundBy, window: HTMLWindow) -> String {
+        switch foundBy {
+        case .shortcut:
+            return "pressing \(item.fallbackName) on the \(window.displayName) window, found by its \(item.shortcutName) shortcut"
+        case .title:
+            return "pressing \(item.fallbackName) on the \(window.displayName) window, found by its English title (no enabled item has the \(item.shortcutName) shortcut)"
+        }
     }
 
     /// Mail closes the compose when it accepts Send, so a compose still open
@@ -273,7 +317,7 @@ private final class PlanRun {
     /// cannot send twice. An AXPress can report kAXErrorCannotComplete even
     /// when it acted, so the press result never decides a retry.
     func pressUntilClosed(
-        menu: String, item: String, window: HTMLWindow, checks: [GuardCheck], guardTimeout: TimeInterval,
+        _ item: MenuItemTarget, window: HTMLWindow, checks: [GuardCheck], guardTimeout: TimeInterval,
         maxPresses: Int, readyTimeout: TimeInterval, goneTimeout: TimeInterval
     ) throws {
         let target = try requireWindow(window)
@@ -282,20 +326,20 @@ private final class PlanRun {
         while presses < maxPresses {
             guard isPresent(target) else {
                 if presses > 0 { return }
-                throw DeliveryError("The \(window.displayName) window closed before the \(menu) > \(item) press")
+                throw DeliveryError("The \(window.displayName) window closed before the \(item.fallbackName) press")
             }
-            let ready = poll(timeout: readyTimeout, interval: 0.2) { () -> Bool? in
-                guard let menuItem = menuItem(menu: menu, item: item), isEnabled(menuItem) else { return nil }
+            let ready = try poll(timeout: readyTimeout, interval: 0.2) { () -> Bool? in
+                guard let resolved = try resolve(item), isEnabled(resolved.element) else { return nil }
                 return true
             }
             if ready == nil {
                 if presses > 0 && !isPresent(target) { return }
-                throw DeliveryError("Mail's \(menu) > \(item) menu item did not become available within \(Int(readyTimeout))s; the \(window.displayName) was not sent")
+                throw DeliveryError("Mail's \(item.fallbackName) menu item (\(item.shortcutName)) did not become available within \(Int(readyTimeout))s; the \(window.displayName) was not sent")
             }
-            switch try guardedPress(menu: menu, item: item, on: target, window: window, checks: checks, timeout: guardTimeout) {
+            switch try guardedPress(item, on: target, window: window, checks: checks, timeout: guardTimeout) {
             case .targetGone:
                 if presses > 0 { return }
-                throw DeliveryError("The \(window.displayName) window closed before the \(menu) > \(item) press")
+                throw DeliveryError("The \(window.displayName) window closed before the \(item.fallbackName) press")
             case let .pressed(result):
                 presses += 1
                 lastPress = result
@@ -303,10 +347,10 @@ private final class PlanRun {
             let gone = poll(timeout: goneTimeout) { isPresent(target) ? nil : true }
             if gone != nil { return }
             if hasSheet(target) {
-                throw DeliveryError("A sheet is open on the \(window.displayName) window after the \(menu) > \(item) press; not pressing \(item) through it, and the message was not sent")
+                throw DeliveryError("A sheet is open on the \(window.displayName) window after the \(item.fallbackName) press; not pressing \(item.fallbackTitle) through it, and the message was not sent")
             }
         }
-        throw DeliveryError("\(item) did not complete: the \(window.displayName) window is still open after \(maxPresses) \(menu) > \(item) presses (the last press returned AX error \(lastPress.rawValue))")
+        throw DeliveryError("\(item.fallbackTitle) did not complete: the \(window.displayName) window is still open after \(maxPresses) \(item.fallbackName) presses (the last press returned AX error \(lastPress.rawValue))")
     }
 
     // MARK: - Closing
