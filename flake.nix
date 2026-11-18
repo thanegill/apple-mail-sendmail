@@ -12,6 +12,21 @@
 
       perSystem = { config, self', pkgs, system, ... }:
         let
+          # The pinned nixpkgs ships Tart 2.30.6, which predates macOS 27
+          # guests (Cirrus Labs' golden-gate images), and `tart exec` before
+          # 2.41.1 can drop or truncate large output (openai/tart#1347).
+          tart = pkgs.tart.overrideAttrs (finalAttrs: previousAttrs: {
+            version = "2.42.0";
+            src = pkgs.fetchurl {
+              url = "https://github.com/openai/tart/releases/download/${finalAttrs.version}/tart.tar.gz";
+              hash = "sha256-qV3aIUtfZ2KYQw1mWoF0mS5rMA3SDGUzhbYEga6Bnd8=";
+            };
+            # Running tart.app during the build makes macOS 27 tag the bundle
+            # (com.apple.macl), and Nix then fails to register the output.
+            doInstallCheck = false;
+            meta = previousAttrs.meta // { license = pkgs.lib.licenses.fsl11Asl20; };
+          });
+
           # `withSendmailSymlink` controls whether $out/bin/sendmail is created
           # as a symlink to apple-mail-sendmail (drop-in compatibility). Default
           # true; pass false to install only the canonical binary name.
@@ -87,6 +102,13 @@
             meta.description = "Live end-to-end tests for apple-mail-sendmail against a local Mailpit";
           };
         in {
+          # Tart is source-available (FSL-1.1), so nixpkgs marks it unfree.
+          # Allow that one package rather than setting allowUnfree.
+          _module.args.pkgs = import inputs.nixpkgs {
+            inherit system;
+            config.allowUnfreePredicate = pkg: inputs.nixpkgs.lib.getName pkg == "tart";
+          };
+
           packages.default = makeSendmail { };
           packages.without-sendmail-symlink = makeSendmail { withSendmailSymlink = false; };
           packages.e2e = e2eHarness;
@@ -113,6 +135,7 @@
             packages = [
               pkgs.swift
               pkgs.swiftpm
+              tart
             ];
           };
 
