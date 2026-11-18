@@ -268,10 +268,72 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         }
     },
 
-    TestCase(name: "subject_is_passed_verbatim") {
-        for subject in ["He said \"hi\" \\", "before\u{2028}after\u{2029}end", "a\r\nb", "caf\u{E9} \u{1F600}"] {
+    TestCase(name: "subject_quotes_backslashes_and_non_ascii_pass_through") {
+        for subject in ["He said \"hi\" \\", "caf\u{E9} e\u{0301} \u{1F600}", "tab\there", "del\u{7F}"] {
             let recorder = try plainEvents(message(subject: subject))
             try expectEqual(recorder.messageProperties["subj"], .text(subject))
+        }
+    },
+
+    TestCase(name: "line_breaks_and_controls_are_normalized_in_every_text_event") {
+        var opts = Options()
+        opts.send = true
+        opts.fromAddress = "ops\u{1B}@example.test"
+        var msg = message(subject: "before\u{2028}after\u{2029}end\r\nx\ry", body: "one\r\ntwo\rthree\u{0C}four\u{2028}five")
+        msg.to = [ParsedAddress(displayName: "Al\r\nice\u{0}", address: "a\u{7}@x")]
+        msg.cc = [ParsedAddress(displayName: "B\u{2029}ob", address: "b@y")]
+        msg.bcc = [ParsedAddress(displayName: nil, address: "c\r@z")]
+        let recorder = try plainEvents(msg, options: opts)
+        try expectEqual(recorder.messageProperties["subj"], .text("before\nafter\nend\nx\ny"))
+        try expectEqual(recorder.messageProperties["sndr"], .text("ops @example.test"))
+        try expectEqual(recorder.events.first { $0.name == "core/setd" }?.params["data"], .text("one\ntwo\nthree four\nfive"))
+        try expectEqual(recorder.creations(of: "trcp").map { $0.params["prdt"] }, [.record(["radd": .text("a @x"), "pnam": .text("Al\nice ")])])
+        try expectEqual(recorder.creations(of: "crcp").map { $0.params["prdt"] }, [.record(["radd": .text("b@y"), "pnam": .text("B\nob")])])
+        try expectEqual(recorder.creations(of: "brcp").map { $0.params["prdt"] }, [.record(["radd": .text("c\n@z")])])
+        for text in recorder.allTexts {
+            try expect(!text.unicodeScalars.contains { ($0.value < 0x20 && $0 != "\n" && $0 != "\t") || $0 == "\u{2028}" || $0 == "\u{2029}" }, "unnormalized text reached Mail: \(text.debugDescription)")
+        }
+    },
+
+    TestCase(name: "dry_run_plan_shows_the_normalized_text") {
+        let compose = PlainCompose(
+            subject: "a\r\nb", sender: "S\u{1}", body: "x\ry",
+            to: [ParsedAddress(displayName: "N\u{2028}", address: "t@x")], cc: [], bcc: [],
+            attachmentURLs: [], send: false
+        )
+        let lines = PlainPlan.jsonLines(PlainPlan.steps(compose))
+        try expectEqual(lines[1], #"{"sender":"S ","step":"make_message","subject":"a\nb","visible":true}"#)
+        try expectEqual(lines[2], #"{"step":"set_content","text":"x\ny"}"#)
+        try expectEqual(lines[3], #"{"address":"t@x","kind":"to","name":"N\n","step":"add_recipient"}"#)
+    },
+
+    // The inputs of the old AppleScript.quote tests, with the value Mail
+    // ended up with: what AppleScript decoded from the quoted literal, except
+    // that CR now becomes LF.
+    TestCase(name: "sanitized_matches_the_old_quote_on_its_test_inputs") {
+        let cases: [(String, String)] = [
+            ("", ""),
+            ("plain ASCII 123", "plain ASCII 123"),
+            ("q\"b\\", "q\"b\\"),
+            ("n\nr\rt\t", "n\nr\nt\t"),
+            ("a\r\nb", "a\nb"),
+            ("a\r\r\nb\n\rc", "a\n\nb\n\nc"),
+            ("ls\u{2028}ps\u{2029}", "ls\nps\n"),
+            ("nul\u{00}esc\u{1B}us\u{1F}", "nul esc us "),
+            ("del\u{7F}", "del\u{7F}"),
+            ("next-line\u{85}c1", "next-line\u{85}c1"),
+            ("caf\u{E9} e\u{0301} \u{1F600} \u{1F1FA}\u{1F1F8}", "caf\u{E9} e\u{0301} \u{1F600} \u{1F1FA}\u{1F1F8}"),
+            ("a\u{01}\u{0301}b\r\u{0301}c", "a \u{0301}b\n\u{0301}c"),
+            ("\"\u{0301}", "\"\u{0301}"),
+            ("\u{0600}\"", "\u{0600}\""),
+            ("\\\u{0301}", "\\\u{0301}"),
+            ("a\u{0}b\u{7}c\td\u{1b}e", "a b c\td e"),
+            (EncodedWord.decode("=?UTF-8?Q?line1=0D=0Aline2=0Dline3=0Aend?="), "line1\nline2\nline3\nend"),
+            ("X\u{0600}\" & (count {1, 2, 3}) & (character id {80, 87, 78}) & \"\u{0301}", "X\u{0600}\" & (count {1, 2, 3}) & (character id {80, 87, 78}) & \"\u{0301}"),
+        ]
+        for (input, expected) in cases {
+            let actual = MailText.sanitized(input)
+            try expect(actual.unicodeScalars.elementsEqual(expected.unicodeScalars), "\(input.debugDescription): expected \(expected.debugDescription), got \(actual.debugDescription)")
         }
     },
 

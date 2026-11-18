@@ -35,18 +35,50 @@ public enum PlainStep: Equatable {
     case send
 }
 
+/// The text the plain path hands Mail, with line breaks and control
+/// characters normalized much as the old `AppleScript.quote` did (it kept
+/// CR, and the body never went through it; see CLAUDE.md).
+public enum MailText {
+    /// CR and CRLF become LF, as do U+2028 LINE SEPARATOR and U+2029
+    /// PARAGRAPH SEPARATOR; any other C0 control except tab and LF becomes
+    /// a space. Everything else, DEL and combining marks included, is kept.
+    /// Works per scalar, so a control fused with a combining mark into one
+    /// Character is still mapped and the mark kept.
+    public static func sanitized(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        var previousWasCR = false
+        for scalar in text.unicodeScalars {
+            switch scalar {
+            case "\n" where previousWasCR:
+                break
+            case "\r", "\u{2028}", "\u{2029}":
+                out.append("\n")
+            case "\n", "\t":
+                out.append(scalar)
+            case _ where scalar.value < 0x20:
+                out.append(" ")
+            default:
+                out.append(scalar)
+            }
+            previousWasCR = scalar == "\r"
+        }
+        return String(out)
+    }
+}
+
 public enum PlainPlan {
     public static func steps(_ compose: PlainCompose) -> [PlainStep] {
+        let text = MailText.sanitized
         var steps: [PlainStep] = [
             .launchMail(timeoutMs: 10_000),
-            .makeMessage(subject: compose.subject, visible: !compose.send, sender: compose.sender),
-            .setContent(compose.body),
+            .makeMessage(subject: text(compose.subject), visible: !compose.send, sender: compose.sender.map(text)),
+            .setContent(text(compose.body)),
         ]
         let recipients: [(RecipientKind, [ParsedAddress])] = [(.to, compose.to), (.cc, compose.cc), (.bcc, compose.bcc)]
         for (kind, addresses) in recipients {
             for address in addresses {
-                let name = address.displayName.flatMap { $0.isEmpty ? nil : $0 }
-                steps.append(.addRecipient(kind, address: address.address, name: name))
+                let name = address.displayName.flatMap { $0.isEmpty ? nil : text($0) }
+                steps.append(.addRecipient(kind, address: text(address.address), name: name))
             }
         }
         steps += compose.attachmentURLs.map { .addAttachment(path: $0.path) }
