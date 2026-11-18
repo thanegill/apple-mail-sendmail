@@ -8,5 +8,6 @@ let result = runSuites([
     encodedWordTests,
     mimeTests,
     mailDriverTests,
+    appleScriptCompileTests,
 ])
 exit(result)
