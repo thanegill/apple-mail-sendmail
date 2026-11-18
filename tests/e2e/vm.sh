@@ -36,7 +36,7 @@ mobileconfig=$harness_resources/e2e-accounts.mobileconfig
 nix_installer=${E2E_VM_NIX_INSTALLER:?E2E_VM_NIX_INSTALLER must name the Nix install script}
 
 golden=${E2E_VM_GOLDEN:-sendmail-e2e-golden}
-base_image=${E2E_VM_BASE_IMAGE:-ghcr.io/cirruslabs/macos-golden-gate-base:latest}
+base_image=${E2E_VM_BASE_IMAGE:-ghcr.io/cirruslabs/macos-golden-gate-base@sha256:4859ea9483a1f6e377301f23a5243798044266a373fc36635e9dcd045e09292f}
 state_dir=${E2E_VM_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/apple-mail-sendmail-e2e-vm}
 results_root=""
 boot_timeout=""
