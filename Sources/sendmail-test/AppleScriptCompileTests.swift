@@ -148,7 +148,7 @@ let appleScriptCompileTests = TestSuite(name: "AppleScriptCompile", cases: [
     TestCase(name: "every_script_captured_from_maildriver_suite_compiles") {
         try requireAppleScriptCompiler()
         let missingCaptureHint = "the MailDriver suite must run before this one"
-        try expect(capturedMailDriverScripts.contains { $0.source.contains("keystroke \"d\"") }, "no edit-draft script captured; \(missingCaptureHint)")
+        try expect(capturedMailDriverScripts.contains { $0.source.contains("click menu item \"Send Again\"") }, "no edit-draft script captured; \(missingCaptureHint)")
         try expect(capturedMailDriverScripts.contains { $0.source.contains("make new outgoing message") }, "no classic script captured; \(missingCaptureHint)")
         var failures: [String] = []
         for captured in capturedMailDriverScripts {
