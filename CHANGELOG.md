@@ -4,6 +4,8 @@ Notable changes to apple-mail-sendmail. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-18
+
 ### Added
 
 - `--no-ui` (or `SENDMAIL_NO_UI=1`): send a plain-text message through Apple Events without bringing Mail to the front. It needs Automation for Mail instead of Accessibility. On this path Mail sends the body quoted (Apple bug FB11734014), and HTML messages are refused (exit 64). (#65)
@@ -65,5 +67,6 @@ The first tagged version: a sendmail-compatible CLI that hands each message to A
 - CR or LF in a header value could inject headers into the `.eml`. (#29)
 - HTML sends failed on a cold or busy Mail (-1700, -2700). (#30)
 
-[Unreleased]: https://github.com/thanegill/apple-mail-sendmail/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/thanegill/apple-mail-sendmail/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/thanegill/apple-mail-sendmail/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/thanegill/apple-mail-sendmail/releases/tag/v0.1.0
