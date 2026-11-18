@@ -12,5 +12,6 @@ let result = runSuites([
     accessibilityTests,
     axHTMLDeliveryTests,
     failureReportTests,
+    permissionCheckTests,
 ])
 exit(result)

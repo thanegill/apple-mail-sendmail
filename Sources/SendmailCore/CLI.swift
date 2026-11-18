@@ -3,11 +3,15 @@ import Foundation
 public enum InfoRequest: Equatable {
     case help
     case version
+    /// Report the Accessibility and Automation grants; exits 0 only when
+    /// both are in place.
+    case checkPermissions
 }
 
 public struct Options {
-    /// Set when argv asks for help or version output instead of delivery;
-    /// the caller prints it and exits 0 without reading stdin.
+    /// Set when argv asks for help, version or permission-check output
+    /// instead of delivery; the caller prints it and exits without reading
+    /// stdin.
     public var infoRequest: InfoRequest? = nil
     public var readRecipientsFromHeaders: Bool = false
     public var fromAddress: String? = nil
@@ -65,6 +69,9 @@ public enum CLI {
                     return opts
                 case "--version":
                     opts.infoRequest = .version
+                    return opts
+                case "--check-permissions":
+                    opts.infoRequest = .checkPermissions
                     return opts
                 default:
                     throw CLIError.usage("unknown option: \(arg)")
@@ -164,6 +171,7 @@ public enum CLI {
             ("-f <addr>",           "Set the From address (Mail.app account selector)."),
             ("-F <name>",           "Set the From display name. Applies only with -f."),
             ("--send",              "Actually deliver the message. Default is draft for review."),
+            ("--check-permissions", "Report whether Accessibility (HTML messages) and Automation for Mail (plain-text messages) are granted, and how to grant them. Starts Mail if needed and may show macOS's Automation prompt; sends nothing and reads no stdin. Exits 0 when both are granted, 78 otherwise."),
             ("--help",              "Show this help."),
             ("--version",           "Show version."),
         ]
@@ -182,6 +190,7 @@ public enum CLI {
         out += "  Mail's Fonts & Colors preferences.\n"
         out += "\n"
         out += "USAGE: \(programName) [-t] [-f <addr>] [-F <name>] [--send] [<recipient> ...]\n"
+        out += "       \(programName) --check-permissions\n"
         out += "\n"
         out += "OPTIONS:\n"
         out += formatTwoColumn(options) + "\n"

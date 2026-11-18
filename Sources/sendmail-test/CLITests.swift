@@ -194,6 +194,34 @@ let cliTests = TestSuite(name: "CLI", cases: [
         try expectEqual(opts.infoRequest, .version)
     },
 
+    TestCase(name: "check_permissions_flag_requests_the_permission_check") {
+        let opts = try CLI.parse(["--check-permissions"], env: [:])
+        try expectEqual(opts.infoRequest, .checkPermissions)
+    },
+
+    TestCase(name: "check_permissions_wins_over_later_args") {
+        let opts = try CLI.parse(["--check-permissions", "--send", "user@x.com"], env: ["SENDMAIL_SEND": "1"])
+        try expectEqual(opts.infoRequest, .checkPermissions)
+        try expectEqual(opts.recipients, [])
+    },
+
+    TestCase(name: "check_permissions_after_sendmail_flags_still_requests_it") {
+        let opts = try CLI.parse(["-oi", "-t", "--check-permissions"], env: [:])
+        try expectEqual(opts.infoRequest, .checkPermissions)
+    },
+
+    TestCase(name: "check_permissions_misspelled_is_a_usage_error") {
+        try expectUsageError(["--check-permission"], containing: "unknown option: --check-permission")
+    },
+
+    TestCase(name: "help_text_documents_check_permissions") {
+        let h = CLI.helpText(programName: "sendmail")
+        try expect(h.contains("       sendmail --check-permissions\n"), "missing the --check-permissions USAGE line")
+        let optionLine = h.split(separator: "\n").first { $0.hasPrefix("  --check-permissions ") } ?? ""
+        try expect(optionLine.contains("Report whether Accessibility"), "missing --check-permissions in OPTIONS:\n\(h)")
+        try expect(h.contains("78 otherwise"), "the option must give its exit codes")
+    },
+
     TestCase(name: "ordinary_parse_has_no_info_request") {
         let opts = try CLI.parse(["-t", "user@x.com"], env: [:])
         try expectNil(opts.infoRequest)
