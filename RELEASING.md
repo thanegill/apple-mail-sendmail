@@ -13,9 +13,9 @@ The version lives in one place, `PackageVersion.string` in
 
 ## Cutting a release
 
-Both steps need a logged-in `gh` and never switch or modify your
-checkout. Add `--dry-run` to either one to see what it would do without
-pushing or publishing anything.
+The `prepare` and `tag` commands need a logged-in `gh` and never switch
+or modify your checkout. Add `--dry-run` to either one to see what it
+would do without pushing or publishing anything.
 
 1. **Prepare.** From a clean checkout:
 
@@ -30,9 +30,21 @@ pushing or publishing anything.
    runs `nix flake check -L`, commits `Release vX.Y.Z`, pushes, and opens
    a PR labelled `release` whose body previews the release notes.
 
-2. **Review and merge** the PR once CI passes.
+2. **Run the live end-to-end suite** against the release candidate, in
+   the Tart VM (see [Live end-to-end tests](#live-end-to-end-tests)).
+   From a checkout of the release branch:
 
-3. **Tag.**
+   ```sh
+   git fetch origin
+   git switch --detach origin/release/vX.Y.Z
+   nix run .#e2e-vm
+   ```
+
+   All 12 scenarios must pass.
+
+3. **Review and merge** the PR once CI passes.
+
+4. **Tag.**
 
    ```sh
    nix run .#release -- tag X.Y.Z
@@ -63,6 +75,22 @@ nix run github:thanegill/apple-mail-sendmail/vX.Y.Z -- --version
 ```nix
 inputs.apple-mail-sendmail.url = "github:thanegill/apple-mail-sendmail/vX.Y.Z";
 ```
+
+## Live end-to-end tests
+
+CI runs `nix flake check`, but not the live suite: the suite drives
+Mail.app, and the binary's HTML path needs Accessibility, which a
+GitHub-hosted runner cannot grant. The live suite
+runs locally, in a disposable Tart VM cloned from a prepared golden
+image ([`tests/e2e/README.md`](tests/e2e/README.md), "Running it in a
+Tart VM"):
+
+- **Before every release**, run the full suite, `nix run .#e2e-vm` (all
+  12 scenarios), against the release candidate (step 2 above).
+- **After a macOS or Mail update**, rebuild or refresh the golden VM
+  image with `nix run .#e2e-vm -- --setup-golden`, so the suite runs
+  against the Mail that users have. To rebuild from scratch, delete the
+  old golden VM and its marker first, as that README shows.
 
 ## If tagging fails
 

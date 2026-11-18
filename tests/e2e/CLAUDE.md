@@ -62,7 +62,7 @@ Guidance for working on the live end-to-end harness in this directory and its Ta
 
 ## Running it in a Tart VM (`vm.sh`)
 
-`nix run .#e2e-vm` clones a prepared golden VM, runs the harness in the clone through `tart exec`, copies results back and deletes the clone; `--setup-golden` builds the golden VM with a human. `README.md` in this directory, "Running it in a Tart VM", has the details.
+`nix run .#e2e-vm` clones a prepared golden VM, runs the harness in the clone through `tart exec`, copies results back and deletes the clone; `--setup-golden` builds the golden VM with a human. `README.md` in this directory, "Running it in a Tart VM", has the details. The full suite runs there before every release, and the golden VM is rebuilt after a macOS or Mail update (`../../RELEASING.md`, "Live end-to-end tests").
 
 - Agents must not create, clone, run, stop or delete VMs, pull images, or run either mode without the user's explicit go-ahead: setup pulls about 32 GB, and a run drives Mail (inside the VM). Fine without asking: `tart list`, the wrapper's own `--help`, `nix run .#e2e-vm -- -- --help` and `-- --list` (the wrapper runs those in the harness on the host, where they only print), and building the package. Every other harness argument set boots a clone once the host-side argument check passes.
 - Every boot passes `tart run --no-audio` (in `start_vm`'s `run_args`), so no VM plays sound on the host; keep it when adding display modes.

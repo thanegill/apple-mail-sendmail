@@ -21,6 +21,11 @@ macOS user or VM that has nothing but the two test accounts (see
 [One-time setup](#one-time-setup)), or let `nix run .#e2e-vm` run it in a
 disposable Tart VM (see [Running it in a Tart VM](#running-it-in-a-tart-vm)).
 
+CI cannot run the live suite, because GitHub-hosted runners cannot grant
+Accessibility. It runs in the Tart VM before every release, and the
+golden VM is rebuilt after a macOS or Mail update; see
+[`RELEASING.md`](../../RELEASING.md#live-end-to-end-tests).
+
 ## Running it
 
 Run these from the repository root:

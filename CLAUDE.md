@@ -38,7 +38,7 @@ attachment files, and makes no Apple Event, Accessibility or Launch Services
 call.
 Useful when iterating on `MailDriver`.
 
-The live end-to-end harness (`nix run .#e2e`, which drives Mail.app and must not be run without the user's go-ahead) and its Tart VM wrapper (`nix run .#e2e-vm`) have their own guidance in `tests/e2e/CLAUDE.md`.
+The live end-to-end harness (`nix run .#e2e`, which drives Mail.app and must not be run without the user's go-ahead) and its Tart VM wrapper (`nix run .#e2e-vm`) have their own guidance in `tests/e2e/CLAUDE.md`. CI cannot run the live suite (GitHub-hosted runners cannot grant Accessibility), so it runs in the Tart VM before every release and the golden VM is rebuilt after a macOS or Mail update; the cadence is in `RELEASING.md`, "Live end-to-end tests".
 
 ## Architecture
 
