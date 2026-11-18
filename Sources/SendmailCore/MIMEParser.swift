@@ -23,7 +23,7 @@ public enum MIMEParser {
         } else {
             let cte = (raw.value(for: "Content-Transfer-Encoding") ?? "").lowercased()
             let decoded = decodeTransfer(raw.body, encoding: cte)
-            let charset = params["charset"] ?? "utf-8"
+            let charset = parameterValue(params, named: "charset") ?? "utf-8"
             let text = EncodedWord.decodeBytes(decoded, charset: charset) ?? ""
             if mt == "text/html" {
                 msg.htmlBody = text
@@ -42,7 +42,7 @@ public enum MIMEParser {
         into msg: inout ParsedMessage,
         depth: Int
     ) {
-        guard let boundary = params["boundary"], !boundary.isEmpty else { return }
+        guard let boundary = parameterValue(params, named: "boundary"), !boundary.isEmpty else { return }
         if depth > 4 { return }
         // RFC 2046 5.1.5: a digest's parts default to message/rfc822.
         let defaultPartType = multipartType == "multipart/digest" ? "message/rfc822" : "text/plain"
@@ -65,15 +65,15 @@ public enum MIMEParser {
             let cte = (sub.value(for: "Content-Transfer-Encoding") ?? "").lowercased()
             let decoded = decodeTransfer(sub.body, encoding: cte)
 
-            let partName = parameterValue(dispParams, named: "filename")
-                ?? parameterValue(subParams, named: "name")
+            let partName = parameterValue(dispParams, named: "filename", plainDecoding: EncodedWord.decode)
+                ?? parameterValue(subParams, named: "name", plainDecoding: EncodedWord.decode)
             let isAttachment = dispMain == "attachment"
                 || partName != nil
                 || (mt.hasPrefix("text/") == false && mt != "")
 
             // Treat text/* without an explicit attachment disposition as a body candidate.
             if !isAttachment && mt.hasPrefix("text/") {
-                let charset = subParams["charset"] ?? "utf-8"
+                let charset = parameterValue(subParams, named: "charset") ?? "utf-8"
                 let text = EncodedWord.decodeBytes(decoded, charset: charset) ?? ""
 
                 // Capture raw HTML for the rich-HTML render path independent of
@@ -105,13 +105,19 @@ public enum MIMEParser {
         }
     }
 
-    /// Resolve a filename-style parameter to display text. An RFC 2231
+    /// Resolve a MIME parameter, which RFC 2231 lets any parameter encode. An
     /// extended form (`name*=charset'lang'%XX..` or continuations `name*0*=`,
     /// `name*1=`, ...) wins over the plain `name=` that senders include as a
-    /// legacy fallback; the plain form is RFC 2047-decoded.
-    private static func parameterValue(_ params: [String: String], named name: String) -> String? {
+    /// legacy fallback. `plainDecoding` applies to the plain form and to
+    /// all-literal continuations: filenames pass RFC 2047 decoding there,
+    /// since senders put encoded-words in them; a boundary must stay verbatim.
+    private static func parameterValue(
+        _ params: [String: String],
+        named name: String,
+        plainDecoding: (String) -> String = { $0 }
+    ) -> String? {
         if let extended = params["\(name)*"] {
-            return decodeExtendedValue([(text: extended, isEncoded: true)])
+            return decodeExtendedValue([(text: extended, isEncoded: true)], plainDecoding: plainDecoding)
         }
 
         var segments: [(text: String, isEncoded: Bool)] = []
@@ -126,19 +132,22 @@ public enum MIMEParser {
             }
         }
         if !segments.isEmpty {
-            return decodeExtendedValue(segments)
+            return decodeExtendedValue(segments, plainDecoding: plainDecoding)
         }
 
-        return params[name].map { EncodedWord.decode($0) }
+        return params[name].map(plainDecoding)
     }
 
     /// Join RFC 2231 segments into one string. Only the first segment may
     /// carry the `charset'language'` prefix, and only when it is encoded.
-    /// All-literal continuations get the same RFC 2047 decoding as a plain
+    /// All-literal continuations get the same `plainDecoding` as a plain
     /// parameter, since some senders split an encoded-word across them.
-    private static func decodeExtendedValue(_ segments: [(text: String, isEncoded: Bool)]) -> String {
+    private static func decodeExtendedValue(
+        _ segments: [(text: String, isEncoded: Bool)],
+        plainDecoding: (String) -> String
+    ) -> String {
         guard segments.contains(where: \.isEncoded) else {
-            return EncodedWord.decode(segments.map(\.text).joined())
+            return plainDecoding(segments.map(\.text).joined())
         }
         var charset = "utf-8"
         var bytes = Data()

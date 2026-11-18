@@ -643,6 +643,24 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expect(String(decoding: msg.attachments[0].data, as: UTF8.self).hasPrefix("From: someone-else\n"))
     },
 
+    // RFC 2231 applies to every parameter, not just filenames: boundary*= and
+    // charset*= (as CPython's test_email msg_33 sends them).
+    TestCase(name: "rfc2231_extended_boundary_and_charset") {
+        let input = """
+        Content-Type: multipart/signed; micalg*=ansi-x3.4-1968''pgp-md5;
+        \tboundary*="ansi-x3.4-1968''EeQfGwPcQSOJBaQU"
+
+        --EeQfGwPcQSOJBaQU
+        Content-Type: text/plain; charset*=us-ascii''iso-8859-1
+        Content-Transfer-Encoding: quoted-printable
+
+        caf=E9
+        --EeQfGwPcQSOJBaQU--
+        """
+        let msg = MIMEParser.parse(try RFC822Parser.parse(Data(input.utf8)))
+        try expectEqual(msg.body, "caf\u{E9}")
+    },
+
     TestCase(name: "rfc2231_continuation_gap_stops_joining") {
         try expectEqual(
             try attachmentFilenames(contentDisposition: "attachment; filename*0*=UTF-8''a; filename*2*=c"),

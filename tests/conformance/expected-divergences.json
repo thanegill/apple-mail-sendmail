@@ -1,14 +1,6 @@
 {
   "findings": [
     {
-      "id": "rfc2231-boundary",
-      "class": "ours-bug",
-      "note": "RFC 2231 applies to every MIME parameter. MIMEParser only resolved the extended forms of name and filename, so boundary*= (and charset*=) were ignored and the multipart came out empty.",
-      "cases": [
-        "cpython/msg_33.txt body"
-      ]
-    },
-    {
       "id": "comment-quoted-pair",
       "class": "ours-bug",
       "note": "RFC 5322 3.2.2: a comment may contain a quoted-pair. AddressParser's comment stripper ended the comment at an escaped \\), leaking the comment's tail into the display name (RFC 5322 A.5).",
