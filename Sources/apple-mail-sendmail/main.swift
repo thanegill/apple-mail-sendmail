@@ -22,6 +22,19 @@ case .help:
 case .version:
     print(CLI.versionText)
     exit(ExitCode.ok.rawValue)
+case .checkPermissions:
+    if env["SENDMAIL_DRY_RUN"] == "1" {
+        die("--check-permissions is not available with SENDMAIL_DRY_RUN=1: it starts Mail and may show a permission prompt", code: .usage)
+    }
+    let clock = SystemClock()
+    let report = PermissionCheck.run(
+        probe: SystemPermissionProbe(),
+        workspace: SystemMailWorkspace(clock: clock),
+        clock: clock,
+        osMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    )
+    print(report.text)
+    exit(report.exitCode.rawValue)
 case nil:
     break
 }
