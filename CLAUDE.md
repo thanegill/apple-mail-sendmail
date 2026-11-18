@@ -11,7 +11,7 @@ nix build               # builds binary + runs all unit tests
 nix flake check         # same, plus evaluates other flake outputs
 ```
 
-CI (`.github/workflows/ci.yml`) runs `nix flake check -L` on `macos-latest` for every PR and every push to `master`, with Nix installed by `DeterminateSystems/nix-installer-action` and `sandbox = false` so the AppleScriptCompile suite runs instead of skipping. Actions are pinned to full commit SHAs with the version in a comment; lint workflow edits with `nix run nixpkgs#actionlint -- .github/workflows/*.yml`.
+CI (`.github/workflows/ci.yml`) runs `nix flake check -L` on `macos-latest` for every PR and every push to `master`, with Nix installed by `DeterminateSystems/nix-installer-action` and `sandbox = false`, the default macOS Nix setting the suite is run under locally. Actions are pinned to full commit SHAs with the version in a comment; lint workflow edits with `nix run nixpkgs#actionlint -- .github/workflows/*.yml`.
 
 For iterative work, enter the dev shell and use Swift directly:
 
@@ -32,9 +32,10 @@ SENDMAIL_DRY_RUN=1 ./result/bin/apple-mail-sendmail -t < msg.eml
 ```
 
 `SENDMAIL_DRY_RUN=1` makes the binary print what it would do instead of
-doing it: the HTML path's step plan (`HTMLPlan`, one JSON object per line)
-or the plain path's AppleScript. It still writes the `.eml` and other temp
-files, and makes no Apple Event, Accessibility or Launch Services call.
+doing it: the step plan of whichever path the message takes (`HTMLPlan` or
+`PlainPlan`), one JSON object per line. It still writes the `.eml` and the
+attachment files, and makes no Apple Event, Accessibility or Launch Services
+call.
 Useful when iterating on `MailDriver`.
 
 The live end-to-end harness (`nix run .#e2e`, which drives Mail.app and must not be run without the user's go-ahead) and its Tart VM wrapper (`nix run .#e2e-vm`) have their own guidance in `tests/e2e/CLAUDE.md`.
@@ -57,27 +58,36 @@ stdin bytes -> RFC822Parser -> MIMEParser -> ParsedMessage -> MailDriver -> Mail
 
 - `RFC822Parser.parse(Data)` produces `RawMessage` (ordered headers + raw body bytes; no MIME interpretation).
 - `MIMEParser.parse(RawMessage)` interprets `Content-Type`, walks `multipart/*` parts, decodes `base64` / `quoted-printable` transfer encodings, and decodes RFC 2047 encoded-words in `Subject` and display names. Populates `htmlBody` from any `text/html` part alongside the stripped plain-text `body`.
-- `MailDriver.deliver(...)` chooses the path, stages files in the temp dir, and hands the message to a `MailAutomation`: its `html` delivery for a message with an HTML body, its `plain` delivery otherwise. The HTML path is **pass-through**: `main.swift` constructs the .eml bytes via `EmlBuilder.buildEml(raw:finalRecipients:options:)` (raw stdin headers + body, with CLI flag-driven header overrides applied to To/Cc/Bcc/From), `MailDriver.deliver` writes them to a temp `.eml`, and `AXHTMLDelivery` runs `HTMLPlan.steps` through Accessibility and Launch Services, with no Apple Events: check Accessibility, start Mail if needed, open the `.eml` as a viewer, find the viewer by window diff (never by subject/title -- see the gotcha below), press Message > Send Again after the key-window guard, which converts the viewer into a brand-new editable compose with full WKWebView fidelity, find the compose the same way, on `--send` press Message > Send on it with a bounded retry, and close the leftover viewer. The plain-text path (`AppleScriptPlainDelivery`) runs for messages without HTML and uses `make new outgoing message` + `set content to (read POSIX file ... as «class utf8»)`.
+- `MailDriver.deliver(...)` chooses the path, stages files in the temp dir, and hands the message to a `MailAutomation`: its `html` delivery for a message with an HTML body, its `plain` delivery otherwise. The HTML path is **pass-through**: `main.swift` constructs the .eml bytes via `EmlBuilder.buildEml(raw:finalRecipients:options:)` (raw stdin headers + body, with CLI flag-driven header overrides applied to To/Cc/Bcc/From), `MailDriver.deliver` writes them to a temp `.eml`, and `AXHTMLDelivery` runs `HTMLPlan.steps` through Accessibility and Launch Services, with no Apple Events: check Accessibility, start Mail if needed, open the `.eml` as a viewer, find the viewer by window diff (never by subject/title -- see the gotcha below), press Message > Send Again after the key-window guard, which converts the viewer into a brand-new editable compose with full WKWebView fidelity, find the compose the same way, on `--send` press Message > Send on it with a bounded retry, and close the leftover viewer. The plain-text path (`AppleEventPlainDelivery`) runs for messages without HTML and sends Mail one raw Apple Event per `PlainPlan` step: make the outgoing message, set its content, add each recipient and attachment, and send it on `--send` (see "The plain path sends raw Apple Events" below).
 
 ### The MailAutomation injection seam
 
-`MailDriver.deliver(_:emlBytes:options:tmp:automation:)` takes a `MailAutomation` (`Sources/SendmailCore/MailAutomation.swift`): a `PlainDelivery` and an `HTMLDelivery`. `main.swift` builds `AppleScriptPlainDelivery(staging: tmp)`, whose `ScriptRunner` defaults to `AppleScript.run` (NSAppleScript execution), and `AXHTMLDelivery` over `SystemAXClient`, `SystemMailWorkspace` and `SystemClock` (`SystemMailUI.swift`); the dry run uses a printing `ScriptRunner` and `HTMLPlanPrinter`. `AXHTMLDelivery` reaches Mail only through the narrow `AXClient`, `MailWorkspace` and `Clock` protocols (`MailUI.swift`). `FakeMail` (`Sources/sendmail-test/FakeMail.swift`) implements all three as a state machine: windows, focus, sheets, menus that act on the key window and only while Mail is frontmost, and a clock that advances only when the code under test sleeps. Plain-path tests go through the test target's `MailDriver.deliver(..., runner:html:)` extension (`RecordingDeliveries.swift`), which returns the script and records the HTML hand-off. **Anything new that drives Mail.app goes behind these protocols** — never call `NSAppleScript`, AX or NSWorkspace directly from new code, or the tests can't exercise it without launching Mail.app.
+`MailDriver.deliver(_:emlBytes:options:tmp:automation:)` takes a `MailAutomation` (`Sources/SendmailCore/MailAutomation.swift`): a `PlainDelivery` and an `HTMLDelivery`. `main.swift` builds `AppleEventPlainDelivery` over `SystemAppleEventSender` (`AppleEvents.swift`) and `AXHTMLDelivery` over `SystemAXClient`, both with `SystemMailWorkspace` and `SystemClock` (`SystemMailUI.swift`); the dry run uses `PlainPlanPrinter` and `HTMLPlanPrinter`. The deliveries reach Mail only through narrow protocols: `AppleEventSending` (send one event, get the reply) for the plain path, and `AXClient`, `MailWorkspace` and `Clock` (`MailUI.swift`) for the HTML path and for starting Mail. In tests, `AppleEventRecorder` (`Sources/sendmail-test/AppleEventRecorder.swift`) records each event decoded into class, ID and typed parameters (`AEValue`: text, specifiers, insertion locations, file URLs, ...) and answers `make new outgoing message` with a message specifier, and `FakeMail` (`FakeMail.swift`) implements the HTML protocols as a state machine: windows, focus, sheets, menus that act on the key window and only while Mail is frontmost, and a clock that advances only when the code under test sleeps. `RecordingDeliveries.swift` has the test target's `MailDriver.deliver(..., recorder:html:)` and `plainSender` helpers. **Anything new that drives Mail.app goes behind these protocols** — never send an Apple Event, call AX or NSWorkspace directly from new code, or the tests can't exercise it without launching Mail.app.
+
+`FailureReport` (`FailureReport.swift`) turns a delivery error into the message `main.swift` prints and its exit code; the tests cover each mapping.
 
 ### Tests never touch Mail
 
-The plain path is pure script emission and the HTML path runs against `FakeMail`, so `nix build .#default`'s `checkPhase` runs the full suite without Mail, WebKit, pandoc or any Accessibility grant.
+The plain path's events go to `AppleEventRecorder` and the HTML path runs against `FakeMail`, so `nix build .#default`'s `checkPhase` runs the full suite without Mail, WebKit, pandoc, an Automation grant or an Accessibility grant. Building and decoding descriptors (including coercing records to object specifiers) happens in-process and sends nothing.
 
-### AppleScript compile check
+### The plain path sends raw Apple Events
 
-The `AppleScriptCompile` suite (`Sources/sendmail-test/AppleScriptCompileTests.swift`) compiles, never executes, every script the MailDriver suite's recording runner captured, plus a classic-emitter matrix (send/draft x attachments x odd subjects and names), via `NSAppleScript.compileAndReturnError`. A failure names the originating test, the compiler error, and the offending line.
+`AppleEventPlainDelivery` (`PlainPlan.swift`) sends one `NSAppleEventDescriptor` per `PlainPlan` step after `launch_mail`, the same events the old AppleScript compiled to, with codes from Mail's sdef (`/System/Applications/Mail.app/Contents/Resources/Mail.sdef`) and CocoaStandard:
 
-What a compile pass catches: broken block structure (a dropped `end tell` / `end if`, an unclosed record or literal) and unknown class or command terms that break parsing (e.g. `make new to recipient` outside a Mail `tell`). What it does NOT catch: misspelled record labels (`{visable:true}` compiles as a user label), misspelled bare properties that compile as variables, menu / menu-item name strings, and any runtime error. Those still need the text-match tests or a live run.
+| Step | AppleScript it replaces | Event | Parameters |
+|---|---|---|---|
+| `launch_mail` | (implicit in `tell application "Mail"`) | none: `NSWorkspace.openApplication`, not activated | — |
+| `make_message` | `make new outgoing message with properties {subject, visible, sender}` | `core`/`crel` | `kocl` type `bcke`; `prdt` {`subj` text, `pvis` bool, `sndr` text only when a sender is set} |
+| `set_content` | `set content of msg to ...` | `core`/`setd` | `----` property `ctnt` of msg; `data` the body text (no temp file) |
+| `add_recipient` | `make new to/cc/bcc recipient at end of ... recipients with properties {address, name}` | `core`/`crel` | `kocl` `trcp`/`crcp`/`brcp`; `insh` insertion {`kobj` every same-class element of msg, `kpos` `end `}; `prdt` {`radd`, `pnam` only when non-empty} |
+| `add_attachment` | `tell content to make new attachment with properties {file name: POSIX file ...} at after last paragraph` | `core`/`crel` | `kocl` `atts`; `insh` {`kobj` last `cpar` of `ctnt` of msg, `kpos` `afte`}; `prdt` {`atfn` file URL} |
+| `send` | `send msg` | `emsg`/`send` | `----` msg |
 
-Compiling an app's terms (Mail's, and System Events' for the control case) is safe only because both declare a static `OSAScriptingDefinition`: the compiler reads the sdef and neither launches the app, sends it an AppleEvent, nor triggers an Automation prompt. Before compiling, the suite looks each app up through Launch Services and fails (without compiling) if the key is missing, since compiling would then launch the app.
+`msg` is the object specifier Mail returns from `make_message`; a reply without one is an error before anything else is sent. Every event targets Mail by bundle ID, so Mail is started through NSWorkspace first (an event to a Mail that is not running fails with -600, procNotFound). `SystemAppleEventSender` sends with `[.waitForReply, .canInteract]` (NSAppleScript's default) and an explicit 120s timeout, because the default and no-timeout flags are reported unreliable (rdar://21477694), and turns both a thrown error and a reply carrying `keyErrorNumber` into `AppleEventError`. The first failed event stops the run, so a failed recipient never reaches `send`.
 
-`every_script_captured_from_maildriver_suite_compiles` reads the MailDriver suite's captures and asserts the classic emitter is represented, so `appleScriptCompileTests` must stay after `mailDriverTests` in `main.swift`, and focusing on AppleScriptCompile alone still needs MailDriver enabled.
+Errors (`FailureReport`): -1743 keeps the Automation wording ("Mail.app automation denied. Grant permission in System Settings → Privacy & Security → Automation.") and exits 78 (`EX_CONFIG`); -600 says Mail is not running and exits 75 (`EX_TEMPFAIL`), since the event never reached Mail and a retry cannot send twice; any other event error names its code and exits 71. The plain path still needs Automation for Mail, like the AppleScript it replaced: an event from the binary is charged to its responsible process (the terminal, or `tart-guest-agent` in the e2e VM).
 
-Where it runs: the dev shell (`nix develop --command swift run sendmail-test`) and `nix build` under the default macOS Nix setting `sandbox = false`. The only skip condition is the compiler failing to compile a bare `return 1`; under `sandbox = true` that was observed failing with error -2147450879, so the four cases print `SKIP ... (the AppleScript compiler is unavailable here ...)` while the rest of the suite runs. Every other problem (Mail's terms not loading, a missing static sdef) is a FAIL.
+Text goes to Mail as a text descriptor, verbatim: there is no literal to escape, so a quote, backslash, line separator or control character in a subject, name or body cannot change the event.
 
 ## Project-specific constraints (read before changing)
 
@@ -99,7 +109,7 @@ Nixpkgs Swift 5.10 stdlib dylibs are built for macOS 14.0. Lower floors produce 
 
 ### Draft is the product invariant
 
-The plain path emits `visible:true` and omits the `send` verb unless `options.send` is true, and the HTML plan has no Send press (`press_until_window_closes`) unless it is. The default behavior is **draft, not send**. The `--send` flag and `SENDMAIL_SEND=1` environment variable both flip it; the env-var path exists for callers (cron, scripts) that cannot easily change their argv.
+The plain plan makes the message with `visible` true and has no `send` step unless `options.send` is true, and the HTML plan has no Send press (`press_until_window_closes`) unless it is. The default behavior is **draft, not send**. The `--send` flag and `SENDMAIL_SEND=1` environment variable both flip it; the env-var path exists for callers (cron, scripts) that cannot easily change their argv.
 
 ### HTML rendering uses `.eml` + Message > Send Again, not RTF
 
@@ -133,9 +143,9 @@ Send Again is never pressed twice: if no compose appears within 5s, the run fail
 
 The plain-text path does NOT require Accessibility — only Automation for Mail.
 
-**Bcc stays blind on the HTML path.** `EmlBuilder` serializes `Bcc:` as a plain rfc822 header into the `.eml`. Verified empirically (2026-07-08, via `View > Message > Raw Source` on a self-send with a marker Bcc address): Mail's Send Again consumes it as an envelope recipient and strips the `Bcc:` header from every transmitted copy — including the Bcc recipient's own — while still delivering to it. No special handling is needed and no warning should be emitted; this matches the classic path's dedicated bcc-recipient objects.
+**Bcc stays blind on the HTML path.** `EmlBuilder` serializes `Bcc:` as a plain rfc822 header into the `.eml`. Verified empirically (2026-07-08, via `View > Message > Raw Source` on a self-send with a marker Bcc address): Mail's Send Again consumes it as an envelope recipient and strips the `Bcc:` header from every transmitted copy — including the Bcc recipient's own — while still delivering to it. No special handling is needed and no warning should be emitted; this matches the plain path's dedicated bcc-recipient objects.
 
-**HTML messages with attachments work via the `.eml` pass-through.** A message with an HTML body AND attachments routes to the HTML path, so the plain path's `make new attachment` code (after the `shouldUseEditDraft` early return) is bypassed. The attachment is NOT lost -- it rides inside the raw `.eml` that Send Again reconstructs. Verified live (2026-07-09): a `multipart/mixed` html+attachment message arrived with the file attached (Mail nests the sent parts as `multipart/alternative` > `multipart/mixed`, a little oddly but valid). So the `make new attachment` code being dead for HTML messages is expected, not a bug; do not "fix" it by forcing html+attachment onto the classic path.
+**HTML messages with attachments work via the `.eml` pass-through.** A message with an HTML body AND attachments routes to the HTML path, so the plain path's `add_attachment` steps (after the `shouldUseEditDraft` early return) never run. The attachment is NOT lost -- it rides inside the raw `.eml` that Send Again reconstructs. Verified live (2026-07-09): a `multipart/mixed` html+attachment message arrived with the file attached (Mail nests the sent parts as `multipart/alternative` > `multipart/mixed`, a little oddly but valid). So `add_attachment` never running for HTML messages is expected, not a bug; do not "fix" it by forcing html+attachment onto the plain path.
 
 ### Draft injection from outside Mail — reachable only by opening it through the UI, rejected for import churn
 

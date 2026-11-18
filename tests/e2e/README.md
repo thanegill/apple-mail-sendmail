@@ -137,13 +137,17 @@ unexpected is a refusal. A scenario that fails a guard is skipped
     cleans up.
   - Output or an `.eml` containing a NUL byte is refused before anything
     reads it.
-  - The plain-text script is read with a scanner that understands
-    AppleScript string escapes, and every statement must be one
-    MailDriver emits, in order. That means one message with a `sender:`
-    holding exactly one e2e account (otherwise Mail would use its
-    default account); `visible:true` and no `send` for a draft, or
-    `visible:false` and one `send` otherwise; and recipients with exactly
-    one allowed address each.
+  - The plain path prints its step plan too, one JSON object per line,
+    read with `jq`. Each line must be exactly `jq`'s compact, key-sorted
+    form of itself (so a duplicated key or stray whitespace is refused),
+    have exactly its step's keys and value types, and the steps must come
+    in order: launch, make the message, set its content, recipients,
+    attachments, and `send` only for a send run. That means one message
+    whose `sender` holds exactly one e2e account (otherwise Mail would
+    use its default account); `visible` true and no `send` for a draft,
+    or `visible` false and one `send` otherwise; recipients with exactly
+    one allowed address each; and attachments that are files in the dry
+    run's temp dir.
 
 ### Mail's state, checked before every scenario
 
@@ -348,8 +352,9 @@ done
 ```
 
 A binary that keeps its temp files leaves one `sendmail-*` directory per
-mode in its temp dir. A change to the plain-text script needs
-`analyze_plain_script` in [`e2e.sh`](e2e.sh) updated instead.
+mode in its temp dir. The plain path's plan has no template: a change to
+`PlainPlan` needs `analyze_plain_plan` (and its `PLAIN_STEP_JQ` program)
+in [`e2e.sh`](e2e.sh) updated instead.
 
 ## Running it in a Tart VM
 
