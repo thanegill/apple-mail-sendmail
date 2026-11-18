@@ -378,7 +378,7 @@ let axEmlDeliveryTests = TestSuite(name: "AXEmlDelivery", cases: [
         let mail = FakeMail()
         mail.messageTitle = "Kein Betreff"
         mail.sheetOnSend = true
-        try expectFailure(runEml(mail, send: true, subject: ""), containing: "Mail is asking to confirm sending a message with no Subject (a sheet opened on the compose window after the Message > Send press); it is not confirmed, and the message was not sent. HTML --send needs a Subject: add a non-empty Subject header, or leave out --send to get a draft")
+        try expectFailure(runEml(mail, send: true, subject: ""), containing: "Mail is asking to confirm sending a message with no Subject (a sheet opened on the compose window after the Message > Send press); it is not confirmed, and the message was not sent. --send needs a Subject: add a non-empty Subject header, or leave out --send to get a draft")
         try expectEqual(mail.sendPresses.count, 1)
         try expect(mail.sentWindows.isEmpty)
     },

@@ -8,7 +8,7 @@ public struct FailureReport: Equatable {
     public init(_ error: Error) {
         switch error {
         case let failure as AppleEventError where failure.code == -1743:
-            message = "Mail.app automation denied. Grant permission in System Settings → Privacy & Security → Automation. (\(failure.message))"
+            message = "Mail.app automation denied. --no-ui drives Mail with Apple Events, which needs Automation for Mail: grant it in System Settings → Privacy & Security → Automation, or run without --no-ui, which needs Accessibility instead. (\(failure.message))"
             exitCode = .config
         case let failure as AppleEventError where failure.code == -600:
             // -600 means the event never reached Mail, so nothing was sent by
@@ -21,6 +21,9 @@ public struct FailureReport: Equatable {
         case let denied as AccessibilityNotGranted:
             message = denied.description
             exitCode = .config
+        case let refused as HTMLNeedsUI:
+            message = refused.description
+            exitCode = .usage
         case let failure as DeliveryError:
             message = failure.message
             exitCode = .osErr

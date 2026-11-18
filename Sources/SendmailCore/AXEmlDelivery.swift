@@ -378,7 +378,7 @@ private final class PlanRun {
             if gone != nil { return }
             if hasSheet(target) {
                 if WindowCheck.normalizedTitle(subject).isEmpty {
-                    throw DeliveryError("Mail is asking to confirm sending a message with no Subject (a sheet opened on the \(window.displayName) window after the \(item.fallbackName) press); it is not confirmed, and the message was not sent. HTML --send needs a Subject: add a non-empty Subject header, or leave out --send to get a draft")
+                    throw DeliveryError("Mail is asking to confirm sending a message with no Subject (a sheet opened on the \(window.displayName) window after the \(item.fallbackName) press); it is not confirmed, and the message was not sent. --send needs a Subject: add a non-empty Subject header, or leave out --send to get a draft")
                 }
                 throw DeliveryError("A sheet is open on the \(window.displayName) window after the \(item.fallbackName) press; not pressing \(item.fallbackTitle) through it, and the message was not sent")
             }

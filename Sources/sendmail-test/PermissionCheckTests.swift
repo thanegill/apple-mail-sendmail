@@ -49,8 +49,8 @@ let permissionCheckTests = TestSuite(name: "PermissionCheck", cases: [
         try expectEqual(report.automation, .granted)
         try expectEqual(report.exitCode, .ok)
         try expectEqual(probe.accessibilityChecks, 1)
-        try expect(report.text.contains("Accessibility, for HTML messages:             granted"), report.text)
-        try expect(report.text.contains("Automation for Mail, for plain-text messages: granted"), report.text)
+        try expect(report.text.contains("Accessibility, for every message:      granted"), report.text)
+        try expect(report.text.contains("Automation for Mail, only for --no-ui: granted"), report.text)
         try expect(report.text.contains("Everything apple-mail-sendmail needs is granted."), report.text)
         try expect(!report.text.contains("To fix:"), report.text)
     },
@@ -59,14 +59,14 @@ let permissionCheckTests = TestSuite(name: "PermissionCheck", cases: [
         let (report, probe) = check(accessibility: false, osMajorVersion: 27)
         try expectEqual(report.exitCode, .config)
         try expectEqual(probe.mailRunningAtEachAutomationCheck.count, 1)
-        try expect(report.text.contains("Accessibility, for HTML messages:             NOT GRANTED"), report.text)
-        try expect(report.text.contains("- Accessibility, needed for HTML messages: open\n    System Settings > Privacy & Security > Device Control and Data Access\n"), report.text)
+        try expect(report.text.contains("Accessibility, for every message:      NOT GRANTED"), report.text)
+        try expect(report.text.contains("- Accessibility, needed for every message: open\n    System Settings > Privacy & Security > Device Control and Data Access\n"), report.text)
         try expect(!report.text.contains("- Automation for Mail"), "Automation is granted and needs no fix:\n\(report.text)")
     },
 
     TestCase(name: "missing_accessibility_names_the_accessibility_pane_before_macos_27") {
         let (report, _) = check(accessibility: false, osMajorVersion: 26)
-        try expect(report.text.contains("- Accessibility, needed for HTML messages: open\n    System Settings > Privacy & Security > Accessibility\n"), report.text)
+        try expect(report.text.contains("- Accessibility, needed for every message: open\n    System Settings > Privacy & Security > Accessibility\n"), report.text)
         try expect(!report.text.contains("Device Control and Data Access"), report.text)
     },
 
@@ -74,8 +74,8 @@ let permissionCheckTests = TestSuite(name: "PermissionCheck", cases: [
         let (report, _) = check(automation: [-1743])
         try expectEqual(report.automation, .denied)
         try expectEqual(report.exitCode, .config)
-        try expect(report.text.contains("Automation for Mail, for plain-text messages: NOT GRANTED (-1743)"), report.text)
-        try expect(report.text.contains("- Automation for Mail, needed for plain-text messages: open\n    \(automationPane)\n"), report.text)
+        try expect(report.text.contains("Automation for Mail, only for --no-ui: NOT GRANTED (-1743)"), report.text)
+        try expect(report.text.contains("- Automation for Mail, needed only for --no-ui: open\n    \(automationPane)\n"), report.text)
         try expect(report.text.contains("under the app that runs apple-mail-sendmail, turn on Mail."), report.text)
         try expect(report.text.contains("\n    apple-mail-sendmail --check-permissions\n"), report.text)
         try expect(!report.text.contains("- Accessibility, needed"), report.text)

@@ -27,12 +27,23 @@ func recordingAutomation(_ recorder: AppleEventRecorder, eml: EmlDelivery = Reco
     return MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), eml: eml)
 }
 
-/// The `sender` the plain path gives Mail for `msg`, or nil if it sets none.
+/// `Options` that send a plain-text message down the `--no-ui` Apple Event
+/// path.
+func noUIOptions() -> Options {
+    var options = Options()
+    options.noUI = true
+    return options
+}
+
+/// The `sender` the `--no-ui` plain path gives Mail for `msg`, or nil if it
+/// sets none.
 func plainSender(_ msg: ParsedMessage, options: Options) throws -> String? {
     let tmp = try TempDir()
     defer { tmp.cleanup() }
     let recorder = AppleEventRecorder()
-    try MailDriver.deliver(msg, emlBytes: Data("Subject: p\r\nContent-Type: text/plain\r\n\r\nhi".utf8), options: options, tmp: tmp, recorder: recorder)
+    var noUI = options
+    noUI.noUI = true
+    try MailDriver.deliver(msg, emlBytes: Data("Subject: p\r\nContent-Type: text/plain\r\n\r\nhi".utf8), options: noUI, tmp: tmp, recorder: recorder)
     guard case let .text(sender)? = recorder.messageProperties["sndr"] else { return nil }
     return sender
 }

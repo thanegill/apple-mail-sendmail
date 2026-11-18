@@ -28,14 +28,16 @@ private func message(html: Bool) -> ParsedMessage {
     return msg
 }
 
-private func deliver(html: Bool, probe: PermissionProbe, log: EventLog, mail: FakeMail = FakeMail(), osMajorVersion: Int = 26) throws {
+private func deliver(
+    html: Bool, probe: PermissionProbe, log: EventLog, mail: FakeMail = FakeMail(), osMajorVersion: Int = 26, options: Options = Options()
+) throws {
     let tmp = try TempDir()
     defer { tmp.cleanup() }
     let automation = MailAutomation(
         plain: AppleEventPlainDelivery(events: log.recorder, workspace: mail, clock: mail),
         eml: AXEmlDelivery(ax: mail, workspace: mail, clock: mail, accessibility: probe.permission(osMajorVersion: osMajorVersion))
     )
-    try MailDriver.deliver(message(html: html), emlBytes: Data("Subject: a11y\r\n\r\n<p>rich</p>".utf8), options: Options(), tmp: tmp, automation: automation)
+    try MailDriver.deliver(message(html: html), emlBytes: Data("Subject: a11y\r\n\r\n<p>rich</p>".utf8), options: options, tmp: tmp, automation: automation)
 }
 
 let accessibilityTests = TestSuite(name: "Accessibility", cases: [
@@ -66,12 +68,47 @@ let accessibilityTests = TestSuite(name: "Accessibility", cases: [
         try expectEqual(mail.sendAgainPresses.count, 1)
     },
 
-    TestCase(name: "plain_path_never_checks_accessibility") {
+    TestCase(name: "plain_message_refuses_before_touching_mail_when_not_granted") {
         let probe = PermissionProbe(granted: false)
         let log = EventLog()
-        try deliver(html: false, probe: probe, log: log)
+        let mail = FakeMail()
+        var thrown: Error?
+        do {
+            try deliver(html: false, probe: probe, log: log, mail: mail)
+        } catch {
+            thrown = error
+        }
+        try expect(thrown is AccessibilityNotGranted, "expected AccessibilityNotGranted, got \(String(describing: thrown))")
+        try expectEqual(probe.checks, 1)
+        try expectEqual(mail.axCalls, 0)
+        try expect(mail.openedURLs.isEmpty && log.scripts.isEmpty, "nothing may reach Mail without Accessibility")
+    },
+
+    TestCase(name: "plain_message_drives_mail_through_send_again_when_granted") {
+        let probe = PermissionProbe(granted: true)
+        let log = EventLog()
+        let mail = FakeMail()
+        mail.messageTitle = "a11y"
+        try deliver(html: false, probe: probe, log: log, mail: mail)
+        try expectEqual(probe.checks, 1)
+        try expect(log.scripts.isEmpty)
+        try expectEqual(mail.sendAgainPresses.count, 1)
+    },
+
+    TestCase(name: "no_ui_never_checks_accessibility") {
+        let probe = PermissionProbe(granted: false)
+        let log = EventLog()
+        let mail = FakeMail()
+        try deliver(html: false, probe: probe, log: log, mail: mail, options: noUIOptions())
         try expectEqual(probe.checks, 0)
+        try expectEqual(mail.axCalls, 0)
         try expectEqual(log.scripts.first?.params["kocl"], .type("bcke"))
+    },
+
+    TestCase(name: "error_offers_no_ui_for_plain_text") {
+        let error = AccessibilityNotGranted(osMajorVersion: 27)
+        try expect(error.description.contains("--no-ui"), error.description)
+        try expect(error.description.contains("Automation for Mail"), error.description)
     },
 
     TestCase(name: "error_names_the_accessibility_pane_before_macos_27") {

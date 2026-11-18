@@ -60,20 +60,22 @@ inputs.apple-mail-sendmail.packages.${system}.default.override {
 
 ## Permissions
 
-The two kinds of message need different grants, each for the calling
-terminal (or whichever process invokes the binary):
+Each grant belongs to the calling terminal (or whichever process
+invokes the binary):
 
-- **Plain-text messages** drive Mail through Apple Events, so they need
-  **Automation** access to Mail. The first time, macOS prompts for it
-  in **System Settings -> Privacy & Security -> Automation**. If it is
-  denied, the binary exits with status 78 (`EX_CONFIG`) and prints a
-  hint pointing at that panel.
-- **Messages with an HTML body** drive Mail's windows and menus
-  through the Accessibility API and send no Apple Events, so they need
-  only **Accessibility**: **System Settings -> Privacy & Security ->
+- **By default**, every message, plain text or HTML, is opened in
+  Mail and turned into a compose through Mail's windows and menus with
+  the Accessibility API, and no Apple Events are sent. That needs only
+  **Accessibility**: **System Settings -> Privacy & Security ->
   Accessibility**, or on macOS 27 and later **Privacy & Security ->
   Device Control and Data Access**. Without it the binary exits with
   status 78 (`EX_CONFIG`) before touching Mail, and names that pane.
+- **With `--no-ui`** (see [Without Mail's windows](#without-mails-windows---no-ui)),
+  a plain-text message goes to Mail through Apple Events instead, so it
+  needs **Automation** access to Mail and not Accessibility. The first
+  time, macOS prompts for it in **System Settings -> Privacy & Security
+  -> Automation**. If it is denied, the binary exits with status 78
+  (`EX_CONFIG`) and prints a hint pointing at that panel.
 
 ### Checking the grants
 
@@ -86,7 +88,8 @@ Accessibility and Automation for Mail are granted, and how to grant
 whichever is missing. It starts Mail if it is not running (without
 bringing it to the front) and asks macOS for Automation, which shows
 the prompt when macOS can. It exits 0 when both are granted and 78
-(`EX_CONFIG`) otherwise.
+(`EX_CONFIG`) otherwise, so without `--no-ui` a missing Automation
+grant is reported although nothing you run needs it.
 
 macOS charges both grants to the *responsible process*, not to the
 binary: usually the app it was started from, such as Terminal, iTerm2
@@ -98,11 +101,11 @@ names it, so the check explains the rule rather than naming the app.
 launcher**, run `apple-mail-sendmail --check-permissions` once from
 Terminal, or grant the launching app the listed permissions. The
 binary cannot raise its own Automation prompt when its responsible
-process is not an app that can show one: plain-text messages then fail
+process is not an app that can show one: `--no-ui` messages then fail
 with -1743 (exit 78) and no prompt appears. This was verified under a
 VM guest agent, with or without an `Info.plist` embedded in the
-binary. Plain-text messages need Automation for Mail; HTML messages
-need only Accessibility. A grant belongs to the responsible process it
+binary. The default path needs only Accessibility; `--no-ui` needs only
+Automation for Mail. A grant belongs to the responsible process it
 was made for, so a grant made from Terminal covers runs from Terminal
 and the scripts it starts, not a launcher that is its own responsible
 process.
@@ -162,20 +165,22 @@ hint.
 
 `-F` sets the display name only together with `-f`; on its own it is
 ignored with a stderr notice. Without `-f`, the message's own `From:`
-header is handed to Mail unchanged: as the new message's `sender` for
-plain-text messages, and inside the `.eml` for HTML messages. On the
-plain-text path, a `From:` address with no `@domain` (cron's
-`root (Cron Daemon)`, for example) is not passed, so no sender is set.
+header is handed to Mail unchanged inside the `.eml`, and Mail picks
+the account from it. With `--no-ui` it becomes the new message's
+`sender` instead, except that a `From:` address with no `@domain`
+(cron's `root (Cron Daemon)`, for example) is not passed, so no sender
+is set.
 
 ### Attachments
 
 If the input is a multipart message, parts with `Content-Disposition:
 attachment` (or any part carrying a `filename=` / `name=` parameter,
 including the RFC 2231 `filename*=` / `name*=` forms) are decoded
-and attached. Plain-text messages attach them via Mail's dictionary
-(`make new attachment`); HTML messages carry them inside the `.eml`
-that Send Again reconstructs (see Rich HTML rendering), so both paths
-deliver attachments.
+and attached. By default they ride inside the `.eml` that Send Again
+reconstructs (see [How a message reaches Mail](#how-a-message-reaches-mail)),
+under their own names. With `--no-ui` they are written to temporary
+files named `att-NN-<name>` and attached via Mail's dictionary
+(`make new attachment`), so that is the name the recipient sees.
 
 ```sh
 apple-mail-sendmail -t <<'EOF'
@@ -198,25 +203,25 @@ aGVsbG8K
 EOF
 ```
 
-### Rich HTML rendering
+### How a message reaches Mail
 
-When the input has an HTML body (a `text/html` part, or a
-`multipart/alternative` with `text/html` inside), the binary
-hands the message to Mail by:
+Unless `--no-ui` is given, the binary hands every message, plain text
+or HTML, to Mail by:
 
 1. Writing the rfc822 bytes (with any `-t` / `-f` / positional
    overrides applied to the headers; body bytes verbatim) to a
    temporary `.eml`.
 2. Opening it with Mail through Launch Services, so Mail shows it in
-   a viewer window — rendered by WKWebView, the same engine Mail uses
-   for received mail.
+   a viewer window — an HTML body rendered by WKWebView, the same
+   engine Mail uses for received mail.
 3. Pressing `Message > Send Again` (⇧⌘D) through the Accessibility
    API, once the viewer is verified as Mail's frontmost, main and key
-   window, titled with the message's Subject. Mail converts the viewer into a brand-new editable
-   compose carrying the .eml's `To` / `Subject` / `From` and the
-   rendered HTML. The press targets Mail's own menu item, so unlike a
-   keystroke it cannot land in another app; Mail must still be
-   frontmost, because in the background the item is hidden.
+   window, titled with the message's Subject. Mail converts the viewer
+   into a brand-new editable compose carrying the .eml's `To` /
+   `Subject` / `From`, its body and its attachments. The press targets
+   Mail's own menu item, so unlike a keystroke it cannot land in
+   another app; Mail must still be frontmost, because in the background
+   the item is hidden.
 4. With `--send`, verifying the compose window the same way, then
    pressing `Message > Send`, at most three times and only while the
    compose is still open.
@@ -227,19 +232,20 @@ press, in case another window appeared in place of ours. With no
 Subject, Mail shows a placeholder title instead, so that check is
 skipped.
 
-**HTML `--send` needs a Subject.** Sending a compose with no
-Subject makes Mail ask "This message has no subject. Send anyway?".
-The binary never answers Mail's prompts, so it stops there: the
-compose stays open as a draft, nothing is sent, and it exits 71 with
-"Mail is asking to confirm sending a message with no Subject ...
-HTML --send needs a Subject". Add a `Subject:` header, or leave out
-`--send` and send the draft by hand.
+**`--send` needs a Subject**, for plain text and HTML alike. Sending a
+compose with no Subject makes Mail ask "This message has no subject.
+Send anyway?". The binary never answers Mail's prompts, so it stops
+there: the compose stays open as a draft, nothing is sent, and it
+exits 71 with "Mail is asking to confirm sending a message with no
+Subject ... --send needs a Subject". Add a `Subject:` header, or leave
+out `--send` and send the draft by hand.
 
 This preserves **everything** the source HTML expresses — tables,
 CSS padding and backgrounds, monospace `<pre>` styling, inline
 colors, fonts, lists — because the compose body never leaves the
 WKWebView pipeline. There is no RTF or NSAttributedString
-intermediate that flattens layout.
+intermediate that flattens layout. A plain-text body arrives as
+written, as `text/plain`.
 
 Because the new compose window is spawned by Mail's "Send Again"
 verb rather than `make new outgoing message`, Mail's scripting
@@ -257,13 +263,42 @@ Tradeoffs:
 - **Accessibility permission required** for the calling process.
   Without it the binary fails fast with an explicit error pointing
   at System Settings.
-- **One Mail window briefly flashes** during each invocation.
-  Cron-style use is fine but the binary cannot run "completely
-  silently" the way the plain-text path can.
+- **One Mail window briefly flashes** during each invocation, and
+  Mail is brought to the front. Cron-style use works while a user is
+  logged in, but the binary cannot run "completely silently"; that is
+  what `--no-ui` is for.
 - **Mail must be running** (or quickly launchable) — the binary
   starts it if not already running, then needs the viewer window to
   appear before the Send Again press. It waits up to 5 seconds;
   longer cold-starts produce a clean timeout error.
+
+### Without Mail's windows (`--no-ui`)
+
+For headless jobs where Mail cannot be brought to the front, or where
+the launcher can be granted Automation but not Accessibility, pass
+`--no-ui` (or set `SENDMAIL_NO_UI=1`):
+
+```sh
+apple-mail-sendmail --no-ui --send -t < report.txt
+```
+
+The binary then sends Mail Apple Events instead: make a new outgoing
+message, set its subject, sender and body, add each recipient and
+attachment, and send it on `--send` (or leave it as a visible draft).
+Nothing in Mail's windows is opened or pressed. It needs **Automation**
+for Mail, not Accessibility.
+
+Two limits:
+
+- **Mail sends the body as a quotation.** A body set through Mail's
+  scripting dictionary goes out as `multipart/alternative` with every
+  `text/plain` line prefixed with `> ` and the HTML part wrapped in
+  `<blockquote type="cite">`, however and whenever the content is set
+  (Mail bug FB11734014, still present in Mail 16.0 on macOS 27). The
+  default path does not have this problem.
+- **Plain text only.** Only the default path can deliver an HTML body,
+  so `--no-ui` refuses a message with one: it exits 64 (`EX_USAGE`)
+  before touching Mail, rather than send the text part alone.
 
 ### Dry run
 
@@ -284,6 +319,7 @@ SENDMAIL_DRY_RUN=1 apple-mail-sendmail -t < msg.eml
 | `-f <addr>`      | Set the From address (default: the message's `From:`)    |
 | `-F <name>`      | Set the From display name; applies only with `-f`        |
 | `--send`         | Actually deliver (default: draft for review)             |
+| `--no-ui`        | Plain text through Apple Events, without Mail's windows; Mail quotes the body (see [Without Mail's windows](#without-mails-windows---no-ui)) |
 | `--check-permissions` | Report the Accessibility and Automation grants and how to fix them; sends nothing (see [Checking the grants](#checking-the-grants)) |
 | `--help`         | Print usage                                              |
 | `--version`      | Print version                                            |
@@ -306,12 +342,12 @@ Following `sysexits.h`:
 | Code | Meaning                                                       |
 |-----:|---------------------------------------------------------------|
 |    0 | Message handed to Mail.app successfully; with `--check-permissions`, both grants in place |
-|   64 | Usage error (unknown flag, malformed argv)                    |
+|   64 | Usage error (unknown flag, malformed argv), or `--no-ui` with an HTML body |
 |   65 | Data error (unparseable message)                              |
 |   67 | No recipients resolved                                        |
-|   71 | Driving Mail failed (an Apple Event or an HTML-path step)     |
+|   71 | Driving Mail failed (an `.eml`-path step, or an Apple Event with `--no-ui`) |
 |   75 | Temporary failure: no temp file, or Mail not running (EX_TEMPFAIL) |
-|   78 | Automation or Accessibility permission denied (or, with `--check-permissions`, not confirmed) |
+|   78 | Accessibility (or, with `--no-ui`, Automation) permission denied (or, with `--check-permissions`, not confirmed) |
 
 ## Alternatives considered
 
@@ -343,7 +379,7 @@ swift build
 
 ### Run tests
 
-The tests record the plain path's Apple Events and run the HTML path
+The tests record the `--no-ui` path's Apple Events and run the `.eml` path
 against a fake Mail, so they never drive Mail.app.
 
 ```sh

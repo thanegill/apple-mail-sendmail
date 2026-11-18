@@ -51,6 +51,13 @@ do {
 
 var message = MIMEParser.parse(raw)
 
+do {
+    try MailDriver.requireDeliverable(message, options: options)
+} catch {
+    let report = FailureReport(error)
+    die(report.message, code: report.exitCode)
+}
+
 if options.readRecipientsFromHeaders {
     // -t: recipients come from headers; argv positionals are additive, but
     // deduplicated. We skip any argv address already present among the
