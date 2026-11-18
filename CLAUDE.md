@@ -32,6 +32,8 @@ SENDMAIL_DRY_RUN=1 ./result/bin/apple-mail-sendmail -t < msg.eml
 `SENDMAIL_DRY_RUN=1` makes the binary print the generated AppleScript to
 stdout instead of executing it. Useful when iterating on `MailDriver`.
 
+The live end-to-end harness (`nix run .#e2e`, which drives Mail.app and must not be run without the user's go-ahead) has its own guidance in `tests/e2e/CLAUDE.md`.
+
 ## Architecture
 
 Three SwiftPM targets, all under `Sources/`:
@@ -147,13 +149,14 @@ The .eml + Cmd-Shift-D path renders bodies in Mail's WKWebView, which honors any
 
 ## Packaging
 
-`flake.nix` uses flake-parts. The package factory is wrapped in `pkgs.lib.makeOverridable` and takes `withSendmailSymlink ? true`. Two named packages:
+`flake.nix` uses flake-parts. The package factory is wrapped in `pkgs.lib.makeOverridable` and takes `withSendmailSymlink ? true`. Its `src` is a `lib.fileset` of `Package.swift` and `Sources/` only, so editing docs or `tests/e2e/` does not rebuild the Swift binary or rerun its tests. Named packages:
 
 - `packages.default` — installs `apple-mail-sendmail` plus a `sendmail` symlink.
 - `packages.without-sendmail-symlink` — canonical binary only.
+- `packages.e2e` (also `apps.e2e`, and `checks.e2e-shellcheck` so `nix flake check` shellchecks it) — the live end-to-end harness. Building it only shellchecks `tests/e2e/e2e.sh`; it never runs in `checkPhase`.
 
 Consumers from other flakes can also call `self.packages.${system}.default.override { withSendmailSymlink = false; }`.
 
 `meta.mainProgram = "apple-mail-sendmail"`, so `nix run` always invokes the canonical name even though both names are on `PATH` in the `default` package.
 
-Tests run in the package's `checkPhase`, not as a separate `checks.tests` derivation; this means `nix build .#default` is what fails when tests fail.
+Tests run in the package's `checkPhase`, not as a separate test derivation; `checks.default` is the package itself, so both `nix build .#default` and `nix flake check` fail when tests fail.

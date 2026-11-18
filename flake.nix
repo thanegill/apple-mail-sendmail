@@ -19,7 +19,13 @@
             pkgs.swiftPackages.stdenv.mkDerivation {
               pname = "apple-mail-sendmail";
               version = "0.1.0";
-              src = ./.;
+              src = pkgs.lib.fileset.toSource {
+                root = ./.;
+                fileset = pkgs.lib.fileset.unions [
+                  ./Package.swift
+                  ./Sources
+                ];
+              };
               nativeBuildInputs = [ pkgs.swift pkgs.swiftpm ];
 
               installPhase = ''
@@ -58,13 +64,61 @@
                 mainProgram = "apple-mail-sendmail";
               };
             });
+
+          # Live end-to-end harness. Building it only shellchecks the script;
+          # running it drives Mail.app, so it is never part of checkPhase.
+          e2eHarness = pkgs.writeShellApplication {
+            name = "apple-mail-sendmail-e2e";
+            runtimeInputs = [
+              pkgs.mailpit
+              pkgs.curl
+              pkgs.jq
+              pkgs.coreutils
+              pkgs.gnused
+              pkgs.gnugrep
+              pkgs.gawk
+              pkgs.diffutils
+              pkgs.perl
+              pkgs.socat
+              pkgs.dnsutils
+            ];
+            runtimeEnv = {
+              # The harness's own files, without its docs, so editing
+              # tests/e2e/README.md or tests/e2e/CLAUDE.md does not change
+              # this path.
+              E2E_RESOURCES = "${pkgs.lib.fileset.toSource {
+                root = ./tests/e2e;
+                fileset = pkgs.lib.fileset.difference ./tests/e2e (pkgs.lib.fileset.unions [
+                  ./tests/e2e/README.md
+                  ./tests/e2e/CLAUDE.md
+                ]);
+              }}";
+              E2E_SENDMAIL = pkgs.lib.getExe self'.packages.default;
+            };
+            text = builtins.readFile ./tests/e2e/e2e.sh;
+            meta.description = "Live end-to-end tests for apple-mail-sendmail against a local Mailpit";
+          };
         in {
           packages.default = makeSendmail { };
           packages.without-sendmail-symlink = makeSendmail { withSendmailSymlink = false; };
+          packages.e2e = e2eHarness;
+
+          # Building the harness shellchecks it; it never runs here.
+          checks.e2e-shellcheck = e2eHarness;
+
+          # The package's checkPhase runs the unit tests, so `nix flake check`
+          # runs them by building it.
+          checks.default = self'.packages.default;
 
           apps.default = {
             type = "app";
             program = "${self'.packages.default}/bin/apple-mail-sendmail";
+          };
+
+          apps.e2e = {
+            type = "app";
+            program = pkgs.lib.getExe e2eHarness;
+            meta.description = "Live end-to-end tests for apple-mail-sendmail (drives Mail.app; see README)";
           };
 
           devShells.default = pkgs.mkShell {
