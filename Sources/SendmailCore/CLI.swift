@@ -163,7 +163,7 @@ public enum CLI {
         let options: [(String, String)] = [
             ("-t",                  "Read recipients from To, Cc, and Bcc headers."),
             ("-f <addr>",           "Set the From address (Mail.app account selector)."),
-            ("-F <name>",           "Set the From display name."),
+            ("-F <name>",           "Set the From display name. Applies only with -f."),
             ("--send",              "Actually deliver the message. Default is draft for review."),
             ("--help",              "Show this help."),
             ("--version",           "Show version."),

@@ -123,6 +123,13 @@ nothing matches, it falls back to the default account silently; the
 binary prints a stderr notice so you know `-f` was honored only as a
 hint.
 
+`-F` sets the display name only together with `-f`; on its own it is
+ignored with a stderr notice. Without `-f`, the message's own `From:`
+header is handed to Mail unchanged: as the new message's `sender` for
+plain-text messages, and inside the `.eml` for HTML messages. On the
+plain-text path, a `From:` address with no `@domain` (cron's
+`root (Cron Daemon)`, for example) is not passed, so no sender is set.
+
 ### Attachments
 
 If the input is a multipart message, parts with `Content-Disposition:
@@ -216,8 +223,8 @@ SENDMAIL_DRY_RUN=1 apple-mail-sendmail -t < msg.eml
 | Flag             | Behavior                                                 |
 |------------------|----------------------------------------------------------|
 | `-t`             | Read recipients from `To`, `Cc`, `Bcc` headers           |
-| `-f <addr>`      | Set the From address                                     |
-| `-F <name>`      | Set the From display name                                |
+| `-f <addr>`      | Set the From address (default: the message's `From:`)    |
+| `-F <name>`      | Set the From display name; applies only with `-f`        |
 | `--send`         | Actually deliver (default: draft for review)             |
 | `--help`         | Print usage                                              |
 | `--version`      | Print version                                            |

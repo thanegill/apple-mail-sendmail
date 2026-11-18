@@ -142,6 +142,35 @@ let mimeTests = TestSuite(name: "MIMEParser", cases: [
         try expectEqual(msg.bcc.first?.address, "d@w")
     },
 
+    TestCase(name: "from_header_first_mailbox_collected") {
+        let input = """
+        From: "Work Bot" <work@example.test>, other@example.test
+        To: a@example.test
+        Content-Type: text/plain
+
+        body
+        """
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.from?.displayName, "Work Bot")
+        try expectEqual(msg.from?.address, "work@example.test")
+    },
+
+    TestCase(name: "from_header_encoded_word_display_name_decoded") {
+        let input = "From: =?UTF-8?B?QsO8cm8gQm90?= <work@example.test>\nContent-Type: text/plain\n\nbody"
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectEqual(msg.from?.displayName, "Büro Bot")
+        try expectEqual(msg.from?.address, "work@example.test")
+    },
+
+    TestCase(name: "missing_from_header_leaves_from_nil") {
+        let input = "To: a@example.test\nContent-Type: text/plain\n\nbody"
+        let raw = try RFC822Parser.parse(Data(input.utf8))
+        let msg = MIMEParser.parse(raw)
+        try expectNil(msg.from)
+    },
+
     TestCase(name: "html_only_body_stripped_to_text") {
         let input = """
         Subject: html

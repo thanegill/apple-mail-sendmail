@@ -77,7 +77,7 @@ if message.to.isEmpty && message.cc.isEmpty && message.bcc.isEmpty {
 if options.fromAddress != nil {
     warn("note: Mail.app silently falls back to the default account if -f does not match an enabled account")
 } else if options.fromName != nil {
-    warn("note: -F was given without -f; ignoring (Mail.app needs an address to select an account)")
+    warn("note: -F was given without -f; ignoring (the message's From header, if any, is used unchanged)")
 }
 
 let tmp: TempDir
