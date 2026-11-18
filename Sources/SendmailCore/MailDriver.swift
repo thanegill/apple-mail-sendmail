@@ -74,10 +74,10 @@ public enum MailDriver {
     /// it is dropped and no sender is set. An explicit `-f` is never filtered.
     private static func composeSender(options: Options, headerFrom: ParsedAddress?) -> String? {
         if let address = options.fromAddress {
-            return formatMailbox(name: options.fromName, address: address, for: .appleScriptSender)
+            return formatMailbox(name: options.fromName, address: address, for: .mailSender)
         }
         guard let headerFrom, hasLocalPartAndDomain(headerFrom.address) else { return nil }
-        return formatMailbox(name: headerFrom.displayName, address: headerFrom.address, for: .appleScriptSender)
+        return formatMailbox(name: headerFrom.displayName, address: headerFrom.address, for: .mailSender)
     }
 
     private static func hasLocalPartAndDomain(_ address: String) -> Bool {

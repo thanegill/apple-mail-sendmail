@@ -27,22 +27,14 @@ private func emlWithTo(_ recipients: [ParsedAddress], options: Options = Options
     return EmlBuilder.buildEml(raw: plainRaw, finalRecipients: msg, options: options)
 }
 
-private func classicScript(fromName: String, fromAddress: String) throws -> String {
-    let tmp = try TempDir()
-    defer { tmp.cleanup() }
+private func plainSender(fromName: String, fromAddress: String) throws -> String? {
     var opts = Options()
     opts.fromName = fromName
     opts.fromAddress = fromAddress
     var msg = ParsedMessage()
     msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
     msg.body = "hi"
-    return try MailDriver.deliver(
-        msg,
-        emlBytes: Data("Subject: p\r\nContent-Type: text/plain\r\n\r\nhi".utf8),
-        options: opts,
-        tmp: tmp,
-        runner: { _ in }
-    )
+    return try plainSender(msg, options: opts)
 }
 
 private func roundTripToHeader(_ rawToValue: String) throws -> (parsed: ParsedAddress, emlTo: String, reparsed: [ParsedAddress]) {
@@ -142,12 +134,8 @@ let mailboxFormatTests = TestSuite(name: "MailboxFormat", cases: [
         try expectEqual(reparsed[0].address, "j@x.test")
     },
 
-    TestCase(name: "classic_sender_quotes_comma_display_name") {
-        let script = try classicScript(fromName: "Doe, John", fromAddress: "j@x.test")
-        try expect(
-            script.contains(#"sender:"\"Doe, John\" <j@x.test>""#),
-            "sender: must carry the quoted display name"
-        )
+    TestCase(name: "plain_sender_quotes_comma_display_name") {
+        try expectEqual(try plainSender(fromName: "Doe, John", fromAddress: "j@x.test"), #""Doe, John" <j@x.test>"#)
     },
 
     TestCase(name: "each_special_forces_quoting") {
@@ -192,11 +180,10 @@ let mailboxFormatTests = TestSuite(name: "MailboxFormat", cases: [
         try expectEqual(reparsed[0].displayName, name)
     },
 
-    TestCase(name: "classic_sender_keeps_non_ascii_literal") {
-        let plain = try classicScript(fromName: "Zoë", fromAddress: "z@x.test")
-        try expect(plain.contains(#"sender:"Zoë <z@x.test>""#), "non-ASCII sender name must stay literal")
-        let withComma = try classicScript(fromName: "Zoë, Ann", fromAddress: "z@x.test")
-        try expect(withComma.contains(#"sender:"\"Zoë, Ann\" <z@x.test>""#))
-        try expect(!withComma.contains("=?UTF-8?"), "sender: must not be RFC 2047 encoded")
+    TestCase(name: "plain_sender_keeps_non_ascii_literal") {
+        try expectEqual(try plainSender(fromName: "Zoë", fromAddress: "z@x.test"), "Zoë <z@x.test>")
+        let withComma = try plainSender(fromName: "Zoë, Ann", fromAddress: "z@x.test")
+        try expectEqual(withComma, #""Zoë, Ann" <z@x.test>"#)
+        try expect(withComma?.contains("=?UTF-8?") == false, "the sender must not be RFC 2047 encoded")
     },
 ])

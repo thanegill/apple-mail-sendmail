@@ -99,23 +99,24 @@ func printLine(_ line: String) {
 let automation: MailAutomation
 if env["SENDMAIL_DRY_RUN"] == "1" {
     automation = MailAutomation(
-        plain: AppleScriptPlainDelivery(staging: tmp, runner: printLine),
+        plain: PlainPlanPrinter(output: printLine),
         html: HTMLPlanPrinter(output: printLine)
     )
 } else {
     let clock = SystemClock()
+    let workspace = SystemMailWorkspace(clock: clock)
     automation = MailAutomation(
-        plain: AppleScriptPlainDelivery(staging: tmp),
+        plain: AppleEventPlainDelivery(events: SystemAppleEventSender(), workspace: workspace, clock: clock),
         html: AXHTMLDelivery(
             ax: SystemAXClient(),
-            workspace: SystemMailWorkspace(clock: clock),
+            workspace: workspace,
             clock: clock,
             accessibility: .system()
         )
     )
 }
 
-// Build the .eml bytes that the edit-draft path will hand to Mail. Keep
+// Build the .eml bytes that the HTML path will hand to Mail. Keep
 // the original stdin body verbatim (no MIME re-encoding) and apply CLI
 // flag-driven header overrides only: finalize To/Cc/Bcc per positional/-t
 // rules and set From from -f/-F. MIMEParser already gave us the final
@@ -128,17 +129,9 @@ let emlBytes = EmlBuilder.buildEml(
 
 do {
     try MailDriver.deliverThenCleanUp(message, emlBytes: emlBytes, options: options, tmp: tmp, automation: automation)
-} catch let f as AppleScript.Failure {
-    if f.code == -1743 {
-        die("Mail.app automation denied. Grant permission in System Settings → Privacy & Security → Automation. (\(f.message))", code: .config)
-    }
-    die("AppleScript failed (\(f.code)): \(f.message)", code: .osErr)
-} catch let denied as AccessibilityNotGranted {
-    die("\(denied)", code: .config)
-} catch let failure as DeliveryError {
-    die(failure.message, code: .osErr)
 } catch {
-    die("delivery failed: \(error)", code: .osErr)
+    let report = FailureReport(error)
+    die(report.message, code: report.exitCode)
 }
 
 exit(ExitCode.ok.rawValue)

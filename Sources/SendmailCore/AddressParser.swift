@@ -16,15 +16,15 @@ enum MailboxFormatTarget {
     /// A header line in the .eml that Mail opens. Non-ASCII display names are
     /// RFC 2047 encoded so the file stays plain RFC 5322.
     case rfc822Header
-    /// Mail's AppleScript `sender` property. Mail encodes headers itself on
-    /// send, so non-ASCII stays literal; pre-encoding it would risk Mail
-    /// treating the encoded-word as literal text.
-    case appleScriptSender
+    /// Mail's `sender` property of an outgoing message. Mail encodes headers
+    /// itself on send, so non-ASCII stays literal; pre-encoding it would risk
+    /// Mail treating the encoded-word as literal text.
+    case mailSender
 }
 
 /// Format a mailbox as either `Name <addr>` (when `name` is non-nil and
 /// non-empty) or bare `addr`. This is the single source of truth for the
-/// rule; it is shared by the classic path's `sender:` property, the .eml
+/// rule; it is shared by the plain path's `sender` property, the .eml
 /// `From` header override, and the .eml To/Cc/Bcc serialization so all three
 /// stay in lockstep.
 ///

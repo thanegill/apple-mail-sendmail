@@ -14,9 +14,9 @@ private final class PermissionProbe {
     }
 }
 
-private final class ScriptLog {
-    var scripts: [String] = []
-    func run(_ source: String) throws { scripts.append(source) }
+private final class EventLog {
+    let recorder = AppleEventRecorder()
+    var scripts: [RecordedEvent] { recorder.events }
 }
 
 private func message(html: Bool) -> ParsedMessage {
@@ -28,11 +28,11 @@ private func message(html: Bool) -> ParsedMessage {
     return msg
 }
 
-private func deliver(html: Bool, probe: PermissionProbe, log: ScriptLog, mail: FakeMail = FakeMail(), osMajorVersion: Int = 26) throws {
+private func deliver(html: Bool, probe: PermissionProbe, log: EventLog, mail: FakeMail = FakeMail(), osMajorVersion: Int = 26) throws {
     let tmp = try TempDir()
     defer { tmp.cleanup() }
     let automation = MailAutomation(
-        plain: AppleScriptPlainDelivery(staging: tmp, runner: log.run),
+        plain: AppleEventPlainDelivery(events: log.recorder, workspace: mail, clock: mail),
         html: AXHTMLDelivery(ax: mail, workspace: mail, clock: mail, accessibility: probe.permission(osMajorVersion: osMajorVersion))
     )
     try MailDriver.deliver(message(html: html), emlBytes: Data("Subject: a11y\r\n\r\n<p>rich</p>".utf8), options: Options(), tmp: tmp, automation: automation)
@@ -41,7 +41,7 @@ private func deliver(html: Bool, probe: PermissionProbe, log: ScriptLog, mail: F
 let accessibilityTests = TestSuite(name: "Accessibility", cases: [
     TestCase(name: "html_path_refuses_before_touching_mail_when_not_granted") {
         let probe = PermissionProbe(granted: false)
-        let log = ScriptLog()
+        let log = EventLog()
         let mail = FakeMail()
         var thrown: Error?
         do {
@@ -57,7 +57,7 @@ let accessibilityTests = TestSuite(name: "Accessibility", cases: [
 
     TestCase(name: "html_path_checks_once_then_drives_mail_when_granted") {
         let probe = PermissionProbe(granted: true)
-        let log = ScriptLog()
+        let log = EventLog()
         let mail = FakeMail()
         try deliver(html: true, probe: probe, log: log, mail: mail)
         try expectEqual(probe.checks, 1)
@@ -67,11 +67,10 @@ let accessibilityTests = TestSuite(name: "Accessibility", cases: [
 
     TestCase(name: "plain_path_never_checks_accessibility") {
         let probe = PermissionProbe(granted: false)
-        let log = ScriptLog()
+        let log = EventLog()
         try deliver(html: false, probe: probe, log: log)
         try expectEqual(probe.checks, 0)
-        try expectEqual(log.scripts.count, 1)
-        try expect(log.scripts[0].contains("make new outgoing message"))
+        try expectEqual(log.scripts.first?.params["kocl"], .type("bcke"))
     },
 
     TestCase(name: "error_names_the_accessibility_pane_before_macos_27") {
@@ -95,7 +94,7 @@ let accessibilityTests = TestSuite(name: "Accessibility", cases: [
         let probe = PermissionProbe(granted: false)
         var thrown: AccessibilityNotGranted?
         do {
-            try deliver(html: true, probe: probe, log: ScriptLog(), osMajorVersion: 27)
+            try deliver(html: true, probe: probe, log: EventLog(), osMajorVersion: 27)
         } catch let error as AccessibilityNotGranted {
             thrown = error
         }

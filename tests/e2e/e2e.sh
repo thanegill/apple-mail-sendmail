@@ -1004,7 +1004,8 @@ list_binary_temp_dirs() {
 }
 
 # Queues for deletion only the dirs that this dry run created (absent from
-# the snapshot taken before it ran) and that the printed script names.
+# the snapshot taken before it ran) and that the printed output names, or
+# that are empty (a plain message without attachments names no file).
 collect_dry_run_temp_dirs() {
   local script_file=$1 snapshot_file=$2 dir path printed_dirs=""
   while IFS= read -r path; do
@@ -1012,10 +1013,10 @@ collect_dry_run_temp_dirs() {
   done < <(grep -oE '"/[^"]*/sendmail-[^/"]+/[^"/]+"' "$script_file" | tr -d '"' || true)
   while IFS= read -r dir; do
     grep -qxF "$dir" "$snapshot_file" && continue
-    if grep -qxF "$dir" <<<"$printed_dirs"; then
+    if grep -qxF "$dir" <<<"$printed_dirs" || [[ -z $(find "$dir" -mindepth 1 -print -quit) ]]; then
       DRY_RUN_TEMP_DIRS+=("$dir")
     else
-      log "e2e: leaving $dir in place: it is new but the dry-run script does not name it"
+      log "e2e: leaving $dir in place: it is new, not empty, and the dry-run output does not name it"
     fi
   done < <(list_binary_temp_dirs "$DRY_RUN_TMP")
 }
@@ -1028,41 +1029,6 @@ remove_dry_run_temp_dirs() {
     fi
   done
   DRY_RUN_TEMP_DIRS=()
-}
-
-# Splits each line of an AppleScript into a normalised shape and its string
-# literals. Literals (with \" and \\ escapes handled) become "", whitespace is
-# collapsed, and the literal values follow, so checks can match the code
-# around a literal without being fooled by text inside one. Output per line:
-# OK|BAD, the shape, then each literal, separated by ASCII 31.
-scan_applescript() {
-  LC_ALL=C gawk -v sep=$'\x1f' '
-    {
-      line = $0; shape = ""; literals = ""; in_literal = 0; literal = ""; bad = 0
-      n = length(line)
-      for (i = 1; i <= n; i++) {
-        c = substr(line, i, 1)
-        if (in_literal) {
-          if (c == "\\") {
-            if (i == n) { bad = 1; break }
-            escaped = substr(line, i + 1, 1); i++
-            if (escaped == "t") { literal = literal "\t"; continue }
-            # A real line break cannot be carried in this one-line record,
-            # and no literal MailDriver emits contains one: refuse the line.
-            if (escaped == "n" || escaped == "r") { bad = 1; continue }
-            literal = literal escaped; continue
-          }
-          if (c == "\"") { in_literal = 0; shape = shape "\"\""; literals = literals sep literal; literal = ""; continue }
-          literal = literal c; continue
-        }
-        if (c == "\"") { in_literal = 1; continue }
-        shape = shape c
-      }
-      if (in_literal) bad = 1
-      gsub(/[ \t]+/, " ", shape); sub(/^ /, "", shape); sub(/ $/, "", shape)
-      print (bad ? "BAD" : "OK") sep shape literals
-    }
-  ' "$1"
 }
 
 DRY_RUN_SENDER=""
@@ -1148,97 +1114,89 @@ analyze_html_plan() {
   DRY_RUN_SENDER=$HEADER_FROM_ADDRESS
 }
 
-# The plain path's script is checked line by line against the statement
-# shapes MailDriver emits, in order:
-#   tell application "Mail" / set newMessage to make new outgoing message ... /
-#   tell newMessage / set content to ... / recipients / [tell content /
-#   attachments / end tell] / [send] / end tell / end tell
-analyze_plain_script() {
-  local script_file=$1 line_number=0 status shape literal_text sequence="" sender_literal=""
-  local literals=() kind disallowed_count=0
-  local make_re='^set newMessage to make new outgoing message with properties \{subject:"", visible:(true|false), sender:""\}$'
-  local make_no_sender_re='^set newMessage to make new outgoing message with properties \{subject:"", visible:(true|false)\}$'
-  local recipient_re='^make new (to|cc|bcc) recipient at end of (to|cc|bcc) recipients with properties \{address:""(, name:"")?\}$'
-  local content_shape='set content to (read (POSIX file "") as «class utf8»)'
-  local attachment_shape='make new attachment with properties {file name:(POSIX file "")} at after last paragraph'
-  local visible=""
+# The plain path prints its step plan, one JSON object per line, in this
+# order: launch_mail, make_message, set_content, add_recipient per recipient,
+# add_attachment per attachment, then send only for --send. Each line must be
+# exactly jq's compact, key-sorted form of itself, so a duplicated key (jq
+# keeps the last) or stray whitespace cannot make jq and the binary read a
+# line differently, and must have exactly its step's keys and value types.
+# The strings checked here leave jq base64-encoded, so no separator or
+# control character inside them can shift a field.
+readonly PLAIN_STEP_JQ='
+  def str: type == "string";
+  if type != "object" then "BAD"
+  elif .step == "launch_mail" and keys == ["activates", "step", "timeout_ms"] and .activates == false and (.timeout_ms | type) == "number" then "L"
+  elif .step == "make_message" and keys == ["sender", "step", "subject", "visible"] and (.subject | str) and (.visible | type) == "boolean" and ((.sender | str) or .sender == null) then
+    "M \(.visible) \(if .sender == null then "-" else (.sender | @base64) end)"
+  elif .step == "set_content" and keys == ["step", "text"] and (.text | str) then "C"
+  elif .step == "add_recipient" and keys == ["address", "kind", "name", "step"] and (.kind == "to" or .kind == "cc" or .kind == "bcc") and (.address | str) and ((.name | str) or .name == null) then
+    "R \(.address | @base64)"
+  elif .step == "add_attachment" and keys == ["path", "step"] and (.path | str) then "A \(.path | @base64)"
+  elif .step == "send" and keys == ["step"] then "S"
+  else "BAD" end'
 
-  while IFS= read -r line; do
+analyze_plain_plan() {
+  local plan_file=$1 line line_number=0 canonical record kind value sequence="" visible="" sender="" sender_set=no
+  local disallowed_count=0
+  while IFS= read -r line || [[ -n $line ]]; do
     line_number=$((line_number + 1))
-    status=${line%%$'\x1f'*}
-    literal_text=${line#*$'\x1f'}
-    shape=${literal_text%%$'\x1f'*}
-    literals=()
-    if [[ $literal_text == *$'\x1f'* ]]; then
-      literal_text=${literal_text#*$'\x1f'}
-      while :; do
-        literals+=("${literal_text%%$'\x1f'*}")
-        [[ $literal_text == *$'\x1f'* ]] || break
-        literal_text=${literal_text#*$'\x1f'}
-      done
-    fi
-    if [[ $status != OK ]]; then
-      GUARD_REASONS+=("$NAME: plain script line $line_number has an unterminated string literal or a \\n/\\r escape")
+    if ! canonical=$(jq -cS . <<<"$line" 2>/dev/null) || [[ -z $canonical || $canonical == *$'\n'* ]]; then
+      GUARD_REASONS+=("$NAME: plain plan line $line_number is not valid JSON")
       continue
     fi
-    [[ -z $shape ]] && continue
-
-    if [[ $shape == 'tell application ""' && ${#literals[@]} -eq 1 && ${literals[0]} == Mail ]]; then
-      kind=T
-    elif [[ $shape =~ $make_re && ${#literals[@]} -eq 2 ]]; then
-      kind=M
-      visible=${BASH_REMATCH[1]}
-      sender_literal=${literals[1]}
-    elif [[ $shape =~ $make_no_sender_re ]]; then
-      GUARD_REASONS+=("$NAME: plain-text script sets no sender, so Mail would use its default account")
-      kind=M
-      visible=${BASH_REMATCH[1]}
-    elif [[ $shape == 'tell newMessage' && ${#literals[@]} -eq 0 ]]; then
-      kind=N
-    elif [[ $shape == "$content_shape" && ${#literals[@]} -eq 1 ]]; then
-      kind=C
-      is_dry_run_file "${literals[0]}" ||
-        GUARD_REASONS+=("$NAME: plain script reads content from ${literals[0]}, not this dry run's temp dir")
-    elif [[ $shape =~ $recipient_re && ${BASH_REMATCH[1]} == "${BASH_REMATCH[2]}" ]]; then
-      kind=R
-      is_allowed_bare_address "${literals[0]}" ||
-        GUARD_REASONS+=("$NAME: plain script adds recipient \"${literals[0]}\"")
-    elif [[ $shape == 'tell content' && ${#literals[@]} -eq 0 ]]; then
-      kind=K
-    elif [[ $shape == "$attachment_shape" && ${#literals[@]} -eq 1 ]]; then
-      kind=A
-      is_dry_run_file "${literals[0]}" ||
-        GUARD_REASONS+=("$NAME: plain script attaches ${literals[0]}, not a file in this dry run's temp dir")
-    elif [[ $shape == 'end tell' && ${#literals[@]} -eq 0 ]]; then
-      kind=E
-    elif [[ $shape == send && ${#literals[@]} -eq 0 ]]; then
-      kind=S
-    else
+    if [[ $canonical != "$line" ]]; then
+      GUARD_REASONS+=("$NAME: plain plan line $line_number is not in canonical form (compact, sorted keys, no duplicate keys)")
+      continue
+    fi
+    if ! record=$(jq -r "$PLAIN_STEP_JQ" <<<"$line" 2>/dev/null) || [[ $record == BAD || -z $record ]]; then
       disallowed_count=$((disallowed_count + 1))
       ((disallowed_count <= 5)) &&
-        GUARD_REASONS+=("$NAME: plain script line $line_number is not an allowed statement: $shape")
+        GUARD_REASONS+=("$NAME: plain plan line $line_number is not an allowed step: ${line:0:200}")
       continue
     fi
+    kind=${record%% *}
+    value=${record#* }
+    case $kind in
+      M)
+        visible=${value%% *}
+        if [[ ${value#* } == - ]]; then
+          GUARD_REASONS+=("$NAME: plain-text plan sets no sender, so Mail would use its default account")
+        else
+          sender=$(base64 -d <<<"${value#* }")
+          sender_set=yes
+        fi
+        ;;
+      R)
+        value=$(base64 -d <<<"$value")
+        is_allowed_bare_address "$value" ||
+          GUARD_REASONS+=("$NAME: plain plan adds recipient \"$value\"")
+        ;;
+      A)
+        value=$(base64 -d <<<"$value")
+        is_dry_run_file "$value" ||
+          GUARD_REASONS+=("$NAME: plain plan attaches $value, not a file in this dry run's temp dir")
+        ;;
+    esac
     sequence+=$kind
-  done < <(scan_applescript "$script_file")
+  done <"$plan_file"
   ((disallowed_count > 5)) &&
-    GUARD_REASONS+=("$NAME: ...and $((disallowed_count - 5)) more lines that are not allowed statements")
+    GUARD_REASONS+=("$NAME: ...and $((disallowed_count - 5)) more lines that are not allowed steps")
 
-  local wanted_sequence_re='^TMNCR+(KA+E)?EE$' wanted_visible=true
+  local wanted_sequence_re='^LMCR+A*$' wanted_visible=true
   if [[ $DELIVERY == send ]]; then
-    wanted_sequence_re='^TMNCR+(KA+E)?SEE$'
+    wanted_sequence_re='^LMCR+A*S$'
     wanted_visible=false
   fi
   [[ $sequence =~ $wanted_sequence_re ]] ||
-    GUARD_REASONS+=("$NAME: plain script statements $sequence do not match $wanted_sequence_re (T tell Mail, M make message, N tell message, C content, R recipient, K/A/E attachments, S send, E end tell)")
+    GUARD_REASONS+=("$NAME: plain plan steps $sequence do not match $wanted_sequence_re (L launch, M make message, C content, R recipient, A attachment, S send)")
   [[ $visible == "$wanted_visible" ]] ||
-    GUARD_REASONS+=("$NAME: plain script has visible:${visible:-none}, expected visible:$wanted_visible for a $DELIVERY run")
+    GUARD_REASONS+=("$NAME: plain plan has visible ${visible:-none}, expected visible $wanted_visible for a $DELIVERY run")
 
-  if [[ -n $sender_literal ]]; then
+  if [[ $sender_set == yes ]]; then
     local sender_tokens
-    sender_tokens=$(grep -oE '[^<>"[:space:],]+@[^<>"[:space:],]+' <<<"$sender_literal" || true)
+    sender_tokens=$(grep -oE '[^<>"[:space:],]+@[^<>"[:space:],]+' <<<"$sender" || true)
     if [[ $(grep -c . <<<"$sender_tokens") -ne 1 ]] || ! is_e2e_sender "$sender_tokens"; then
-      GUARD_REASONS+=("$NAME: plain-text sender \"$sender_literal\" is not exactly one e2e account")
+      GUARD_REASONS+=("$NAME: plain-text sender \"$sender\" is not exactly one e2e account")
     else
       DRY_RUN_SENDER=${sender_tokens,,}
     fi
@@ -1255,7 +1213,7 @@ analyze_dry_run_script() {
   if [[ $EXPECT_PATH == html ]]; then
     analyze_html_plan "$script_file"
   else
-    analyze_plain_script "$script_file"
+    analyze_plain_plan "$script_file"
   fi
   while IFS= read -r token; do
     [[ -z $token ]] && continue
@@ -2548,8 +2506,8 @@ self_test_dry_run() {
   define_scenario plain-send
   SEND_ARGS=(-t)
   sed -i '/^From:/d' "$FIXTURE"
-  run_dry_run_case "plain path with no -f and no From (no sender: set)" refused \
-    "plain-text script sets no sender"
+  run_dry_run_case "plain path with no -f and no From (no sender set)" refused \
+    "plain-text plan sets no sender"
 
   define_scenario plain-send
   sed -i '/^To:/d' "$FIXTURE"
@@ -2569,15 +2527,13 @@ self_test_dry_run() {
 # reviewer found against the earlier blocklist.
 self_test_script_analysis() {
   printf 'dry-run script analysis (crafted scripts)\n'
-  local crafted_root="$workdir/dry-run-tmp/crafted" temp_dir eml body attachment
+  local crafted_root="$workdir/dry-run-tmp/crafted" temp_dir eml attachment
   DRY_RUN_TMP=$crafted_root
   temp_dir="$crafted_root/sendmail-1-01234567-89AB-CDEF-0123-456789ABCDEF"
   mkdir -p "$temp_dir"
   eml="$temp_dir/compose-1.eml"
-  body="$temp_dir/body.txt"
   attachment="$temp_dir/att-01-a.bin"
   printf 'From: e2e-a@example.test\nTo: a@example.test\nSubject: x\n\nbody\n' >"$eml"
-  printf 'body\n' >"$body"
   printf 'data\n' >"$attachment"
   printf 'From: e2e-a@example.test\nTo: a@example.test\nSubject: x\n\nbody\n' >"$workdir/outside.eml"
 
@@ -2585,24 +2541,20 @@ self_test_script_analysis() {
   html_send=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/html-plan-send.jsonl.tmpl")
   html_draft=$(sed "s#\"<EML>\"#\"$eml\"#" "$TEMPLATES/html-plan-draft.jsonl.tmpl")
 
-  plain_script() {
-    local visible=$1 send_line=$2 sender_property=${3-', sender:"e2e-a@example.test"'}
-    local make_line=${4:-"    set newMessage to make new outgoing message with properties {subject:\"s\", visible:$visible$sender_property}"}
+  plain_plan() {
+    local visible=$1 send_step=$2 sender_json=${3-'"e2e-a@example.test"'}
+    local make_line=${4:-"{\"sender\":$sender_json,\"step\":\"make_message\",\"subject\":\"s\",\"visible\":$visible}"}
     printf '%s\n' \
-      'tell application "Mail"' \
+      '{"activates":false,"step":"launch_mail","timeout_ms":10000}' \
       "$make_line" \
-      '    tell newMessage' \
-      "        set content to (read (POSIX file \"$body\") as «class utf8»)" \
-      '        make new to recipient at end of to recipients with properties {address:"a@example.test", name:"A"}' \
-      '        tell content' \
-      "            make new attachment with properties {file name:(POSIX file \"$attachment\")} at after last paragraph" \
-      '        end tell'
-    [[ -n $send_line ]] && printf '        send\n'
-    printf '%s\n' '    end tell' 'end tell'
+      '{"step":"set_content","text":"body"}' \
+      '{"address":"a@example.test","kind":"to","name":"A","step":"add_recipient"}' \
+      "{\"path\":\"$attachment\",\"step\":\"add_attachment\"}"
+    [[ -z $send_step ]] || printf '{"step":"send"}\n'
   }
 
   run_analysis_case() {
-    local label=$1 wanted=$2 scenario=$3 wanted_reason=${5-} script_file="$workdir/logs/crafted.applescript"
+    local label=$1 wanted=$2 scenario=$3 wanted_reason=${5-} script_file="$workdir/logs/crafted.out"
     define_scenario "$scenario"
     DRY_RUN_TMP=$crafted_root
     printf '%s\n' "$4" >"$script_file"
@@ -2616,10 +2568,10 @@ self_test_script_analysis() {
 
   run_analysis_case "HTML send plan matching the template" accepted html-send "$html_send"
   run_analysis_case "HTML draft plan matching the template" accepted draft-later-html-attachment "$html_draft"
-  run_analysis_case "plain send script" accepted plain-send "$(plain_script false send)"
-  run_analysis_case "plain draft script" accepted draft-later-plain-attachment "$(plain_script true '')"
+  run_analysis_case "plain send plan" accepted plain-send "$(plain_plan false send)"
+  run_analysis_case "plain draft plan" accepted draft-later-plain-attachment "$(plain_plan true '')"
   run_analysis_case "plain draft whose subject mentions send" accepted draft-later-plain-attachment \
-    "$(plain_script true '' | sed 's/subject:"s"/subject:"please send"/')"
+    "$(plain_plan true '' | sed 's/"subject":"s"/"subject":"please send"/')"
 
   local send_again_step full_guard
   send_again_step=$(grep -F '"item":"Send Again"' <<<"$html_send")
@@ -2655,54 +2607,75 @@ self_test_script_analysis() {
     "$(grep -vF '"step":"open_eml"' <<<"$html_send")" \
     "expected exactly one open_eml step"
 
-  run_analysis_case "plain send with a System Events Message > Send click" refused plain-send \
-    "$(plain_script false send | sed 's/^        send$/        send\n        tell application "System Events" to tell process "Mail" to click menu item "Send" of menu "Message" of menu bar 1/')"
-  # The subject literal contains escaped quotes that a naive "[^"]*" strip
-  # misaligns, making the real sender (me@gmail.com) look like literal text.
+  run_analysis_case "plain send with an extra Message > Send press step" refused plain-send \
+    "$(plain_plan false send; printf '%s\n' '{"guard":[],"guard_timeout_ms":3000,"item":"Send","menu":"Message","step":"press_menu_item","window":"compose"}')" \
+    "is not an allowed step"
+  # The subject string hides a second sender behind escaped quotes; a naive
+  # scan would take e2e-a for the sender while jq reads the real one.
   local escaped_make_line
-  escaped_make_line='    set newMessage to make new outgoing message with properties {subject:"x\" visible:true, sender:\"e2e-a@example.test\" y", visible:true, sender:"me@gmail.com"}'
+  escaped_make_line='{"sender":"me@gmail.com","step":"make_message","subject":"x\",\"sender\":\"e2e-a@example.test","visible":true}'
   run_analysis_case "plain draft hiding a sender behind an escaped quote" refused draft-later-plain-attachment \
-    "$(plain_script true '' '' "$escaped_make_line")"
-  run_analysis_case "plain recipient {name, address:postmaster}" refused plain-send \
-    "$(plain_script false send | sed 's/{address:"a@example.test", name:"A"}/{name:"x", address:"postmaster"}/')"
-  run_analysis_case "plain script with a second set sender" refused plain-send \
-    "$(plain_script false send | sed 's/^    tell newMessage$/    tell newMessage\n        set sender to "me@gmail.com"/')"
-  run_analysis_case "plain script with a keystroke" refused plain-send \
-    "$(plain_script false send | sed 's/^    tell newMessage$/    tell newMessage\n        tell application "System Events" to keystroke "d" using {command down}/')"
-  run_analysis_case "plain --send script that is visible" refused plain-send "$(plain_script true send)"
-  run_analysis_case "plain --send script without a send verb" refused plain-send "$(plain_script false '')"
-  run_analysis_case "plain draft script with a send verb" refused draft-later-plain-attachment "$(plain_script true send)"
-  run_analysis_case "plain draft script that is invisible" refused draft-later-plain-attachment "$(plain_script false '')"
-  run_analysis_case "plain script without a sender property" refused plain-send "$(plain_script false send '')" \
-    "plain-text script sets no sender"
-  run_analysis_case "plain script with a real sender" refused plain-send \
-    "$(plain_script false send ', sender:"Me <me@gmail.com>"')"
+    "$(plain_plan true '' '' "$escaped_make_line")" \
+    "is not exactly one e2e account"
+  run_analysis_case "plain recipient postmaster" refused plain-send \
+    "$(plain_plan false send | sed 's/"address":"a@example.test"/"address":"postmaster"/')" \
+    "adds recipient \"postmaster\""
+  run_analysis_case "plain plan with a duplicated sender key" refused plain-send \
+    "$(plain_plan false send '"e2e-a@example.test","sender":"me@gmail.com"')" \
+    "is not in canonical form"
+  run_analysis_case "plain plan with whitespace in a line" refused plain-send \
+    "$(plain_plan false send | sed 's/^{"step":"send"}$/{ "step":"send"}/')" \
+    "is not in canonical form"
+  run_analysis_case "plain plan with a keystroke step" refused plain-send \
+    "$(plain_plan false send | sed 's/^{"step":"set_content","text":"body"}$/&\n{"key":"d","step":"keystroke"}/')" \
+    "is not an allowed step"
+  run_analysis_case "plain recipient step with an extra key" refused plain-send \
+    "$(plain_plan false send | sed 's/"step":"add_recipient"}/"step":"add_recipient","via":"x"}/')" \
+    "is not an allowed step"
+  run_analysis_case "plain --send plan that is visible" refused plain-send "$(plain_plan true send)" \
+    "expected visible false"
+  run_analysis_case "plain --send plan without a send step" refused plain-send "$(plain_plan false '')" \
+    "do not match"
+  run_analysis_case "plain draft plan with a send step" refused draft-later-plain-attachment "$(plain_plan true send)" \
+    "do not match"
+  run_analysis_case "plain draft plan that is invisible" refused draft-later-plain-attachment "$(plain_plan false '')" \
+    "expected visible true"
+  run_analysis_case "plain plan without a sender" refused plain-send "$(plain_plan false send null)" \
+    "plain-text plan sets no sender"
+  run_analysis_case "plain plan with a real sender" refused plain-send \
+    "$(plain_plan false send '"Me <me@gmail.com>"')" \
+    "is not exactly one e2e account"
   run_analysis_case "plain sender naming two addresses" refused plain-send \
-    "$(plain_script false send ', sender:"e2e-a@example.test <me@gmail.com>"')"
-  run_analysis_case "plain script with an unterminated string" refused plain-send \
-    "$(plain_script false send | sed 's/subject:"s"/subject:"s/')"
+    "$(plain_plan false send '"e2e-a@example.test <me@gmail.com>"')" \
+    "is not exactly one e2e account"
+  run_analysis_case "plain plan with an unterminated string" refused plain-send \
+    "$(plain_plan false send | sed 's/"subject":"s"/"subject":"s/')" \
+    "is not valid JSON"
   run_analysis_case "recipient with a \\t escape (decoded to a real tab)" refused plain-send \
-    "$(plain_script false send | sed 's/{address:"a@example.test"/{address:"a@example.test\\t"/')"
+    "$(plain_plan false send | sed 's/"address":"a@example.test"/"address":"a@example.test\\t"/')" \
+    "adds recipient"
   run_analysis_case "recipient with a \\n escape (line break)" refused plain-send \
-    "$(plain_script false send | sed 's/{address:"a@example.test"/{address:"a@example.test\\nreal@gmail.com"/')"
+    "$(plain_plan false send | sed 's/"address":"a@example.test"/"address":"a@example.test\\nreal@gmail.com"/')" \
+    "adds recipient"
   run_analysis_case "subject with a \\t escape" accepted plain-send \
-    "$(plain_script false send | sed 's/subject:"s"/subject:"a\\tb"/')"
-  run_analysis_case "plain script reading content from outside the temp dir" refused plain-send \
-    "$(plain_script false send | sed "s#$body#$workdir/outside.eml#")"
+    "$(plain_plan false send | sed 's/"subject":"s"/"subject":"a\\tb"/')"
+  run_analysis_case "plain plan attaching a file outside the temp dir" refused plain-send \
+    "$(plain_plan false send | sed "s#$attachment#$workdir/outside.eml#")" \
+    "not a file in this dry run's temp dir"
 
-  local nul_script="$workdir/logs/nul.applescript"
+  local nul_script="$workdir/logs/nul.out"
   {
-    plain_script false send | sed -n '1,2p'
-    printf 'tell newMessage\0 to send\n'
-    plain_script false send | tail -n +3
+    plain_plan false send | sed -n '1,2p'
+    printf '{"step":"send"}\0\n'
+    plain_plan false send | tail -n +3
   } >"$nul_script"
   define_scenario plain-send
   DRY_RUN_TMP=$crafted_root
   GUARD_REASONS=()
   if analyze_dry_run_script "$nul_script"; then
-    self_test_expect refused "script containing a NUL byte" accepted
+    self_test_expect refused "plan containing a NUL byte" accepted
   else
-    self_test_expect refused "script containing a NUL byte" refused "${GUARD_REASONS[@]}"
+    self_test_expect refused "plan containing a NUL byte" "$(refusal_outcome "contains a NUL byte" "${GUARD_REASONS[@]}")" "${GUARD_REASONS[@]}"
   fi
   printf 'From: e2e-a@example.test\nTo: a@example.test\0, real@gmail.com\nSubject: x\n\nbody\n' >"$eml"
   run_analysis_case "HTML .eml containing a NUL byte" refused html-send "$html_send"
@@ -2732,17 +2705,19 @@ self_test_temp_dirs() {
   local named="$parent/sendmail-2-BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
   local unnamed="$parent/sendmail-3-CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"
   local outside="$workdir/sendmail-4-DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD"
+  local empty="$parent/sendmail-5-EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE"
   mkdir -p "$decoy"
   list_binary_temp_dirs "$parent" >"$parent.before"
-  mkdir -p "$named" "$unnamed" "$outside"
-  printf 'set content to (read (POSIX file "%s/body.txt"))\nset x to "%s/body.txt"\n' "$named" "$decoy" >"$parent.script"
+  mkdir -p "$named" "$unnamed" "$outside" "$empty"
+  printf 'data\n' >"$unnamed/att-01-x.bin"
+  printf '{"path":"%s/att-01-a.bin","step":"add_attachment"}\n{"path":"%s/att-01-a.bin","step":"add_attachment"}\n' "$named" "$decoy" >"$parent.script"
   DRY_RUN_TEMP_DIRS=()
   collect_dry_run_temp_dirs "$parent.script" "$parent.before" 2>/dev/null
   DRY_RUN_TEMP_DIRS+=("$outside")
   remove_dry_run_temp_dirs
   local state
-  state="decoy:$([[ -d $decoy ]] && echo kept || echo deleted) named:$([[ -d $named ]] && echo kept || echo deleted) unnamed:$([[ -d $unnamed ]] && echo kept || echo deleted) outside:$([[ -d $outside ]] && echo kept || echo deleted)"
-  self_test_expect "decoy:kept named:deleted unnamed:kept outside:kept" "only this dry run's named new dir is deleted" "$state"
+  state="decoy:$([[ -d $decoy ]] && echo kept || echo deleted) named:$([[ -d $named ]] && echo kept || echo deleted) unnamed:$([[ -d $unnamed ]] && echo kept || echo deleted) empty:$([[ -d $empty ]] && echo kept || echo deleted) outside:$([[ -d $outside ]] && echo kept || echo deleted)"
+  self_test_expect "decoy:kept named:deleted unnamed:kept empty:deleted outside:kept" "only this dry run's named or empty new dirs are deleted" "$state"
 
   define_scenario html-send
   local next_tmp="$workdir/dry-run-tmp/${NAME}.$((DRY_RUN_COUNTER + 1))"

@@ -170,7 +170,7 @@ public enum CLI {
         ]
         let environment: [(String, String)] = [
             ("SENDMAIL_SEND=1",     "Equivalent to --send."),
-            ("SENDMAIL_DRY_RUN=1",  "Print the generated AppleScript to stdout instead of executing it. Useful for debugging the message pipeline."),
+            ("SENDMAIL_DRY_RUN=1",  "Print the steps that would drive Mail, one JSON object per line, instead of running them. Useful for debugging the message pipeline."),
         ]
 
         var out = ""
