@@ -48,25 +48,19 @@ public enum AppleScript {
     /// for the same reason; this is cheap and keeps normal ASCII unchanged.
     public static func quote(_ s: String) -> String {
         var out = "\""
-        for ch in s {
-            switch ch {
+        // NB: iterate scalars, not Characters. A `"` or `\` fused with a
+        // combining mark (or "\r\n") is one Character that matches no case
+        // below, so it would pass through unescaped and end the literal.
+        for scalar in s.unicodeScalars {
+            switch scalar {
             case "\\": out += "\\\\"
             case "\"": out += "\\\""
             case "\n": out += "\\n"
             case "\r": out += "\\r"
             case "\t": out += "\\t"
             case "\u{2028}", "\u{2029}": out += "\\n"
-            default:
-                // Map any remaining C0 control (U+0000..U+001F) to a space so
-                // it can never terminate or corrupt the literal. Printable
-                // ASCII and all other Unicode pass through verbatim.
-                if let scalar = ch.unicodeScalars.first,
-                   ch.unicodeScalars.count == 1,
-                   scalar.value < 0x20 {
-                    out += " "
-                } else {
-                    out.append(ch)
-                }
+            case _ where scalar.value < 0x20: out += " "
+            default: out.unicodeScalars.append(scalar)
             }
         }
         out += "\""
