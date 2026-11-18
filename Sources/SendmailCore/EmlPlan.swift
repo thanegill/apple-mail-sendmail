@@ -32,7 +32,7 @@ public enum GuardCheck: String, CaseIterable {
 }
 
 /// Found by shortcut, which Mail does not localize, else by English title.
-public struct MenuItemTarget: Equatable {
+public struct MenuItemTarget: Equatable, Sendable {
     /// `kAXMenuItemCmdModifiers` is a bit set with Command implied: Shift
     /// adds 1, Option 2, Control 4, and 8 means no Command.
     public static let shiftModifier = 1

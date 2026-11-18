@@ -1,6 +1,6 @@
 import Foundation
 
-public struct RawMessage {
+public struct RawMessage: Sendable {
     public var headers: [(String, String)] = []
     public var body: Data = Data()
 

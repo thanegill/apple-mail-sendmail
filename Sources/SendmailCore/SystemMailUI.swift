@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import os
 
 private let mailBundleID = "com.apple.mail"
 
@@ -97,7 +98,7 @@ public struct SystemMailWorkspace: MailWorkspace {
 
     func waitForLaunchServices(
         what: String, timeout: TimeInterval,
-        _ start: (@escaping (Error?) -> Void) throws -> Void
+        _ start: (@escaping @Sendable (Error?) -> Void) throws -> Void
     ) throws {
         let box = CompletionBox()
         try start { box.finish($0) }
@@ -110,29 +111,16 @@ public struct SystemMailWorkspace: MailWorkspace {
     }
 }
 
-private final class CompletionBox {
-    private let lock = NSLock()
-    private var finished = false
-    private var storedError: Error?
+private final class CompletionBox: Sendable {
+    private let state = OSAllocatedUnfairLock<(finished: Bool, error: Error?)>(initialState: (false, nil))
 
     func finish(_ error: Error?) {
-        lock.lock()
-        defer { lock.unlock() }
-        finished = true
-        storedError = error
+        state.withLock { $0 = (true, error) }
     }
 
-    var isFinished: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return finished
-    }
+    var isFinished: Bool { state.withLock { $0.finished } }
 
-    var error: Error? {
-        lock.lock()
-        defer { lock.unlock() }
-        return storedError
-    }
+    var error: Error? { state.withLock { $0.error } }
 }
 
 /// Wall-clock `Clock` whose sleep runs the main run loop, so NSWorkspace

@@ -81,7 +81,11 @@ Swift treats `"\r\n"` as a single `Character`. `RFC822Parser.unfold` normalizes 
 
 ### Package.swift macOS floor is `.v13` deliberately
 
-`.v13` was the lowest floor that linked cleanly under nixpkgs Swift 5.10, whose stdlib was built for macOS 14.0. Under the current Swift 6.4 toolchain `.v12` also builds without linker warnings, so lowering it further is a product decision, not a toolchain limit.
+`.v13` was the lowest floor that linked cleanly under nixpkgs Swift 5.10, whose stdlib was built for macOS 14.0. Under the current Swift 6.4 toolchain `.v12` also builds without linker warnings, so lowering it further is a product decision, not a toolchain limit. Below 13 the `OSAllocatedUnfairLock` in `SystemMailUI.swift` needs replacing.
+
+### Swift 6 language mode: the delivery path is nonisolated on purpose
+
+Everything runs synchronously on the main thread; `SystemClock.sleep` pumps `RunLoop.current`, which is the main run loop only there. The one off-main hop is NSWorkspace's open completion handler, which runs on a concurrent queue: keep it `@Sendable` and nonisolated, never `@MainActor` (Swift 6 traps on that isolation mismatch at runtime). Marking `Clock` / `MailWorkspace` / `AXClient` `@MainActor` cascades through every delivery type, `MailDriver`, `PermissionCheck` and the test harness for no checked benefit, so they are left nonisolated.
 
 ### Draft is the product invariant
 

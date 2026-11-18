@@ -2,7 +2,7 @@ import CoreServices
 import Foundation
 import SendmailCore
 
-indirect enum AEValue: Equatable, CustomStringConvertible {
+indirect enum AEValue: Equatable, Sendable, CustomStringConvertible {
     case text(String)
     case bool(Bool)
     case integer(Int)
