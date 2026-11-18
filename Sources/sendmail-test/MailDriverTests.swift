@@ -398,6 +398,96 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
         try expectEqual(recorder.events.count, 1)
     },
 
+    // MARK: - Waiting for a just-launched Mail to answer
+
+    TestCase(name: "make_message_is_retried_until_a_just_launched_mail_answers") {
+        for code in [-600, -609] {
+            let mail = FakeMail()
+            mail.mailRunning = false
+            let recorder = AppleEventRecorder()
+            var makeAttempts = 0
+            recorder.onSend = { event in
+                guard event.params["kocl"] == .type("bcke") else { return }
+                makeAttempts += 1
+                if makeAttempts <= 3 { throw AppleEventError(code: code, message: "not answering yet") }
+            }
+            var opts = Options()
+            opts.send = true
+            try withTempDir { tmp in
+                let msg = message()
+                let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), html: RecordingHTMLDelivery())
+                try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, automation: automation)
+            }
+            try expectEqual(mail.launches, 1)
+            try expectEqual(makeAttempts, 4)
+            try expectEqual(recorder.names, ["core/crel", "core/crel", "core/crel", "core/crel", "core/setd", "core/crel", "emsg/send"])
+            try expectEqual(recorder.events[3].params, recorder.events[0].params)
+            try expect(mail.now < 10, "four attempts must not use up the readiness wait: \(mail.now)s")
+        }
+    },
+
+    TestCase(name: "make_message_gives_up_after_the_readiness_wait_with_the_minus_600_mapping") {
+        let mail = FakeMail()
+        let recorder = AppleEventRecorder()
+        recorder.onSend = { _ in throw AppleEventError(code: -600, message: "procNotFound") }
+        let start = mail.now
+        var thrown: Error?
+        do {
+            try AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail).run([
+                .makeMessage(subject: "s", visible: true, sender: nil),
+                .setContent("b"),
+            ])
+        } catch {
+            thrown = error
+        }
+        try expectEqual((thrown as? AppleEventError)?.code, -600)
+        try expectEqual(FailureReport(thrown!).exitCode, .tempFail)
+        let waited = mail.now - start
+        try expect(waited >= 10 && waited < 10.5, "gave up after \(waited)s, not after the 10s readiness wait")
+        try expect(recorder.events.count > 2, "expected several attempts, got \(recorder.events.count)")
+        try expect(recorder.events.count < 20, "the pause must grow, got \(recorder.events.count) attempts")
+        try expect(!recorder.names.contains("core/setd"), "nothing may follow a make_message that never succeeded")
+    },
+
+    TestCase(name: "make_message_is_not_retried_for_other_errors") {
+        let mail = FakeMail()
+        let recorder = AppleEventRecorder()
+        recorder.failure = (index: 0, error: AppleEventError(code: -1712, message: "AppleEvent timed out."))
+        var thrown: Error?
+        do {
+            try AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail).run([.makeMessage(subject: "s", visible: true, sender: nil)])
+        } catch {
+            thrown = error
+        }
+        try expectEqual((thrown as? AppleEventError)?.code, -1712)
+        try expectEqual(recorder.events.count, 1)
+        try expectEqual(mail.now, 0)
+    },
+
+    TestCase(name: "events_after_make_message_are_never_retried") {
+        for (index, code) in [(1, -600), (1, -609), (2, -600), (3, -609)] {
+            let mail = FakeMail()
+            let recorder = AppleEventRecorder()
+            recorder.failure = (index: index, error: AppleEventError(code: code, message: "not answering"))
+            var opts = Options()
+            opts.send = true
+            var thrown: Error?
+            do {
+                try withTempDir { tmp in
+                    let msg = message()
+                    let automation = MailAutomation(plain: AppleEventPlainDelivery(events: recorder, workspace: mail, clock: mail), html: RecordingHTMLDelivery())
+                    try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, automation: automation)
+                }
+            } catch {
+                thrown = error
+            }
+            try expectEqual((thrown as? AppleEventError)?.code, code)
+            try expectEqual(recorder.events.count, index + 1)
+            try expectEqual(recorder.creations(of: "bcke").count, 1)
+            try expectEqual(mail.now, 0)
+        }
+    },
+
     // MARK: - Plain plan and dry run
 
     TestCase(name: "plain_plan_prints_one_json_object_per_step") {

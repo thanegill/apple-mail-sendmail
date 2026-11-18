@@ -100,11 +100,37 @@ public struct AppleEventPlainDelivery: PlainDelivery {
     let events: AppleEventSending
     let workspace: MailWorkspace
     let clock: Clock
+    /// How long `make_message` keeps retrying while Mail is not answering yet.
+    let readinessTimeout: TimeInterval
 
-    public init(events: AppleEventSending, workspace: MailWorkspace, clock: Clock) {
+    public init(events: AppleEventSending, workspace: MailWorkspace, clock: Clock, readinessTimeout: TimeInterval = 10) {
         self.events = events
         self.workspace = workspace
         self.clock = clock
+        self.readinessTimeout = readinessTimeout
+    }
+
+    /// The codes of an event that never reached Mail: its process is not
+    /// there yet (-600, procNotFound), or its port is not ready (-609,
+    /// connectionInvalid). Both happen just after Mail is launched.
+    static let notAnsweringYet: Set<Int> = [-600, -609]
+
+    /// Sends the event `build` makes, retrying with a growing pause while
+    /// Mail is not answering yet, until `readinessTimeout` has passed. Only
+    /// for the first event: once an event has reached Mail, sending it again
+    /// could make a second message.
+    func sendOnceMailAnswers(_ build: () -> NSAppleEventDescriptor) throws -> NSAppleEventDescriptor {
+        let deadline = clock.now + readinessTimeout
+        var pause: TimeInterval = 0.25
+        while true {
+            do {
+                return try events.send(build())
+            } catch let error as AppleEventError where Self.notAnsweringYet.contains(error.code) {
+                if clock.now >= deadline { throw error }
+                clock.sleep(min(pause, max(deadline - clock.now, 0.001)))
+                pause = min(pause * 2, 2)
+            }
+        }
     }
 
     public func deliverPlain(_ compose: PlainCompose) throws {
@@ -127,10 +153,12 @@ public struct AppleEventPlainDelivery: PlainDelivery {
                 if let sender {
                     properties.append(("sndr", NSAppleEventDescriptor(string: sender)))
                 }
-                let event = Build.event("core", "crel")
-                event.setParam(Build.type("bcke"), forKeyword: keyAEObjectClass)
-                event.setParam(Build.record(properties), forKeyword: keyAEPropData)
-                let reply = try events.send(event)
+                let reply = try sendOnceMailAnswers {
+                    let event = Build.event("core", "crel")
+                    event.setParam(Build.type("bcke"), forKeyword: keyAEObjectClass)
+                    event.setParam(Build.record(properties), forKeyword: keyAEPropData)
+                    return event
+                }
                 guard let created = reply.paramDescriptor(forKeyword: keyDirectObject),
                       created.descriptorType == typeObjectSpecifier
                 else {
