@@ -46,6 +46,16 @@ private func scalarsContain(_ haystack: String, _ needle: String) -> Bool {
     return false
 }
 
+/// Run a plain-text message with the given raw `From:` value through the
+/// real parsers and the classic path, returning the emitted script.
+private func classicScript(fromHeader: String, tmp: TempDir) throws -> String {
+    let input = "From: \(fromHeader)\nTo: u@example.test\nSubject: s\nContent-Type: text/plain\n\nbody\n"
+    let raw = try RFC822Parser.parse(Data(input.utf8))
+    let msg = MIMEParser.parse(raw)
+    let recorder = Recorder()
+    return try MailDriver.deliver(msg, emlBytes: Data(input.utf8), options: Options(), tmp: tmp, runner: recorder.run)
+}
+
 let mailDriverTests = TestSuite(name: "MailDriver", cases: [
     TestCase(name: "draft_mode_emits_visible_true_and_no_send") {
         try withTempDir { tmp in
@@ -101,6 +111,113 @@ let mailDriverTests = TestSuite(name: "MailDriver", cases: [
             msg.to = [ParsedAddress(displayName: nil, address: "u@h")]
             let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
             try expect(script.contains("sender:\"bare@x.com\""))
+        }
+    },
+
+    TestCase(name: "sender_f_without_domain_passed_through") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var opts = Options()
+            opts.fromAddress = "root"
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
+            msg.body = "b"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
+            try expect(script.contains("sender:\"root\""), "the header-From domain check must not filter an explicit -f")
+        }
+    },
+
+    TestCase(name: "sender_from_header_when_no_f") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var msg = ParsedMessage()
+            msg.from = ParsedAddress(displayName: nil, address: "work@example.test")
+            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
+            msg.body = "b"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("sender:\"work@example.test\""), "header From must select the account")
+        }
+    },
+
+    TestCase(name: "sender_f_overrides_header_from") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var opts = Options()
+            opts.fromAddress = "cli@example.test"
+            var msg = ParsedMessage()
+            msg.from = ParsedAddress(displayName: "Work Bot", address: "work@example.test")
+            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
+            msg.body = "b"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
+            try expect(script.contains("sender:\"cli@example.test\""))
+            try expect(!script.contains("work@example.test"), "-f must fully replace the header From, display name included")
+        }
+    },
+
+    TestCase(name: "sender_F_without_f_keeps_header_from") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var opts = Options()
+            opts.fromName = "Ignored Name"
+            var msg = ParsedMessage()
+            msg.from = ParsedAddress(displayName: "Work Bot", address: "work@example.test")
+            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
+            msg.body = "b"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
+            try expect(script.contains("sender:\"Work Bot <work@example.test>\""))
+            try expect(!script.contains("Ignored Name"))
+        }
+    },
+
+    TestCase(name: "sender_omitted_without_f_or_header_from") {
+        try withTempDir { tmp in
+            let recorder = Recorder()
+            var opts = Options()
+            opts.fromName = "Ignored Name"
+            var msg = ParsedMessage()
+            msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
+            msg.body = "b"
+            let script = try MailDriver.deliver(msg, emlBytes: syntheticEml(for: msg), options: opts, tmp: tmp, runner: recorder.run)
+            try expect(!script.contains("sender:"))
+        }
+    },
+
+    TestCase(name: "sender_omitted_for_cron_daemon_header_from") {
+        try withTempDir { tmp in
+            let script = try classicScript(fromHeader: "root (Cron Daemon)", tmp: tmp)
+            try expect(!script.contains("sender:"), "a local-only cron From must leave Mail on its default account")
+        }
+    },
+
+    TestCase(name: "sender_omitted_for_bare_local_header_from") {
+        try withTempDir { tmp in
+            let script = try classicScript(fromHeader: "root", tmp: tmp)
+            try expect(!script.contains("sender:"))
+        }
+    },
+
+    TestCase(name: "sender_omitted_for_empty_group_header_from") {
+        try withTempDir { tmp in
+            let script = try classicScript(fromHeader: "undisclosed-recipients:;", tmp: tmp)
+            try expect(!script.contains("sender:"))
+        }
+    },
+
+    TestCase(name: "sender_from_parsed_header_with_encoded_display_name") {
+        try withTempDir { tmp in
+            let input = """
+            From: =?UTF-8?B?QsO8cm8gQm90?= <work@example.test>
+            To: u@example.test
+            Subject: cron
+            Content-Type: text/plain; charset=utf-8
+
+            plain body
+            """
+            let raw = try RFC822Parser.parse(Data(input.utf8))
+            let msg = MIMEParser.parse(raw)
+            let recorder = Recorder()
+            let script = try MailDriver.deliver(msg, emlBytes: Data(input.utf8), options: Options(), tmp: tmp, runner: recorder.run)
+            try expect(script.contains("sender:\"Büro Bot <work@example.test>\""))
         }
     },
 

@@ -73,6 +73,24 @@ let emlBuilderTests = TestSuite(name: "EmlBuilder", cases: [
         try expect(s.contains("From: orig@host"))
     },
 
+    TestCase(name: "F_without_f_leaves_header_From_unchanged") {
+        let raw = try RFC822Parser.parse(Data("""
+        From: "Work Bot" <work@example.test>
+        To: u@example.test
+        Content-Type: text/plain
+
+        body
+        """.utf8))
+        var msg = ParsedMessage()
+        msg.to = [ParsedAddress(displayName: nil, address: "u@example.test")]
+        var opts = Options()
+        opts.fromName = "Ignored Name"
+        let out = EmlBuilder.buildEml(raw: raw, finalRecipients: msg, options: opts)
+        let s = String(data: out, encoding: .utf8) ?? ""
+        try expect(s.contains("From: \"Work Bot\" <work@example.test>\r\n"))
+        try expect(!s.contains("Ignored Name"))
+    },
+
     TestCase(name: "headers_use_crlf_line_endings") {
         var msg = ParsedMessage()
         msg.to = [ParsedAddress(displayName: nil, address: "a@b")]

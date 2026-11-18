@@ -42,7 +42,7 @@ public enum MailDriver {
         runner: ScriptRunner? = nil
     ) throws -> String {
         let run = runner ?? { try AppleScript.run($0) }
-        let sender = composeSender(name: options.fromName, address: options.fromAddress)
+        let sender = composeSender(options: options, headerFrom: msg.from)
 
         if shouldUseEditDraft(msg) {
             let emlURL = try tmp.write(emlBytes, name: "compose-\(UUID().uuidString).eml")
@@ -289,9 +289,24 @@ public enum MailDriver {
 
     // MARK: - Classic script (plain-text path)
 
-    private static func composeSender(name: String?, address: String?) -> String? {
-        guard let addr = address else { return nil }
-        return formatMailbox(name: name, address: addr, for: .appleScriptSender)
+    /// Same precedence as `EmlBuilder.applyOverrides`: `-f` (plus `-F`)
+    /// replaces the message's From; otherwise the header From is used as-is,
+    /// and `-F` alone changes nothing. A header From without a domain (cron's
+    /// `root (Cron Daemon)`, an empty group) cannot name a Mail account, so
+    /// it is dropped and no sender is set. An explicit `-f` is never filtered.
+    private static func composeSender(options: Options, headerFrom: ParsedAddress?) -> String? {
+        if let address = options.fromAddress {
+            return formatMailbox(name: options.fromName, address: address, for: .appleScriptSender)
+        }
+        guard let headerFrom, hasLocalPartAndDomain(headerFrom.address) else { return nil }
+        return formatMailbox(name: headerFrom.displayName, address: headerFrom.address, for: .appleScriptSender)
+    }
+
+    private static func hasLocalPartAndDomain(_ address: String) -> Bool {
+        guard let atIndex = address.lastIndex(of: "@") else { return false }
+        let localPart = address[..<atIndex]
+        let domain = address[address.index(after: atIndex)...]
+        return !localPart.isEmpty && !domain.isEmpty
     }
 
     private static func buildClassicScript(
