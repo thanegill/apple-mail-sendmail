@@ -46,7 +46,7 @@ without pushing or publishing anything.
    nix run .#e2e-vm
    ```
 
-   All 12 scenarios must pass.
+   Every scenario must pass.
 
 3. **Review and merge** the PR once CI passes.
 
@@ -78,7 +78,7 @@ needs Accessibility, which a GitHub-hosted runner cannot grant. It runs
 locally in a disposable Tart VM cloned from a prepared golden image
 ([`tests/e2e/README.md`](tests/e2e/README.md#running-it-in-a-tart-vm)):
 
-- **Before every release**, run `nix run .#e2e-vm` (all 12 scenarios)
+- **Before every release**, run `nix run .#e2e-vm` (every scenario)
   against the release candidate (step 2 above).
 - **After a macOS or Mail update**, rebuild or refresh the golden VM
   with `nix run .#e2e-vm -- --setup-golden`, so the suite runs against
